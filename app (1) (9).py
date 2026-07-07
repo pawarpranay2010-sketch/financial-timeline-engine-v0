@@ -342,6 +342,115 @@ def provider_health_snapshot():
     return snapshot
 
 # =============================================================================
+# MODULE 2: Error Classifier
+# =============================================================================
+
+import requests
+
+ERROR_QUOTA = "QUOTA_EXHAUSTED"
+ERROR_RATE_LIMIT = "RATE_LIMIT"
+ERROR_TIMEOUT = "TIMEOUT"
+ERROR_NETWORK = "NETWORK"
+ERROR_INVALID_KEY = "INVALID_KEY"
+ERROR_PERMISSION = "PERMISSION_DENIED"
+ERROR_SERVER = "SERVER_ERROR"
+ERROR_UNKNOWN = "UNKNOWN"
+
+
+def classify_error(error):
+    """
+    Converts exceptions and API messages into
+    standardized error types.
+    """
+
+    text = str(error).lower()
+
+    # Timeout
+    if isinstance(error, requests.exceptions.Timeout):
+        return ERROR_TIMEOUT
+
+    # Network
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return ERROR_NETWORK
+
+    if "connection aborted" in text:
+        return ERROR_NETWORK
+
+    if "connection refused" in text:
+        return ERROR_NETWORK
+
+    # Quota
+    if "quota" in text:
+        return ERROR_QUOTA
+
+    if "resource exhausted" in text:
+        return ERROR_QUOTA
+
+    # Rate Limit
+    if "429" in text:
+        return ERROR_RATE_LIMIT
+
+    if "rate limit" in text:
+        return ERROR_RATE_LIMIT
+
+    # Invalid API Key
+    if "api key" in text:
+        return ERROR_INVALID_KEY
+
+    if "invalid key" in text:
+        return ERROR_INVALID_KEY
+
+    if "unauthorized" in text:
+        return ERROR_INVALID_KEY
+
+    # Permission
+    if "permission" in text:
+        return ERROR_PERMISSION
+
+    if "403" in text:
+        return ERROR_PERMISSION
+
+    # Server Error
+    if "500" in text:
+        return ERROR_SERVER
+
+    if "502" in text:
+        return ERROR_SERVER
+
+    if "503" in text:
+        return ERROR_SERVER
+
+    return ERROR_UNKNOWN
+
+
+def is_retryable(error_type):
+    """
+    Determines whether an error should be retried.
+    """
+
+    retryable = {
+        ERROR_TIMEOUT,
+        ERROR_NETWORK,
+        ERROR_SERVER,
+        ERROR_RATE_LIMIT,
+    }
+
+    return error_type in retryable
+
+
+def should_enter_cooldown(error_type):
+    """
+    Determines whether provider should
+    immediately enter cooldown.
+    """
+
+    cooldown_errors = {
+        ERROR_QUOTA,
+    }
+
+    return error_type in cooldown_errors
+
+# =============================================================================
 # SECTION 2: Parsing (file ingestion)
 # =============================================================================
 @st.cache_data(show_spinner=False)
@@ -542,6 +651,7 @@ def call_ai_with_fallback(prompt_text, system_prompt=None, temperature=None):
     else:
         _log_provider_event("call_ai_with_fallback", "OpenRouter", "failed", result)
     return result
+  
 # =============================================================================
 # SECTION 4: Document Processing (chunking, summarization, hierarchical merge)
 # =============================================================================
