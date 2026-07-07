@@ -645,6 +645,112 @@ def _call_single_openrouter_model(
     return response.json()["choices"][0]["message"]["content"]
 
 # =============================================================================
+# MODULE 5 : Provider Manager
+# =============================================================================
+
+PROVIDER_ORDER = [
+    "Google AI Studio",
+    "Groq",
+    "OpenRouter",
+]
+
+
+def provider_manager(
+    prompt_text,
+    system_prompt=None,
+    temperature=None,
+):
+    """
+    Master AI routing engine.
+
+    Responsibilities
+    ----------------
+    1. Skip providers in cooldown
+    2. Try providers in priority order
+    3. Retry when appropriate
+    4. Switch provider automatically
+    5. Return first successful response
+    """
+
+    last_exception = None
+
+    for provider in PROVIDER_ORDER:
+
+        if not is_provider_available(provider):
+
+            _log_provider_event(
+                stage="SKIPPED",
+                provider=provider,
+                status="COOLDOWN",
+                detail="Provider unavailable"
+            )
+
+            continue
+
+        try:
+
+            # -----------------------------
+            # GOOGLE
+            # -----------------------------
+            if provider == "Google AI Studio":
+
+                result = retry_provider_call(
+                    provider,
+                    lambda: call_google_ai_studio(
+                        prompt_text,
+                        system_prompt,
+                        temperature,
+                    ),
+                )
+
+                return result
+
+            # -----------------------------
+            # GROQ
+            # -----------------------------
+            elif provider == "Groq":
+
+                result = try_models_in_sequence(
+                    provider,
+                    GROQ_MODELS,
+                    lambda model: _call_single_groq_model(
+                        model,
+                        prompt_text,
+                        system_prompt,
+                        temperature,
+                    ),
+                )
+
+                return result
+
+            # -----------------------------
+            # OPENROUTER
+            # -----------------------------
+            elif provider == "OpenRouter":
+
+                result = try_models_in_sequence(
+                    provider,
+                    OPENROUTER_MODELS,
+                    lambda model: _call_single_openrouter_model(
+                        model,
+                        prompt_text,
+                        system_prompt,
+                        temperature,
+                    ),
+                )
+
+                return result
+
+        except Exception as e:
+
+            last_exception = e
+
+            _log_provider_event(
+                stage="PROVIDER_FAILED",
+                provider=provider,
+                status
+
+# =============================================================================
 # SECTION 2: Parsing (file ingestion)
 # =============================================================================
 @st.cache_data(show_spinner=False)
