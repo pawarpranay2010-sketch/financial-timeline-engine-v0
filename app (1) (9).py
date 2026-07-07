@@ -747,14 +747,22 @@ def provider_manager(
 
                 return result
 
-        except Exception as e:
+                except Exception as e:
 
             last_exception = e
 
             _log_provider_event(
                 stage="PROVIDER_FAILED",
                 provider=provider,
-                status
+                status="FAILED",
+                detail=str(e),
+            )
+
+            continue
+
+    raise Exception(
+        f"All providers failed.\n\nLast Error:\n{last_exception}"
+    )
 
 # =============================================================================
 # SECTION 2: Parsing (file ingestion)
