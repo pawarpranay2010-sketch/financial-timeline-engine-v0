@@ -451,6 +451,69 @@ def should_enter_cooldown(error_type):
     return error_type in cooldown_errors
 
 # =============================================================================
+# MODULE 3: Retry Manager
+# =============================================================================
+
+MAX_RETRY_ATTEMPTS = 2
+RETRY_DELAY_SECONDS = 1.5
+
+
+def retry_provider_call(provider_name, callable_function):
+    """
+    Executes an AI provider call with intelligent retry logic.
+
+    Rules:
+    - Retry only retryable errors
+    - Quota -> cooldown immediately
+    - Success resets provider state
+    """
+
+    last_exception = None
+
+    for attempt in range(MAX_RETRY_ATTEMPTS + 1):
+
+        try:
+
+            result = callable_function()
+
+            mark_provider_success(provider_name)
+
+            return result
+
+        except Exception as e:
+
+            last_exception = e
+
+            error_type = classify_error(e)
+
+            # Immediate cooldown
+            if should_enter_cooldown(error_type):
+
+                mark_provider_failure(
+                    provider_name,
+                    cooldown=True
+                )
+
+                raise e
+
+            # Normal failure
+            mark_provider_failure(provider_name)
+
+            # Not retryable
+            if not is_retryable(error_type):
+
+                raise e
+
+            # Last retry finished
+            if attempt >= MAX_RETRY_ATTEMPTS:
+
+                raise e
+
+            time.sleep(RETRY_DELAY_SECONDS)
+
+    raise last_exception
+
+# =============================================================================
 # SECTION 2: Parsing (file ingestion)
 # =============================================================================
 @st.cache_data(show_spinner=False)
