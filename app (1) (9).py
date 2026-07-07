@@ -22,6 +22,7 @@ import io
 import json
 import hashlib
 import time
+import re
 from datetime import datetime, timezone
 import pandas as pd
 from docx import Document
@@ -512,6 +513,136 @@ def retry_provider_call(provider_name, callable_function):
             time.sleep(RETRY_DELAY_SECONDS)
 
     raise last_exception
+
+# =============================================================================
+# MODULE 4: Provider Request Helpers
+# =============================================================================
+
+def _call_single_groq_model(
+    model_name,
+    prompt_text,
+    system_prompt=None,
+    temperature=None,
+):
+    """
+    Executes ONE Groq model request.
+    Used later by the Provider Manager.
+    """
+
+    api_key = st.secrets.get("GROQ_API_KEY", "")
+
+    if not api_key:
+        raise Exception("Groq API Key Missing")
+
+    endpoint = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    messages = []
+
+    if system_prompt:
+        messages.append(
+            {
+                "role": "system",
+                "content": system_prompt,
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": str(prompt_text),
+        }
+    )
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+    }
+
+    if temperature is not None:
+        payload["temperature"] = temperature
+
+    response = requests.post(
+        endpoint,
+        headers=headers,
+        json=payload,
+        timeout=GROQ_TIMEOUT_SECONDS,
+    )
+
+    if response.status_code != 200:
+        raise Exception(
+            f"Groq {model_name} failed ({response.status_code})"
+        )
+
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def _call_single_openrouter_model(
+    model_name,
+    prompt_text,
+    system_prompt=None,
+    temperature=None,
+):
+    """
+    Executes ONE OpenRouter model request.
+    """
+
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+
+    if not api_key:
+        raise Exception("OpenRouter API Key Missing")
+
+    endpoint = "https://openrouter.ai/api/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://streamlit.app",
+        "X-Title": "Financial Timeline Engine",
+    }
+
+    messages = []
+
+    if system_prompt:
+        messages.append(
+            {
+                "role": "system",
+                "content": system_prompt,
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": str(prompt_text),
+        }
+    )
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+    }
+
+    if temperature is not None:
+        payload["temperature"] = temperature
+
+    response = requests.post(
+        endpoint,
+        headers=headers,
+        json=payload,
+        timeout=OPENROUTER_TIMEOUT_SECONDS,
+    )
+
+    if response.status_code != 200:
+        raise Exception(
+            f"OpenRouter {model_name} failed ({response.status_code})"
+        )
+
+    return response.json()["choices"][0]["message"]["content"]
 
 # =============================================================================
 # SECTION 2: Parsing (file ingestion)
