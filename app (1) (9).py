@@ -169,7 +169,177 @@ def _retry(fn, attempts=PROVIDER_RETRY_ATTEMPTS, delay=PROVIDER_RETRY_DELAY_SECO
             if i < attempts - 1:
                 time.sleep(delay)
     raise last_exc
+  
+# =============================================================================
+# MODULE 1: Provider Health Manager
+# =============================================================================
 
+import time
+
+# ---------------- Configuration ----------------
+
+PROVIDER_COOLDOWN_SECONDS = 15 * 60      # 15 minutes
+CIRCUIT_BREAKER_THRESHOLD = 3            # consecutive failures
+
+
+# ---------------- Provider State ----------------
+
+_PROVIDER_STATE = {
+    "Google AI Studio": {
+        "status": "ONLINE",
+        "failure_count": 0,
+        "cooldown_until": 0
+    },
+    "Groq": {
+        "status": "ONLINE",
+        "failure_count": 0,
+        "cooldown_until": 0
+    },
+    "OpenRouter": {
+        "status": "ONLINE",
+        "failure_count": 0,
+        "cooldown_until": 0
+    }
+}
+
+
+# ---------------- Utilities ----------------
+
+def get_provider_state(provider_name: str):
+    """Return provider state dictionary."""
+    return _PROVIDER_STATE.get(provider_name)
+
+
+def is_provider_available(provider_name: str):
+    """
+    Returns True if provider can currently be used.
+
+    Automatically restores providers whose cooldown has expired.
+    """
+
+    provider = get_provider_state(provider_name)
+
+    if provider is None:
+        return False
+
+    if provider["status"] == "ONLINE":
+        return True
+
+    now = time.time()
+
+    if provider["status"] == "COOLDOWN":
+
+        if now >= provider["cooldown_until"]:
+
+            provider["status"] = "ONLINE"
+            provider["failure_count"] = 0
+            provider["cooldown_until"] = 0
+
+            return True
+
+    return False
+
+
+def mark_provider_success(provider_name: str):
+    """
+    Reset provider after successful request.
+    """
+
+    provider = get_provider_state(provider_name)
+
+    if provider is None:
+        return
+
+    provider["status"] = "ONLINE"
+    provider["failure_count"] = 0
+    provider["cooldown_until"] = 0
+
+
+def mark_provider_failure(
+        provider_name: str,
+        cooldown=False
+):
+    """
+    Record provider failure.
+
+    cooldown=True
+        Immediate cooldown
+        (Quota exhausted)
+
+    cooldown=False
+        Circuit breaker
+    """
+
+    provider = get_provider_state(provider_name)
+
+    if provider is None:
+        return
+
+    now = time.time()
+
+    # Immediate cooldown
+    if cooldown:
+
+        provider["status"] = "COOLDOWN"
+        provider["failure_count"] = 0
+        provider["cooldown_until"] = (
+            now + PROVIDER_COOLDOWN_SECONDS
+        )
+
+        return
+
+    # Circuit breaker
+    provider["failure_count"] += 1
+
+    if provider["failure_count"] >= CIRCUIT_BREAKER_THRESHOLD:
+
+        provider["status"] = "COOLDOWN"
+
+        provider["cooldown_until"] = (
+            now + PROVIDER_COOLDOWN_SECONDS
+        )
+
+
+def force_provider_online(provider_name: str):
+    """
+    Manual reset.
+
+    Useful for admin/debugging.
+    """
+
+    provider = get_provider_state(provider_name)
+
+    if provider is None:
+        return
+
+    provider["status"] = "ONLINE"
+    provider["failure_count"] = 0
+    provider["cooldown_until"] = 0
+
+
+def provider_health_snapshot():
+    """
+    Returns health of all providers.
+
+    Useful for dashboard/debugging.
+    """
+
+    snapshot = {}
+
+    for name, state in _PROVIDER_STATE.items():
+
+        remaining = max(
+            0,
+            int(state["cooldown_until"] - time.time())
+        )
+
+        snapshot[name] = {
+            "status": state["status"],
+            "failure_count": state["failure_count"],
+            "cooldown_remaining": remaining
+        }
+
+    return snapshot
 
 # =============================================================================
 # SECTION 2: Parsing (file ingestion)
