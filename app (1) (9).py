@@ -45,6 +45,12 @@ st.set_page_config(page_title="Financial Timeline Engine", layout="centered")
 PRIMARY_MODEL = "google/gemini-2.0-flash-exp:free"
 FALLBACK_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
 
+# OpenRouter fallback models
+OPENROUTER_MODELS = [
+    PRIMARY_MODEL,
+    FALLBACK_MODEL,
+]
+
 # Ordered list of Groq models to try, in priority order. If a model is
 # decommissioned or errors out (including HTTP 429), call_groq_engine()
 # automatically tries the next one. Update this list, not the function,
