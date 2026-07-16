@@ -1,8 +1,8 @@
-streamlit
-requests
-pandas
-python-docx
-pypdf
-openpyxl
-reportlab
-google-genai
+streamlit>=1.32
+requests>=2.31
+pandas>=2.0
+python-docx>=1.1
+pypdf>=4.0
+reportlab>=4.0
+openpyxl>=3.1
+google-genai>=0.3
