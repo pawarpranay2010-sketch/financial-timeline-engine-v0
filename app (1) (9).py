@@ -882,7 +882,15 @@ def generate_csv_export(timeline_events, intelligence_outputs):
 
 
 def generate_excel_export(timeline_events, intelligence_outputs, key_metrics=None):
-    """Phase 4: Excel export -- one sheet per structured section."""
+    """Phase 4: Excel export -- one sheet per structured section.
+
+    Bug fix: openpyxl raises `IndexError: At least one sheet must be
+    visible` if the workbook ends up with zero worksheets written (e.g.
+    when timeline_events, intelligence_outputs, and key_metrics are all
+    empty). This now guarantees at least one sheet always exists before
+    the writer saves: if nothing else was written, a "Summary" sheet is
+    added instead of leaving the workbook empty.
+    """
     bio = io.BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         wrote_any = False
@@ -902,8 +910,8 @@ def generate_excel_export(timeline_events, intelligence_outputs, key_metrics=Non
                 pd.DataFrame(value).to_excel(writer, sheet_name=sheet_name, index=False)
                 wrote_any = True
         if not wrote_any:
-            pd.DataFrame({"Note": ["No structured data available to export."]}).to_excel(
-                writer, sheet_name="Summary", index=False
+            pd.DataFrame(["Financial Timeline Engine", "No exportable data available."]).to_excel(
+                writer, sheet_name="Summary", index=False, header=False
             )
     bio.seek(0)
     return bio.getvalue()
