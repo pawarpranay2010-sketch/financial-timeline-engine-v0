@@ -46,6 +46,8 @@ from core import (
     extract_json,
     contains_error_marker,
 )
+from ingestion.extraction import extract_document, extract_multiple, merge_document_text
+from ingestion.statistics import document_statistics, print_statistics
 
 # =============================================================================
 # SECTION 1: Config & Session State
