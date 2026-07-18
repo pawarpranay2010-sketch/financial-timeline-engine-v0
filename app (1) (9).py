@@ -135,7 +135,7 @@ def _debug_stage(label, text):
 # SECTION 2: Parsing (file ingestion)
 # =============================================================================
 @st.cache_data(show_spinner=False)
-def extract_document_data(uploaded_file):
+ def extract_document_data_legacy(uploaded_file):
     """Reads text lines from uploaded files safely."""
     if uploaded_file is None:
         return ""
