@@ -1155,7 +1155,7 @@ def main():
         summarize_document_with_chunking(text, name)
        )
 
-document_summaries[-1]["summary"] = summary_text
+    document_summaries[-1]["summary"] = summary_text
 
     st.subheader("📊 Ingested Data Summary")
     col1, col2 = st.columns(2)
