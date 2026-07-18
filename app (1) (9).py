@@ -1131,21 +1131,31 @@ def main():
     )
 
     combined_raw_text = ""
-    document_summaries = []
-    if uploaded_files:
-        for f in uploaded_files:
-            extracted_text = extract_document_data(f)
-            combined_raw_text += f"\n--- Start of File: {f.name} ---\n"
-            combined_raw_text += extracted_text
+document_summaries = []
+
+if uploaded_files:
+    extraction_result = extract_multiple(uploaded_files)
+
+    combined_raw_text = extraction_result["merged_text"]
+
+    for doc in extraction_result["documents"]:
+        document_summaries.append({
+            "file_name": doc["filename"],
+            "summary": doc["text"]
+        })
 
             # Phase 8: hash-based cache -- re-uploading the same file
             # content doesn't re-trigger an AI summarization call.
-            cache_key = f"{f.name}:{_hash_text(extracted_text)}"
-            summary_text, _ = _cached_call(
-                "summary_cache", cache_key,
-                lambda et=extracted_text, fn=f.name: summarize_document_with_chunking(et, fn)
-            )
-            document_summaries.append({"file_name": f.name, "summary": summary_text})
+            cache_key = f"{doc['filename']}:{_hash_text(doc['text'])}"
+
+summary_text, _ = _cached_call(
+    "summary_cache",
+    cache_key,
+    lambda text=doc["text"], name=doc["filename"]:
+        summarize_document_with_chunking(text, name)
+)
+
+document_summaries[-1]["summary"] = summary_text
 
     st.subheader("📊 Ingested Data Summary")
     col1, col2 = st.columns(2)
