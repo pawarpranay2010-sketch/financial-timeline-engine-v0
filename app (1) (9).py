@@ -1130,11 +1130,6 @@ def main():
         accept_multiple_files=True
     )
 
-    combined_raw_text = ""
-    document_summaries = []
-
-    if uploaded_files:
-        extraction_result = extract_multiple(uploaded_files)
 
     combined_raw_text = ""
 document_summaries = []
