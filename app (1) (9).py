@@ -1153,7 +1153,7 @@ def main():
     cache_key,
     lambda text=doc["text"], name=doc["filename"]:
         summarize_document_with_chunking(text, name)
- )
+       )
 
 document_summaries[-1]["summary"] = summary_text
 
