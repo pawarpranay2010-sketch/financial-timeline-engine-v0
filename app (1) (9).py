@@ -53,7 +53,7 @@ from ingestion import (
     document_statistics,
     print_statistics,
 )
-from backend.module3.module3_controller import run_module3
+from backend.module3_controller import run_module3
 
 # =============================================================================
 # SECTION 1: Config & Session State
