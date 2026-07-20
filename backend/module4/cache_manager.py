@@ -1,110 +1,136 @@
 """
-Redis Cache Layer
+Redis Cache Manager
 
-Flow:
+Responsibilities
+----------------
+- Store frequently requested data
+- Reduce PostgreSQL queries
+- Reduce external API usage
 
-Check Redis
+Cache Flow
+
+Redis
 ↓
 
-Check PostgreSQL
+PostgreSQL
 ↓
 
-If missing:
-Fetch Provider
-↓
+External APIs
 
-Validate
-↓
-
-Normalize
-↓
-
-Save PostgreSQL
-
-↓
-
-Save Redis
-
-↓
-
-Return
 """
 
-from datetime import timedelta
 import json
-
-try:
-    import redis
-except ImportError:
-    redis = None
-
-from .config import Config
 
 
 class CacheManager:
 
     def __init__(self):
+        """
+        TODO
 
-        self.client = None
+        Connect Redis here.
+        """
 
-        if redis:
+        self.redis = None
 
-            self.client = redis.Redis(
-                host=Config.REDIS_HOST,
-                port=Config.REDIS_PORT,
-                db=Config.REDIS_DB,
-                decode_responses=True
-            )
+    # --------------------------------------------------
+    # Company
+    # --------------------------------------------------
 
-    def _key(self, category, identifier):
-        return f"{category}:{identifier}"
+    def cache_company(self, company):
 
-    def get(self, category, identifier):
+        print(f"[CACHE] Company cached: {company.get('ticker')}")
 
-        if not self.client:
-            return None
+        # TODO
+        # redis.set(...)
 
-        key = self._key(category, identifier)
+    def get_company(self, ticker):
 
-        value = self.client.get(key)
-
-        if value:
-
-            return json.loads(value)
+        print(f"[CACHE] Company lookup: {ticker}")
 
         return None
 
-    def set(self, category, identifier, data, ttl):
+    # --------------------------------------------------
+    # Price
+    # --------------------------------------------------
 
-        if not self.client:
-            return
+    def cache_price(self, price):
 
-        key = self._key(category, identifier)
+        print("[CACHE] Latest price cached")
 
-        self.client.setex(
-            key,
-            ttl,
-            json.dumps(data)
-        )
+    def get_price(self, ticker):
 
-    def invalidate(self, category, identifier):
+        print("[CACHE] Price lookup")
 
-        if not self.client:
-            return
+        return None
 
-        self.client.delete(self._key(category, identifier))
+    # --------------------------------------------------
+    # Financials
+    # --------------------------------------------------
 
+    def cache_financials(self, financials):
 
-class CacheTTL:
+        print("[CACHE] Financials cached")
 
-    COMPANY_PROFILE = timedelta(days=7)
+    def get_financials(self, ticker):
 
-    LATEST_PRICE = timedelta(seconds=5)
+        print("[CACHE] Financial lookup")
 
-    RATIOS = timedelta(hours=6)
+        return None
 
-    NEWS = timedelta(minutes=15)
+    # --------------------------------------------------
+    # News
+    # --------------------------------------------------
 
-    FILINGS = timedelta(hours=24)
+    def cache_news(self, news):
 
-    HISTORICAL = timedelta(days=30)
+        print("[CACHE] News cached")
+
+    def get_news(self, ticker):
+
+        print("[CACHE] News lookup")
+
+        return None
+
+    # --------------------------------------------------
+    # Filings
+    # --------------------------------------------------
+
+    def cache_filings(self, filings):
+
+        print("[CACHE] Filings cached")
+
+    def get_filings(self, ticker):
+
+        print("[CACHE] Filing lookup")
+
+        return None
+
+    # --------------------------------------------------
+    # Generic Helpers
+    # --------------------------------------------------
+
+    def exists(self, key):
+
+        print(f"[CACHE] Exists check: {key}")
+
+        return False
+
+    def delete(self, key):
+
+        print(f"[CACHE] Delete cache: {key}")
+
+    def clear(self):
+
+        print("[CACHE] Clear all cache")
+
+    # --------------------------------------------------
+    # Future TTL Support
+    # --------------------------------------------------
+
+    def set_with_ttl(self, key, value, ttl):
+
+        print(f"[CACHE] Setting TTL={ttl}")
+
+        # TODO
+        # redis.setex(...)
