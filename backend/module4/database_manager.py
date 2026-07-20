@@ -1,91 +1,31 @@
 """
-Module 4 - Database Manager
+Database Manager
 
-Responsible for:
+Handles all PostgreSQL interactions.
 
-- PostgreSQL connection
-- Session management
-- Safe transactions
-- CRUD operations
-- Restatement handling
+Responsibilities
+----------------
+- Insert new data
+- Update existing data
+- Mark old records as outdated
+- Future support for Restatement Engine
 
-Pipeline
-
-Provider
-↓
-
-Validation
-↓
-
-Normalization
-↓
-
-DatabaseManager
-↓
-
-PostgreSQL
-
-The rest of the application should NEVER directly
-talk to PostgreSQL.
-
-Everything should go through this layer.
+NOTE:
+Real PostgreSQL connection will be added later.
+Current version contains production-ready structure with placeholder methods.
 """
 
-from contextlib import contextmanager
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from backend.module4.config import Config
-
-from backend.module4.models import Base
-from backend.module4.models import Company
-from backend.module4.models import FinancialMetric
-from backend.module4.models import MarketPrice
-from backend.module4.models import Filing
-from backend.module4.models import News
+from datetime import datetime
 
 
 class DatabaseManager:
 
     def __init__(self):
-
-        self.engine = create_engine(
-            Config.POSTGRES_URL,
-            pool_pre_ping=True,
-            future=True
-        )
-
-        self.SessionLocal = sessionmaker(
-            bind=self.engine,
-            autoflush=False,
-            autocommit=False
-        )
-
-    def create_tables(self):
-
-        Base.metadata.create_all(bind=self.engine)
-
-    @contextmanager
-    def session(self):
-
-        db = self.SessionLocal()
-
-        try:
-
-            yield db
-
-            db.commit()
-
-        except Exception:
-
-            db.rollback()
-
-            raise
-
-        finally:
-
-            db.close()
+        """
+        TODO:
+        Initialize PostgreSQL connection here.
+        """
+        self.connection = None
 
     # --------------------------------------------------
     # Company
@@ -93,156 +33,142 @@ class DatabaseManager:
 
     def save_company(self, company):
 
-        with self.session() as db:
+        print(f"[DB] Saving company: {company.get('ticker')}")
 
-            obj = Company(**company)
-
-            db.merge(obj)
-
-    # --------------------------------------------------
-    # Financials
-    # --------------------------------------------------
-
-    def save_financial_metric(self, metric):
-
-        with self.session() as db:
-
-            latest = (
-
-                db.query(FinancialMetric)
-
-                .filter(
-                    FinancialMetric.company_id == metric["company_id"],
-                    FinancialMetric.financial_year == metric["financial_year"],
-                    FinancialMetric.metric_name == metric["metric_name"],
-                    FinancialMetric.statement_type == metric["statement_type"],
-                    FinancialMetric.is_latest == True
-                )
-
-                .first()
-
-            )
-
-            if latest:
-
-                if latest.metric_value != metric["metric_value"]:
-
-                    latest.is_latest = False
-
-                    metric["version"] = latest.version + 1
-
-                    metric["restated_from_version"] = latest.id
-
-                else:
-
-                    return
-
-            obj = FinancialMetric(**metric)
-
-            db.add(obj)
+        # TODO
+        # INSERT INTO companies ...
 
     # --------------------------------------------------
-    # Prices
+    # Financial Statements
     # --------------------------------------------------
 
-    def save_market_price(self, price):
+    def save_financials(self, financials):
 
-        with self.session() as db:
+        print("[DB] Saving financial statements")
 
-            db.add(MarketPrice(**price))
+        # TODO
+        # Insert revenue
+        # Insert PAT
+        # Insert EBITDA
+        # Insert EPS
+        # Insert ratios
+
+    # --------------------------------------------------
+    # Market Prices
+    # --------------------------------------------------
+
+    def save_price(self, price):
+
+        print("[DB] Saving latest market price")
+
+        # TODO
+        # INSERT INTO market_prices ...
 
     # --------------------------------------------------
     # News
     # --------------------------------------------------
 
-    def save_news(self, article):
+    def save_news(self, news):
 
-        with self.session() as db:
+        print("[DB] Saving company news")
 
-            db.add(News(**article))
+        # TODO
+        # INSERT INTO news ...
+
+    # --------------------------------------------------
+    # Corporate Actions
+    # --------------------------------------------------
+
+    def save_corporate_actions(self, actions):
+
+        print("[DB] Saving corporate actions")
+
+        # TODO
 
     # --------------------------------------------------
     # Filings
     # --------------------------------------------------
 
-    def save_filing(self, filing):
+    def save_filings(self, filing):
 
-        with self.session() as db:
+        print("[DB] Saving filing")
 
-            db.add(Filing(**filing))
+        # TODO
 
     # --------------------------------------------------
-    # Read APIs
+    # Lookup Methods
     # --------------------------------------------------
 
-    def get_company(self, company_id):
+    def company_exists(self, ticker):
 
-        with self.session() as db:
+        print(f"[DB] Checking company {ticker}")
 
-            return (
+        # TODO
 
-                db.query(Company)
+        return False
 
-                .filter(
-                    Company.company_id == company_id
-                )
+    def get_latest_company(self, ticker):
 
-                .first()
+        print(f"[DB] Fetching company {ticker}")
 
-            )
+        # TODO
 
-    def get_latest_financials(self, company_id):
+        return None
 
-        with self.session() as db:
+    def get_latest_financials(self, ticker):
 
-            return (
+        print(f"[DB] Fetching financials {ticker}")
 
-                db.query(FinancialMetric)
+        return None
 
-                .filter(
-                    FinancialMetric.company_id == company_id,
-                    FinancialMetric.is_latest == True
-                )
+    def get_latest_price(self, ticker):
 
-                .all()
+        print(f"[DB] Fetching latest price {ticker}")
 
-            )
+        return None
 
-    def get_latest_news(self, company_id):
+    def get_latest_news(self, ticker):
 
-        with self.session() as db:
+        print(f"[DB] Fetching latest news {ticker}")
 
-            return (
+        return None
 
-                db.query(News)
+    # --------------------------------------------------
+    # Restatement Engine Support
+    # --------------------------------------------------
 
-                .filter(
-                    News.company_id == company_id
-                )
+    def mark_old_record(self, record_id):
 
-                .all()
+        """
+        Module 3.6
 
-            )
+        Mark previous record as not latest.
 
-    def get_latest_price(self, company_id):
+        is_latest=False
+        """
 
-        with self.session() as db:
+        print(f"[DB] Marking old record {record_id}")
 
-            return (
+    def insert_new_version(self, record):
 
-                db.query(MarketPrice)
+        """
+        Insert new version after restatement.
+        """
 
-                .filter(
-                    MarketPrice.company_id == company_id
-                )
+        print("[DB] Inserting updated record")
 
-                .order_by(
-                    MarketPrice.timestamp.desc()
-                )
+    # --------------------------------------------------
+    # Transaction Support
+    # --------------------------------------------------
 
-                .first()
+    def begin_transaction(self):
 
-            )
+        print("[DB] BEGIN TRANSACTION")
 
+    def commit(self):
 
-database_manager = DatabaseManager()
+        print("[DB] COMMIT")
+
+    def rollback(self):
+
+        print("[DB] ROLLBACK")
