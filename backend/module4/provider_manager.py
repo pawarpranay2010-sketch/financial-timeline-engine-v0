@@ -1,38 +1,44 @@
 """
 Provider Manager
 
-Acts as the abstraction layer between Module 4 and external APIs.
+Acts as the abstraction layer between Module 4 and all external
+financial data providers.
 
-Future providers plug into this interface.
-
-Nothing else in the application should directly call an API.
+Future modules (Module 5, Workspace, Portfolio, etc.) should NEVER
+call external APIs directly.
 
 Architecture
 
-Module5
-↓
-
-Module4 API
-
-↓
-
-ProviderManager
-
-↓
-
+Module 5
+    │
+    ▼
+Module 4 API
+    │
+    ▼
+Provider Manager
+    │
+    ▼
 Provider Adapter
-
-↓
-
+    │
+    ▼
 External API
 
+All providers must return data using the same internal schema.
 """
 
 from abc import ABC
 from abc import abstractmethod
 
+from providers.nse_adapter import NSEAdapter
+from providers.bse_adapter import BSEAdapter
+from providers.sebi_adapter import SEBIAdapter
+from providers.fmp_adapter import FMPAdapter
+
 
 class ProviderAdapter(ABC):
+    """
+    Abstract interface every provider must implement.
+    """
 
     @abstractmethod
     def fetch_company_profile(self, ticker: str):
@@ -50,42 +56,123 @@ class ProviderAdapter(ABC):
     def fetch_news(self, ticker: str):
         pass
 
+    @abstractmethod
+    def fetch_filings(self, ticker: str):
+        pass
+
 
 class ProviderManager:
+    """
+    Central registry for every financial provider.
+
+    This allows Module 4 to switch providers without
+    changing business logic.
+    """
 
     def __init__(self):
-
         self.providers = {}
 
-    def register_provider(self, name, adapter):
+    def register_provider(self, name: str, adapter: ProviderAdapter):
+        """
+        Register a provider.
 
-        self.providers[name] = adapter
+        Example:
+            provider_manager.register_provider(
+                "nse",
+                NSEAdapter()
+            )
+        """
+        self.providers[name.lower()] = adapter
 
-    def get_provider(self, name):
+    def unregister_provider(self, name: str):
+        """
+        Remove provider.
+        """
+        self.providers.pop(name.lower(), None)
 
-        if name not in self.providers:
-            raise ValueError(f"Provider {name} not registered")
+    def get_provider(self, name: str) -> ProviderAdapter:
+        """
+        Return provider instance.
+        """
 
-        return self.providers[name]
+        provider = self.providers.get(name.lower())
 
+        if provider is None:
+            raise ValueError(
+                f"Provider '{name}' is not registered."
+            )
+
+        return provider
+
+    def list_providers(self):
+        """
+        Return registered providers.
+        """
+        return list(self.providers.keys())
+
+    def has_provider(self, name: str):
+        """
+        Check provider availability.
+        """
+        return name.lower() in self.providers
+
+
+# ----------------------------------------------------
+# Singleton Provider Manager
+# ----------------------------------------------------
 
 provider_manager = ProviderManager()
 
-"""
-TODO
 
-Register adapters here
-
-Examples
-
-provider_manager.register_provider(
-    "fmp",
-    FinancialModelingPrepAdapter()
-)
+# ----------------------------------------------------
+# Register Default Providers
+# ----------------------------------------------------
 
 provider_manager.register_provider(
     "nse",
     NSEAdapter()
 )
 
+provider_manager.register_provider(
+    "bse",
+    BSEAdapter()
+)
+
+provider_manager.register_provider(
+    "sebi",
+    SEBIAdapter()
+)
+
+provider_manager.register_provider(
+    "fmp",
+    FMPAdapter()
+)
+
+
+# ----------------------------------------------------
+# Future Providers (TODO)
+# ----------------------------------------------------
+
+"""
+Examples
+
+provider_manager.register_provider(
+    "polygon",
+    PolygonAdapter()
+)
+
+provider_manager.register_provider(
+    "finnhub",
+    FinnhubAdapter()
+)
+
+provider_manager.register_provider(
+    "alpha_vantage",
+    AlphaVantageAdapter()
+)
+
+provider_manager.register_provider(
+    "twelve_data",
+    TwelveDataAdapter()
+)
 """
