@@ -25,7 +25,9 @@ class DatabaseManager:
         TODO:
         Initialize PostgreSQL connection here.
         """
-        self.connection = None
+        from backend.database.db import SessionLocal
+
+        self.connection = SessionLocal()
 
     # --------------------------------------------------
     # Company
