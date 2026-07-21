@@ -33,7 +33,7 @@ class DatabaseManager:
     # Company
     # --------------------------------------------------
 
-    def save_company(self, company):
+    def save_company():
 
         print(f"[DB] Saving company: {company.get('ticker')}")
 
@@ -59,7 +59,8 @@ class DatabaseManager:
     # Market Prices
     # --------------------------------------------------
 
-    def save_price(self, price):
+    def save_market_price(self, price):
+    
 
         print("[DB] Saving latest market price")
 
@@ -91,7 +92,8 @@ class DatabaseManager:
     # Filings
     # --------------------------------------------------
 
-    def save_filings(self, filing):
+    def save_filing(self, filing):
+    
 
         print("[DB] Saving filing")
 
@@ -117,7 +119,7 @@ class DatabaseManager:
 
         return None
 
-    def get_latest_financials(self, ticker):
+    def get_latest_financials(company_id)
 
         print(f"[DB] Fetching financials {ticker}")
 
@@ -174,3 +176,6 @@ class DatabaseManager:
     def rollback(self):
 
         print("[DB] ROLLBACK")
+    
+    def close(self):
+    self.connection.close()
