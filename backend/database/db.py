@@ -1,48 +1,53 @@
 """
-PostgreSQL Engine
+Database Configuration
 
-Single database connection
-used across the application.
+Creates:
+
+- PostgreSQL Engine
+- SQLAlchemy Session
+- Declarative Base
+
+Environment Variable Required:
+
+DATABASE_URL
+
+Example
+
+postgresql+psycopg://user:password@localhost:5432/financial_db
 """
 
+import os
+
+from dotenv import load_dotenv
+
 from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = (
-    "postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/financial_engine"
-)
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(
-
     DATABASE_URL,
-
-    pool_size=10,
-
-    max_overflow=20,
-
     pool_pre_ping=True,
-
-    echo=False
+    future=True,
 )
 
 SessionLocal = sessionmaker(
-
     autocommit=False,
-
     autoflush=False,
-
-    bind=engine
+    bind=engine,
 )
+
+Base = declarative_base()
 
 
 def get_db():
-
     db = SessionLocal()
 
     try:
-
         yield db
 
     finally:
-
         db.close()
