@@ -33,7 +33,7 @@ class DatabaseManager:
     # Company
     # --------------------------------------------------
 
-    def save_company():
+    def save_company(self, company):
 
         print(f"[DB] Saving company: {company.get('ticker')}")
 
@@ -119,9 +119,9 @@ class DatabaseManager:
 
         return None
 
-    def get_latest_financials(company_id)
+    def get_latest_financials(sef,company_id):
 
-        print(f"[DB] Fetching financials {ticker}")
+        print(f"[DB] Fetching financials {company_id}")
 
         return None
 
@@ -178,4 +178,4 @@ class DatabaseManager:
         print("[DB] ROLLBACK")
     
     def close(self):
-    self.connection.close()
+      self.connection.close()
