@@ -119,7 +119,7 @@ class DatabaseManager:
 
         return None
 
-    def get_latest_financials(sef,company_id):
+    def get_latest_financials(self,company_id):
 
         print(f"[DB] Fetching financials {company_id}")
 
@@ -178,4 +178,4 @@ class DatabaseManager:
         print("[DB] ROLLBACK")
     
     def close(self):
-      self.connection.close()
+        self.connection.close()
