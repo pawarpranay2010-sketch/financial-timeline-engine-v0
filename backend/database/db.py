@@ -2,31 +2,38 @@
 Database Configuration
 
 Creates:
-
 - PostgreSQL Engine
 - SQLAlchemy Session
 - Declarative Base
 
 Environment Variable Required:
-
 DATABASE_URL
-
-Example
-
-postgresql+psycopg://user:password@localhost:5432/financial_db
 """
 
 import os
 
 from dotenv import load_dotenv
-
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
+# Load .env
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Stop immediately if DATABASE_URL is missing
+if not DATABASE_URL:
+    raise ValueError(
+        "DATABASE_URL is missing. Check your Railway Variables or .env file."
+    )
+
+# Railway compatibility
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+psycopg2://",
+        1,
+    )
 
 engine = create_engine(
     DATABASE_URL,
@@ -45,9 +52,7 @@ Base = declarative_base()
 
 def get_db():
     db = SessionLocal()
-
     try:
         yield db
-
     finally:
         db.close()
