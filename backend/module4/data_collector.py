@@ -44,11 +44,11 @@ class DataCollector:
         if provider is None:
             raise Exception("Provider not registered")
 
-        raw = provider.company_profile(ticker)
+        raw = provider.fetch_company_profile(ticker)
 
-        self.validator.validate(raw)
+        validated = self.validator.validate(raw)
 
-        normalized = self.normalizer.company(raw)
+        normalized = self.normalizer.company(validated)
 
         self.database.save_company(normalized)
 
