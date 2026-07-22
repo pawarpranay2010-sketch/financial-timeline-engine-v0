@@ -12,19 +12,14 @@ Normalization
 Database
     ↓
 Redis Cache
-
-Future:
-
-Scheduler
-    ↓
-IngestionService
 """
 
-from module4.provider_manager import provider_manager
-from module4.validator import Validator
-from module4.normalizer import Normalizer
-from module4.database_manager import DatabaseManager
-from module4.cache_manager import CacheManager
+from backend.module4.provider_manager import provider_manager
+from backend.module4.validator import Validator
+from backend.module4.normalizer import Normalizer
+from backend.module4.database_manager import DatabaseManager
+from backend.module4.cache_manager import CacheManager
+from backend.module4.logger import logger
 
 
 class IngestionService:
@@ -39,50 +34,70 @@ class IngestionService:
 
     def ingest_company(self, provider_name: str, ticker: str):
 
-        provider = provider_manager.get_provider(provider_name)
+        logger.info(f"[Ingestion] Starting ingestion for {ticker} ({provider_name})")
 
-        profile = provider.fetch_company_profile(ticker)
+        try:
 
-        financials = provider.fetch_financials(ticker)
+            provider = provider_manager.get_provider(provider_name)
 
-        price = provider.fetch_market_price(ticker)
+            profile = provider.fetch_company_profile(ticker)
+            financials = provider.fetch_financials(ticker)
+            price = provider.fetch_market_price(ticker)
+            news = provider.fetch_news(ticker)
 
-        news = provider.fetch_news(ticker)
+            logger.info("[Ingestion] Provider fetch completed")
 
-        profile = self.validator.validate(profile)
+            profile = self.validator.validate(profile)
+            financials = self.validator.validate(financials)
+            price = self.validator.validate(price)
+            news = self.validator.validate(news)
 
-        financials = self.validator.validate(financials)
+            logger.info("[Ingestion] Validation completed")
 
-        price = self.validator.validate(price)
+            profile = self.normalizer.normalize_company(profile)
+            financials = self.normalizer.normalize_financials(financials)
+            price = self.normalizer.normalize_price(price)
+            news = self.normalizer.normalize_news(news)
 
-        news = self.validator.validate(news)
+            logger.info("[Ingestion] Normalization completed")
 
-        profile = self.normalizer.normalize_company(profile)
+            self.database.begin_transaction()
 
-        financials = self.normalizer.normalize_financials(financials)
+            self.database.save_company(profile)
+            self.database.save_financials(financials)
+            self.database.save_market_price(price)
+            self.database.save_news(news)
 
-        price = self.normalizer.normalize_price(price)
+            self.database.commit()
 
-        news = self.normalizer.normalize_news(news)
+            logger.info("[Ingestion] Database updated successfully")
 
-        self.database.save_company(profile)
+            self.cache.cache_company(profile)
+            self.cache.cache_price(price)
+            self.cache.cache_news(news)
 
-        self.database.save_financials(financials)
+            logger.info("[Ingestion] Redis cache updated")
 
-        self.database.save_price(price)
+            return {
+                "status": "success",
+                "ticker": ticker,
+            }
 
-        self.database.save_news(news)
+        except Exception as e:
 
-        self.cache.cache_company(profile)
+            logger.error(f"[Ingestion] Failed for {ticker}: {e}")
 
-        self.cache.cache_price(price)
+            self.database.rollback()
 
-        self.cache.cache_news(news)
+            return {
+                "status": "failed",
+                "ticker": ticker,
+                "error": str(e),
+            }
 
-        return {
-            "status": "success",
-            "ticker": ticker
-        }
+        finally:
+
+            self.database.close()
 
 
 ingestion_service = IngestionService()
