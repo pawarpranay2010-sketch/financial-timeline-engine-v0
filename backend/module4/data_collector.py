@@ -25,7 +25,9 @@ class DataCollector:
 
     def __init__(self):
 
-        self.providers = ProviderManager()
+        from .provider_manager import provider_manager
+
+        self.providers = provider_manager
 
         self.validator = Validator()
 
