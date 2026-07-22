@@ -44,6 +44,9 @@ from backend.module4.config import (
     COMPANY_METADATA_REFRESH_DAYS,
 )
 
+from backend.module4.logger import logger
+
+
 # ---------------------------------------------------
 # Placeholder Jobs
 # ---------------------------------------------------
@@ -56,7 +59,7 @@ def update_live_prices():
     TODO:
     Call DataCollector.fetch_market_prices()
     """
-    print("[Scheduler] Updating Live Prices...")
+    logger.info("[Scheduler] Updating Live Prices...")
 
 
 def update_news():
@@ -66,7 +69,7 @@ def update_news():
     TODO:
     Call DataCollector.fetch_news()
     """
-    print("[Scheduler] Updating News...")
+    logger.info("[Scheduler] Updating News...")
 
 
 def update_filings():
@@ -76,7 +79,7 @@ def update_filings():
     TODO:
     Call DataCollector.fetch_filings()
     """
-    print("[Scheduler] Updating Filings...")
+    logger.info("[Scheduler] Updating Filings...")
 
 
 def update_financial_statements():
@@ -86,7 +89,7 @@ def update_financial_statements():
     TODO:
     Call DataCollector.fetch_financials()
     """
-    print("[Scheduler] Updating Financial Statements...")
+    logger.info("[Scheduler] Updating Financial Statements...")
 
 
 def update_company_metadata():
@@ -96,7 +99,7 @@ def update_company_metadata():
     TODO:
     Call DataCollector.fetch_company_profiles()
     """
-    print("[Scheduler] Updating Company Metadata...")
+    logger.info("[Scheduler] Updating Company Metadata...")
 
 
 # ---------------------------------------------------
@@ -109,8 +112,11 @@ class Module4Scheduler:
     def __init__(self):
 
         self.scheduler = BackgroundScheduler()
+        logger.info("[Scheduler] BackgroundScheduler initialized")
 
     def register_jobs(self):
+
+        logger.info("[Scheduler] Registering scheduled jobs...")
 
         # Live Prices
         self.scheduler.add_job(
@@ -157,20 +163,32 @@ class Module4Scheduler:
             replace_existing=True,
         )
 
+        logger.info("[Scheduler] All jobs registered successfully")
+
     def start(self):
 
         self.register_jobs()
         self.scheduler.start()
 
-        print("[Module4] Scheduler Started.")
+        logger.info("[Module4] Scheduler Started.")
 
     def shutdown(self):
 
         self.scheduler.shutdown()
 
-        print("[Module4] Scheduler Stopped.")
+        logger.info("[Module4] Scheduler Stopped.")
+
+    def list_jobs(self):
+
+        jobs = self.scheduler.get_jobs()
+
+        logger.info(f"[Scheduler] Total Active Jobs: {len(jobs)}")
+
+        return jobs
 
 
+# ---------------------------------------------------
 # Singleton instance
+# ---------------------------------------------------
 
 module4_scheduler = Module4Scheduler()
