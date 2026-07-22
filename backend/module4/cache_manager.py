@@ -6,20 +6,11 @@ Responsibilities
 - Store frequently requested data
 - Reduce PostgreSQL queries
 - Reduce external API usage
-
-Cache Flow
-
-Redis
-↓
-
-PostgreSQL
-↓
-
-External APIs
-
 """
 
 import json
+
+from backend.module4.logger import logger
 
 
 class CacheManager:
@@ -30,8 +21,8 @@ class CacheManager:
 
         Connect Redis here.
         """
-
         self.redis = None
+        logger.info("[CACHE] Cache Manager initialized")
 
     # --------------------------------------------------
     # Company
@@ -39,14 +30,14 @@ class CacheManager:
 
     def cache_company(self, company):
 
-        print(f"[CACHE] Company cached: {company.get('ticker')}")
+        logger.info(f"[CACHE] Company cached: {company.get('ticker')}")
 
         # TODO
-        # redis.set(...)
+        # self.redis.set(...)
 
     def get_company(self, ticker):
 
-        print(f"[CACHE] Company lookup: {ticker}")
+        logger.info(f"[CACHE] Company lookup: {ticker}")
 
         return None
 
@@ -56,11 +47,11 @@ class CacheManager:
 
     def cache_price(self, price):
 
-        print("[CACHE] Latest price cached")
+        logger.info("[CACHE] Latest price cached")
 
     def get_price(self, ticker):
 
-        print("[CACHE] Price lookup")
+        logger.info(f"[CACHE] Price lookup: {ticker}")
 
         return None
 
@@ -70,11 +61,11 @@ class CacheManager:
 
     def cache_financials(self, financials):
 
-        print("[CACHE] Financials cached")
+        logger.info("[CACHE] Financials cached")
 
     def get_financials(self, ticker):
 
-        print("[CACHE] Financial lookup")
+        logger.info(f"[CACHE] Financial lookup: {ticker}")
 
         return None
 
@@ -84,11 +75,11 @@ class CacheManager:
 
     def cache_news(self, news):
 
-        print("[CACHE] News cached")
+        logger.info("[CACHE] News cached")
 
     def get_news(self, ticker):
 
-        print("[CACHE] News lookup")
+        logger.info(f"[CACHE] News lookup: {ticker}")
 
         return None
 
@@ -98,11 +89,11 @@ class CacheManager:
 
     def cache_filings(self, filings):
 
-        print("[CACHE] Filings cached")
+        logger.info("[CACHE] Filings cached")
 
     def get_filings(self, ticker):
 
-        print("[CACHE] Filing lookup")
+        logger.info(f"[CACHE] Filing lookup: {ticker}")
 
         return None
 
@@ -112,17 +103,23 @@ class CacheManager:
 
     def exists(self, key):
 
-        print(f"[CACHE] Exists check: {key}")
+        logger.info(f"[CACHE] Exists check: {key}")
 
         return False
 
     def delete(self, key):
 
-        print(f"[CACHE] Delete cache: {key}")
+        logger.warning(f"[CACHE] Delete cache: {key}")
+
+        # TODO
+        # self.redis.delete(key)
 
     def clear(self):
 
-        print("[CACHE] Clear all cache")
+        logger.warning("[CACHE] Clear all cache")
+
+        # TODO
+        # self.redis.flushdb()
 
     # --------------------------------------------------
     # Future TTL Support
@@ -130,7 +127,19 @@ class CacheManager:
 
     def set_with_ttl(self, key, value, ttl):
 
-        print(f"[CACHE] Setting TTL={ttl}")
+        logger.info(f"[CACHE] Setting key={key} with TTL={ttl}")
 
         # TODO
-        # redis.setex(...)
+        # self.redis.setex(
+        #     key,
+        #     ttl,
+        #     json.dumps(value)
+        # )
+
+    # --------------------------------------------------
+    # Close
+    # --------------------------------------------------
+
+    def close(self):
+
+        logger.info("[CACHE] Cache Manager closed")
