@@ -12,7 +12,9 @@ Responsibilities
 """
 
 from datetime import datetime
+
 from backend.database.db import SessionLocal
+from backend.module4.logger import logger
 
 
 class DatabaseManager:
@@ -22,6 +24,7 @@ class DatabaseManager:
         Initialize PostgreSQL session.
         """
         self.connection = SessionLocal()
+        logger.info("[DB] Database session initialized")
 
     # --------------------------------------------------
     # Company
@@ -29,7 +32,7 @@ class DatabaseManager:
 
     def save_company(self, company):
 
-        print(f"[DB] Saving company: {company.get('ticker')}")
+        logger.info(f"[DB] Saving company: {company.get('ticker')}")
 
         # TODO
         # INSERT INTO companies ...
@@ -40,7 +43,7 @@ class DatabaseManager:
 
     def save_financials(self, financials):
 
-        print("[DB] Saving financial statements")
+        logger.info("[DB] Saving financial statements")
 
         # TODO
 
@@ -50,7 +53,7 @@ class DatabaseManager:
 
     def save_market_price(self, price):
 
-        print("[DB] Saving latest market price")
+        logger.info("[DB] Saving latest market price")
 
         # TODO
 
@@ -60,7 +63,7 @@ class DatabaseManager:
 
     def save_news(self, news):
 
-        print("[DB] Saving company news")
+        logger.info("[DB] Saving company news")
 
         # TODO
 
@@ -70,7 +73,7 @@ class DatabaseManager:
 
     def save_corporate_actions(self, actions):
 
-        print("[DB] Saving corporate actions")
+        logger.info("[DB] Saving corporate actions")
 
         # TODO
 
@@ -80,7 +83,7 @@ class DatabaseManager:
 
     def save_filing(self, filing):
 
-        print("[DB] Saving filing")
+        logger.info("[DB] Saving filing")
 
         # TODO
 
@@ -90,31 +93,31 @@ class DatabaseManager:
 
     def company_exists(self, ticker):
 
-        print(f"[DB] Checking company {ticker}")
+        logger.info(f"[DB] Checking company: {ticker}")
 
         return False
 
     def get_latest_company(self, ticker):
 
-        print(f"[DB] Fetching company {ticker}")
+        logger.info(f"[DB] Fetching company: {ticker}")
 
         return None
 
     def get_latest_financials(self, company_id):
 
-        print(f"[DB] Fetching financials {company_id}")
+        logger.info(f"[DB] Fetching financials: {company_id}")
 
         return None
 
     def get_latest_price(self, ticker):
 
-        print(f"[DB] Fetching latest price {ticker}")
+        logger.info(f"[DB] Fetching latest price: {ticker}")
 
         return None
 
     def get_latest_news(self, ticker):
 
-        print(f"[DB] Fetching latest news {ticker}")
+        logger.info(f"[DB] Fetching latest news: {ticker}")
 
         return None
 
@@ -124,30 +127,43 @@ class DatabaseManager:
 
     def mark_old_record(self, record_id):
 
-        print(f"[DB] Marking old record {record_id}")
+        logger.info(f"[DB] Marking old record: {record_id}")
 
     def insert_new_version(self, record):
 
-        print("[DB] Inserting updated record")
+        logger.info("[DB] Inserting updated record")
 
     # --------------------------------------------------
     # Transaction Support
     # --------------------------------------------------
 
-    def begin_transaction(self):
-        print("[DB] BEGIN TRANSACTION")
+    def begin_transaction():
+
+        logger.info("[DB] BEGIN TRANSACTION")
 
     def commit(self):
-        self.connection.commit()
-        print("[DB] COMMIT")
+
+        try:
+            self.connection.commit()
+            logger.info("[DB] COMMIT SUCCESS")
+        except Exception as e:
+            logger.error(f"[DB] COMMIT FAILED: {e}")
+            raise
 
     def rollback(self):
-        self.connection.rollback()
-        print("[DB] ROLLBACK")
+
+        try:
+            self.connection.rollback()
+            logger.warning("[DB] ROLLBACK EXECUTED")
+        except Exception as e:
+            logger.error(f"[DB] ROLLBACK FAILED: {e}")
+            raise
 
     # --------------------------------------------------
     # Close Session
     # --------------------------------------------------
 
     def close(self):
+
         self.connection.close()
+        logger.info("[DB] Database session closed")
