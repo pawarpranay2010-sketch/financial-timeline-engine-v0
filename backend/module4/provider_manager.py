@@ -26,8 +26,7 @@ External API
 All providers must return data using the same internal schema.
 """
 
-from abc import ABC
-from abc import abstractmethod
+
 
 from providers.nse_adapter import NSEAdapter
 from providers.bse_adapter import BSEAdapter
@@ -41,11 +40,11 @@ class ProviderAdapter(ABC):
     """
 
     @abstractmethod
-    def fetch_company_profile(self, ticker: str):
+    def fetch_company_profile(self, provider_name: str, ticker: str) -> dict:
         pass
 
     @abstractmethod
-    def fetch_financials(self, ticker: str):
+    def fetch_financials(self, provider_name: str, ticker: str) -> dict:
         pass
 
     @abstractmethod
@@ -53,7 +52,7 @@ class ProviderAdapter(ABC):
         pass
 
     @abstractmethod
-    def fetch_news(self, ticker: str):
+    def fetch_news(self, provider_name: str, ticker: str) -> list:
         pass
 
     @abstractmethod
