@@ -59,7 +59,7 @@ class FMPAdapter(ProviderAdapter):
         
         self.timeout = (5, 15)
 
-    def _execute_request(self, endpoint, params=None):
+    def _execute_request(self, endpoint: str, params: dict | None = None):
         """Internal helper to securely route requests with standard exception handling."""
         url = f"{self.base_url}/{endpoint}"
         req_params = params.copy() if params else {}
@@ -72,10 +72,10 @@ class FMPAdapter(ProviderAdapter):
             data = response.json()
             # Detect FMP API error payloads
             if isinstance(data, dict):
-            if data.get("Error Message") or data.get("error"):
-            raise RuntimeError(
+    if data.get("Error Message") or data.get("error"):
+        raise RuntimeError(
             data.get("Error Message") or data.get("error")
-            )
+        )
             if data is None:
                 raise RuntimeError("Empty JSON returned by FMP.")
             return data
@@ -94,7 +94,7 @@ class FMPAdapter(ProviderAdapter):
             logger.error(f"JSON decoding error on {endpoint}: {e}")
             raise RuntimeError("Malformed response payload received from FMP API.") from e
 
-    def _safe_fetch(self, endpoint, params=None):
+    def _safe_fetch(self, endpoint: str, params: dict | None = None):
         """Safe execution boundary wrapper preventing isolated endpoint drops from killing pipelines."""
         try:
             return self._execute_request(endpoint, params)
@@ -102,7 +102,7 @@ class FMPAdapter(ProviderAdapter):
             logger.warning(f"{endpoint} failed: {e}")
             return []
 
-    def fetch_company_profile(self, ticker):
+    def fetch_company_profile(self, ticker: str) -> dict:
         symbol = ticker.strip().upper()
         data = self._execute_request(f"profile/{symbol}")
         
@@ -130,7 +130,7 @@ class FMPAdapter(ProviderAdapter):
             "image": profile.get("image")
         }
 
-    def fetch_financials(self, ticker):
+    def fetch_financials(self, ticker: str) -> dict:
         """Fetches and builds isolation-bounded financial statements."""
         symbol = ticker.strip().upper()
         params = {"limit": 5}
@@ -145,7 +145,7 @@ class FMPAdapter(ProviderAdapter):
             "cash_flow": cash if isinstance(cash, list) else [],
         }
 
-    def fetch_market_price(self, ticker):
+    def fetch_market_price(self, ticker: str) -> dict:
         symbol = ticker.strip().upper()
         data = self._execute_request(f"quote/{symbol}")
         
@@ -169,7 +169,7 @@ class FMPAdapter(ProviderAdapter):
             "timestamp": quote.get("timestamp")
         }
 
-    def fetch_news(self, ticker):
+    def fetch_news(self, ticker: str) -> list[dict]:
         symbol = ticker.strip().upper()
         data = self._execute_request("stock_news", params={"tickers": symbol, "limit": 10})
         
@@ -189,9 +189,9 @@ class FMPAdapter(ProviderAdapter):
             for article in data
         ]
 
-    def fetch_filings(self, ticker):
+    def fetch_filings(self, ticker: str) -> list[dict]:
         symbol = ticker.strip().upper()
-        data = self._execute_request(f"sec-filings/{symbol}", params={"limit": 5})
+        data = self._execute_request(f"sec_filings/{symbol}", params={"limit": 5})
         
         if not data or not isinstance(data, list):
             logger.warning(f"No filings payload for: {symbol}")
@@ -210,8 +210,8 @@ class FMPAdapter(ProviderAdapter):
         ]
 
     def __del__(self):
-    try:
+      try:
         self.session.close()
-    except Exception:
+      except Exception:
         pass
         
