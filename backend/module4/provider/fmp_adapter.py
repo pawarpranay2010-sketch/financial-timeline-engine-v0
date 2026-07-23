@@ -70,6 +70,12 @@ class FMPAdapter(ProviderAdapter):
             response.raise_for_status()
             
             data = response.json()
+            # Detect FMP API error payloads
+            if isinstance(data, dict):
+            if data.get("Error Message") or data.get("error"):
+            raise RuntimeError(
+            data.get("Error Message") or data.get("error")
+            )
             if data is None:
                 raise RuntimeError("Empty JSON returned by FMP.")
             return data
@@ -203,7 +209,9 @@ class FMPAdapter(ProviderAdapter):
             for filing in data
         ]
 
-    def close(self):
-        """Close the reusable HTTP session."""
+    def __del__(self):
+    try:
         self.session.close()
+    except Exception:
+        pass
         
