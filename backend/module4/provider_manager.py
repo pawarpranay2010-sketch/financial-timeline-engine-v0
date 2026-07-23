@@ -1,5 +1,7 @@
 import logging
-# 1. Import ProviderAdapter directly from base to completely eliminate duplication
+from typing import Dict, List, Any
+
+# Imported from central base; no duplicated definitions
 from providers.base import ProviderAdapter
 
 from providers.nse_adapter import NSEAdapter
@@ -7,7 +9,6 @@ from providers.bse_adapter import BSEAdapter
 from providers.sebi_adapter import SEBIAdapter
 from providers.fmp_adapter import FMPAdapter
 
-# 5. Missing logger: Configured correctly using the standard logging module
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +21,7 @@ class ProviderManager:
     """    
 
     def __init__(self):    
-        self.providers = {}    
+        self.providers: Dict[str, ProviderAdapter] = {}    
 
     def register_provider(self, name: str, adapter: ProviderAdapter):    
         """    
@@ -53,63 +54,72 @@ class ProviderManager:
 
         return provider    
 
-    def list_providers(self):    
+    def list_providers(self) -> List[str]:    
         """    
         Return registered providers.    
         """    
         return list(self.providers.keys())    
 
-    def has_provider(self, name: str):    
+    def has_provider(self, name: str) -> bool:    
         """    
         Check provider availability.    
         """    
         return name.lower() in self.providers
 
-    # 3. Routing Methods: Keep rest of application from interacting directly with adapters
-    def fetch_company_profile(self, provider_name: str, ticker: str):
-        """Route tracking for company profile metadata payloads."""
+    # 2 & 3. Added precise type hints and informative docstrings to routing methods
+    def fetch_company_profile(self, provider_name: str, ticker: str) -> Dict[str, Any]:
+        """
+        Routes the profile request to the specified provider adapter.
+        Returns a dictionary containing standardized company details.
+        """
         return self.get_provider(provider_name).fetch_company_profile(ticker)
 
-    def fetch_financials(self, provider_name: str, ticker: str):
-        """Route tracking for three-statement comprehensive compound dictionary objects."""
+    def fetch_financials(self, provider_name: str, ticker: str) -> Dict[str, Any]:
+        """
+        Routes the financial data request to the specified provider adapter.
+        Returns a structured dictionary with income_statement, balance_sheet, and cash_flow lists.
+        """
         return self.get_provider(provider_name).fetch_financials(ticker)
 
-    def fetch_market_price(self, provider_name: str, ticker: str):
-        """Route tracking for real-time spot quote metrics."""
+    def fetch_market_price(self, provider_name: str, ticker: str) -> Dict[str, Any]:
+        """
+        Routes the market price request to the specified provider adapter.
+        Returns a dictionary containing real-time price and quote variables.
+        """
         return self.get_provider(provider_name).fetch_market_price(ticker)
 
-    def fetch_news(self, provider_name: str, ticker: str):
-        """Route tracking for stock macro context streams."""
+    def fetch_news(self, provider_name: str, ticker: str) -> List[Dict[str, Any]]:
+        """
+        Routes the stock news request to the specified provider adapter.
+        Returns a list of dictionaries with matching recent articles.
+        """
         return self.get_provider(provider_name).fetch_news(ticker)
 
-    def fetch_filings(self, provider_name: str, ticker: str):
-        """Route tracking for standard SEC regulatory filings summaries."""
+    def fetch_filings(self, provider_name: str, ticker: str) -> List[Dict[str, Any]]:
+        """
+        Routes the regulatory filing request to the specified provider adapter.
+        Returns a list of dictionaries capturing tracking URLs and metadata.
+        """
         return self.get_provider(provider_name).fetch_filings(ticker)
 
 
-# Singleton Provider Manager
+# Singleton Provider Manager Instance
 provider_manager = ProviderManager()
 
 
-# 4. Unsafe provider registration: Wrapped in try/except boundaries with logger fallbacks
-# This prevents application boot crashes if API keys or dependencies fail to load.
-try:
-    provider_manager.register_provider("nse", NSEAdapter())
-except Exception as e:
-    logger.warning(f"Could not automatically register default provider 'nse': {e}")
+# 1. Cleaner loop execution parsing registrations without repetitive try/except syntax noise
+def initialize_default_providers():
+    """Initializes and registers baseline data provider adapters with exception protection."""
+    providers_map = {
+        "nse": NSEAdapter,
+        "bse": BSEAdapter,
+        "sebi": SEBIAdapter,
+        "fmp": FMPAdapter,
+    }
 
-try:
-    provider_manager.register_provider("bse", BSEAdapter())
-except Exception as e:
-    logger.warning(f"Could not automatically register default provider 'bse': {e}")
-
-try:
-    provider_manager.register_provider("sebi", SEBIAdapter())
-except Exception as e:
-    logger.warning(f"Could not automatically register default provider 'sebi': {e}")
-
-try:
-    provider_manager.register_provider("fmp", FMPAdapter())
-except Exception as e:
-    logger.warning(f"Could not automatically register default provider 'fmp': {e}")
-    
+    for name, adapter_class in providers_map.items():
+        try:
+            provider_manager.register_provider(name, adapter_class())
+        except Exception as e:
+            logger.warning(f"Failed to register provider '{name}': {e}")
+            
