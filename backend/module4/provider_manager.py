@@ -2,12 +2,12 @@ import logging
 from typing import Dict, List, Any
 
 # Imported from central base; no duplicated definitions
-from providers.base import ProviderAdapter
+from .provider.base import ProviderAdapter
 
-from providers.nse_adapter import NSEAdapter
-from providers.bse_adapter import BSEAdapter
-from providers.sebi_adapter import SEBIAdapter
-from providers.fmp_adapter import FMPAdapter
+from .provider.nse_adapter import NSEAdapter
+from .provider.bse_adapter import BSEAdapter
+from .provider.sebi_adapter import SEBIAdapter
+from .provider.fmp_adapter import FMPAdapter
 
 logger = logging.getLogger(__name__)
 

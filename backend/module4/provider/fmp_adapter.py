@@ -72,10 +72,10 @@ class FMPAdapter(ProviderAdapter):
             data = response.json()
             # Detect FMP API error payloads
             if isinstance(data, dict):
-    if data.get("Error Message") or data.get("error"):
-        raise RuntimeError(
-            data.get("Error Message") or data.get("error")
-        )
+                if data.get("Error Message") or data.get("error"):
+                    raise RuntimeError(
+                        data.get("Error Message") or data.get("error")
+                    )
             if data is None:
                 raise RuntimeError("Empty JSON returned by FMP.")
             return data

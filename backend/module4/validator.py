@@ -63,6 +63,55 @@ class Validator:
 
     MAX_DATA_AGE_DAYS = 3650
 
+    def validate(self, data):
+        """
+        Generic validation entrypoint used by the ingestion pipeline.
+
+        It preserves the current module architecture by delegating to the
+        existing specific validators only when the payload shape is clear.
+        """
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    self._validate_dict_payload(item)
+            return data
+
+        if isinstance(data, dict):
+            self._validate_dict_payload(data)
+            return data
+
+        raise TypeError("Unsupported payload type for validation")
+
+    def _validate_dict_payload(self, data: Dict[str, Any]) -> None:
+        if {"income_statement", "balance_sheet", "cash_flow"} & set(data.keys()):
+            return
+
+        if any(
+            key in data for key in ("ticker", "symbol", "company_name", "companyName")
+        ):
+            company_view = {
+                "company_id": data.get("company_id", data.get("symbol", data.get("ticker"))),
+                "ticker": data.get("ticker", data.get("symbol")),
+                "company_name": data.get(
+                    "company_name",
+                    data.get("companyName"),
+                ),
+                "exchange": data.get("exchange"),
+            }
+            result = self.validate_company(company_view)
+            if not result.valid:
+                raise ValueError("; ".join(result.errors))
+            return
+
+        if "metric_name" in data and "metric_value" in data:
+            result = self.validate_financial(data)
+            if not result.valid:
+                raise ValueError("; ".join(result.errors))
+            return
+
+        if "timestamp" in data and data.get("timestamp") is not None:
+            return
+
     def validate_company(self, data: Dict[str, Any]) -> ValidationResult:
 
         result = ValidationResult()

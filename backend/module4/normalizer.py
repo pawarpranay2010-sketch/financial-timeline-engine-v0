@@ -87,9 +87,9 @@ class Normalizer:
 
             "company_id": raw.get("company_id"),
 
-            "ticker": raw.get("ticker"),
+            "ticker": raw.get("ticker", raw.get("symbol")),
 
-            "company_name": raw.get("company_name"),
+            "company_name": raw.get("company_name", raw.get("companyName")),
 
             "exchange": raw.get("exchange"),
 
@@ -99,7 +99,7 @@ class Normalizer:
 
             "isin": raw.get("isin"),
 
-            "market_cap": raw.get("market_cap"),
+            "market_cap": raw.get("market_cap", raw.get("mkt_cap")),
 
             "updated_at": raw.get("updated_at")
 
@@ -145,33 +145,95 @@ class Normalizer:
 
         }
 
+    def normalize_financials(self, raw: Dict[str, Any]):
+        normalized = []
+
+        statement_type_map = {
+            "income_statement": "income_statement",
+            "balance_sheet": "balance_sheet",
+            "cash_flow": "cash_flow",
+        }
+
+        for statement_key, statement_type in statement_type_map.items():
+            for item in raw.get(statement_key, []) or []:
+                period = item.get("calendarYear") or item.get("date")
+                financial_year = None
+
+                if isinstance(period, str) and period:
+                    financial_year = period.split("-")[0]
+
+                metric_fields = {
+                    "revenue": item.get("revenue"),
+                    "ebitda": item.get("ebitda"),
+                    "ebit": item.get("operatingIncome"),
+                    "net income": item.get("netIncome"),
+                    "eps": item.get("eps"),
+                    "total assets": item.get("totalAssets"),
+                    "total liabilities": item.get("totalLiabilities"),
+                    "operating cash flow": item.get("operatingCashFlow"),
+                    "free cash flow": item.get("freeCashFlow"),
+                }
+
+                for metric_name, metric_value in metric_fields.items():
+                    if metric_value is None:
+                        continue
+                    normalized.append(
+                        self.normalize_financial(
+                            {
+                                "company_id": raw.get("company_id"),
+                                "financial_year": financial_year,
+                                "statement_type": statement_type,
+                                "metric_name": metric_name,
+                                "metric_value": metric_value,
+                                "currency": item.get("reportedCurrency"),
+                                "source_provider": raw.get("source_provider", "fmp"),
+                                "source_document": item.get("link"),
+                                "is_latest": item.get("is_latest", True),
+                            }
+                        )
+                    )
+
+        return normalized
+
     def normalize_price(self, raw: Dict[str, Any]):
 
         return {
 
             "company_id": raw.get("company_id"),
 
-            "price": raw.get("price"),
+            "price": raw.get("price", raw.get("close_price")),
 
             "volume": raw.get("volume"),
 
-            "timestamp": raw.get("timestamp")
+            "timestamp": raw.get("timestamp"),
+
+            "high_price": raw.get("high_price", raw.get("day_high")),
+
+            "low_price": raw.get("low_price", raw.get("day_low")),
+
+            "open_price": raw.get("open_price"),
+
+            "close_price": raw.get("close_price", raw.get("price"))
 
         }
 
-    def normalize_news(self, raw: Dict[str, Any]):
+    def normalize_news(self, raw):
+        if isinstance(raw, list):
+            return [self.normalize_news(item) for item in raw]
 
         return {
 
             "company_id": raw.get("company_id"),
 
-            "headline": raw.get("headline"),
+            "headline": raw.get("headline", raw.get("title")),
 
             "url": raw.get("url"),
 
             "source": raw.get("source"),
 
-            "published_at": raw.get("published_at")
+            "published_at": raw.get("published_at", raw.get("published_date")),
+
+            "summary": raw.get("summary", raw.get("text"))
 
         }
 

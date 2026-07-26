@@ -64,6 +64,16 @@ class IngestionService:
             self.database.begin_transaction()
 
             self.database.save_company(profile)
+            saved_company = self.database.get_latest_company(profile.get("ticker"))
+
+            if saved_company is not None:
+                company_id = saved_company.id
+                price["company_id"] = company_id
+                for item in financials:
+                    item["company_id"] = company_id
+                for item in news:
+                    item["company_id"] = company_id
+
             self.database.save_financials(financials)
             self.database.save_market_price(price)
             self.database.save_news(news)
