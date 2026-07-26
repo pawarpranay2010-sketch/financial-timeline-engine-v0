@@ -1,7 +1,14 @@
-
-
-from datetime import datetime, datefrom backend.database.db import SessionLocalfrom backend.module4.logger import logger
-# Import your explicit SQLAlchemy modelsfrom backend.database.models import Company, Financial, MarketPrice, News, Filing, CorporateAction
+from datetime import datetime, date
+from backend.database.db import SessionLocal
+from backend.module4.logger import logger
+from backend.database.models import (
+    Company,
+    Financial,
+    MarketPrice,
+    News,
+    Filing,
+    CorporateAction,
+)
 
 class DatabaseManager:
 
@@ -423,7 +430,6 @@ Closes the active database connection session cleanly.
 """
 self.connection.close()
 logger.info("[DB] Database session closed")
-
 
 
 
