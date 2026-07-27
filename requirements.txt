@@ -1,37 +1,37 @@
 streamlit>=1.32
+
 requests>=2.31
 pandas>=2.0
 python-docx>=1.1
 pypdf>=4.0
 reportlab>=4.0
 openpyxl>=3.1
+
 google-genai>=0.3
 
-# Database
-sqlalchemy>=2.0
+SQLAlchemy>=2.0
 psycopg2-binary>=2.9
 
-# Environment
-python-dotenv>=1.0
+redis>=5.0
 
-# Validation
 pydantic>=2.0
 pydantic-settings>=2.0
 
-# Redis Cache
-redis>=5.0
+python-dotenv>=1.0
 
-# Scheduler
 apscheduler>=3.10
 
-# Retry / HTTP utilities
 tenacity>=8.2
 
-# Vector database (future Agentic RAG)
-chromadb>=0.5
+numpy>=1.26
 
-# Embeddings (future Agentic RAG)
+tiktoken>=0.7
+
+faiss-cpu>=1.8
+
 sentence-transformers>=3.0
 
-# Optional tokenization
-tiktoken>=0.7
+langchain>=0.3
+langgraph>=0.2
+
+pytest>=8.0
