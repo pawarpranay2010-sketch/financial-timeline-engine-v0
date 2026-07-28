@@ -44,12 +44,24 @@ class IngestionService:
 
         try:
 
-            # Provider Orchestrator handles:
-            # - cache-first lookup
-            # - API key rotation
-            # - retries
-            # - provider failover
+            # --------------------------------------------------
+            # Provider Orchestrator
+            # --------------------------------------------------
+
             data = self.provider.fetch_company(provider_name, ticker)
+
+            logger.info(
+                f"[Provider] Cache Status: {data.get('cache_status', 'unknown')}"
+            )
+
+            logger.info(
+                f"[Provider] Provider Used: {data.get('provider_used', provider_name)}"
+            )
+
+            if data.get("fallback_provider"):
+                logger.info(
+                    f"[Provider] Fallback Used: {data['fallback_provider']}"
+                )
 
             profile = data["profile"]
             financials = data["financials"]
@@ -58,7 +70,9 @@ class IngestionService:
 
             logger.info("[Ingestion] Provider fetch completed")
 
-            # ---------- Validation ----------
+            # --------------------------------------------------
+            # Validation
+            # --------------------------------------------------
 
             profile_validation = self.validator.validate_company(profile)
 
@@ -69,7 +83,9 @@ class IngestionService:
 
             logger.info("[Ingestion] Validation completed")
 
-            # ---------- Normalization ----------
+            # --------------------------------------------------
+            # Normalization
+            # --------------------------------------------------
 
             profile = self.normalizer.normalize_company(profile)
 
@@ -91,26 +107,50 @@ class IngestionService:
                     for item in news
                 ]
             else:
-                news = [self.normalizer.normalize_news(news)]
+                news = [
+                    self.normalizer.normalize_news(news)
+                ]
 
             logger.info("[Ingestion] Normalization completed")
 
-            # ---------- Database ----------
+            # --------------------------------------------------
+            # Database
+            # --------------------------------------------------
 
             self.database.begin_transaction()
 
+            # Save Company
             self.database.save_company(profile)
+
+            # Flush so PostgreSQL generates company ID before
+            # dependent inserts.
+            self.database.connection.flush()
+
+            logger.info("[Ingestion] Company saved and flushed")
+
+            # Save Financial Statements
             self.database.save_financials(financials)
+
+            logger.info("[Ingestion] Financial statements saved")
+
+            # Save Market Price
             self.database.save_market_price(price)
 
+            logger.info("[Ingestion] Market price saved")
+
+            # Save News
             for item in news:
                 self.database.save_news(item)
+
+            logger.info("[Ingestion] News saved")
 
             self.database.commit()
 
             logger.info("[Ingestion] Database updated")
 
-            # ---------- Cache ----------
+            # --------------------------------------------------
+            # Redis Cache
+            # --------------------------------------------------
 
             self.cache.cache_company(profile)
             self.cache.cache_price(price)
@@ -120,7 +160,7 @@ class IngestionService:
 
             return {
                 "status": "success",
-                "ticker": ticker
+                "ticker": ticker,
             }
 
         except Exception as e:
@@ -132,7 +172,7 @@ class IngestionService:
             return {
                 "status": "failed",
                 "ticker": ticker,
-                "error": str(e)
+                "error": str(e),
             }
 
         finally:
