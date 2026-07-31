@@ -3,3 +3,17 @@ __pycache__/
 .env
 .env.local
 *.log
+
+# Credential-handling / diagnostic scripts — never commit
+append_env_keys.py
+scripts/set_ai_keys.py
+scripts/set_redis_url.py
+tests/update_env_key.py
+tests/check_env_file.py
+tests/read_env_masked.py
+tests/trace_key_loading.py
+tests/test_env_local_loading.py
+tests/test_fmp_key_sources.py
+tests/test_fmp_live.py
+tests/validate_providers.py
+tests/diagnose_*.py
