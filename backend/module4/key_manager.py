@@ -36,6 +36,8 @@ from backend.module4.logger import logger
 _ENV_VAR_PATTERNS: Dict[str, List[str]] = {
     "fmp": ["FMP_API_KEY", "FMP_API_KEY_2", "FMP_API_KEY_3"],
     "alpha": ["ALPHA_VANTAGE_API_KEY", "ALPHA_VANTAGE_API_KEY_2"],
+    "finnhub": ["FINNHUB_API_KEY"],
+    "alpha_vantage": ["ALPHA_VANTAGE_API_KEY"],
     "polygon": ["POLYGON_API_KEY", "POLYGON_API_KEY_2"],
 }
 

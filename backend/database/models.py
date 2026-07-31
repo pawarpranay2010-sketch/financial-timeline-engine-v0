@@ -30,6 +30,28 @@ from backend.database.db import Base
 
 
 # =====================================================
+# Currency Role Constants
+# =====================================================
+
+CURRENCY_ROLE_REPORTING = "REPORTING"
+CURRENCY_ROLE_FUNCTIONAL = "FUNCTIONAL"
+CURRENCY_ROLE_PRESENTATION = "PRESENTATION"
+CURRENCY_ROLE_TRANSACTION = "TRANSACTION"
+CURRENCY_ROLE_TAX = "TAX"
+
+
+# =====================================================
+# Verification Status Constants
+# =====================================================
+
+VERIFICATION_PENDING = "PENDING"
+VERIFICATION_VERIFIED = "VERIFIED"
+VERIFICATION_CONFLICT = "CONFLICT"
+VERIFICATION_SUPERSEDED = "SUPERSEDED"
+VERIFICATION_CORRUPTED = "CORRUPTED"
+
+
+# =====================================================
 # Company
 # =====================================================
 
@@ -218,7 +240,7 @@ class News(Base):
 
 
 # =====================================================
-# Filings
+# Filings (with amendment/restatement support)
 # =====================================================
 
 class Filing(Base):
@@ -235,9 +257,25 @@ class Filing(Base):
 
     filing_date = Column(Date)
 
+    fiscal_period = Column(String, nullable=True)
+
+    fiscal_year = Column(Integer, nullable=True)
+
+    fiscal_quarter = Column(String, nullable=True)
+
     source = Column(String)
 
-    pdf_url = Column(Text)
+    pdf_url = Column(Text, nullable=True)
+
+    accession_number = Column(String, nullable=True, index=True)
+
+    amendment_to = Column(
+        String,
+        nullable=True,
+        comment="Accession number of the original filing this amends",
+    )
+
+    is_amendment = Column(Boolean, default=False)
 
     processed = Column(
         Boolean,
@@ -252,6 +290,79 @@ class Filing(Base):
     company = relationship(
         "Company",
         back_populates="filings",
+    )
+
+
+# =====================================================
+# Extracted Fact (Agentic RAG Evidence Store)
+# =====================================================
+
+class ExtractedFact(Base):
+    __tablename__ = "extracted_facts"
+
+    id = Column(Integer, primary_key=True)
+
+    company_id = Column(
+        Integer,
+        ForeignKey("companies.id"),
+        index=True,
+    )
+
+    # Metric identity
+    metric_id = Column(String, index=True)
+    metric_name = Column(String)  # canonical metric name
+    metric_definition = Column(String, nullable=True)
+
+    # Value
+    metric_value = Column(Float, nullable=True)
+    unit = Column(String, nullable=True)
+    scale = Column(String, nullable=True)
+
+    # Currency
+    currency_code = Column(String, nullable=True)
+    currency_role = Column(String, nullable=True)
+    fx_rate = Column(Float, nullable=True)
+    fx_source = Column(String, nullable=True)
+    fx_timestamp = Column(DateTime, nullable=True)
+
+    # Period
+    period_start = Column(Date, nullable=True)
+    period_end = Column(Date, nullable=True)
+    fiscal_period = Column(String, nullable=True)
+
+    # Accounting context
+    accounting_basis = Column(String, nullable=True)
+    scope = Column(String, nullable=True)
+
+    # Source
+    source = Column(String, nullable=True)
+    source_tier = Column(Integer, nullable=True)
+    source_type = Column(String, nullable=True)
+    source_url = Column(Text, nullable=True)
+
+    # Filing context
+    filing_type = Column(String, nullable=True)
+    accession_number = Column(String, nullable=True)
+    amendment_relationship = Column(String, nullable=True)
+    taxonomy = Column(String, nullable=True)  # e.g. us-gaap, ifrs-full (additive)
+
+    # Evidence integrity
+    evidence_hash = Column(String, unique=True, index=True)
+    evidence_text_anchor = Column(Text, nullable=True)
+    confidence_score = Column(Float, nullable=True)
+    verification_status = Column(String, default=VERIFICATION_PENDING)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    company = relationship(
+        "Company",
+        backref="extracted_facts",
     )
 
 

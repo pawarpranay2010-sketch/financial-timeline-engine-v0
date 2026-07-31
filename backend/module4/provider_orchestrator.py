@@ -44,13 +44,14 @@ from backend.module4.retry_policy import execute_with_retry
 from backend.module4.db_cache import DBCache
 from backend.module4.database_manager import DatabaseManager
 from backend.module4.logger import logger
+from backend.module4.redis_cache import RedisCache
 
 
 # ---------------------------------------------------------------------------
 # Default provider priority for API calls (spec: official sources first)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_API_PRIORITY: List[str] = ["nse", "bse", "sebi", "fmp"]
+_DEFAULT_API_PRIORITY: List[str] = ["finnhub", "alpha_vantage", "yfinance", "nse", "bse", "sebi", "fmp"]
 
 # Substrings that identify an authentication failure → trigger key rotation
 _AUTH_FRAGMENTS = [
@@ -83,12 +84,79 @@ class ProviderOrchestrator:
         self.keys   = KeyManager()
         self.keys.load_from_env()
 
+        # Ensure default providers are registered
+        from backend.module4.provider_manager import initialize_default_providers
+        initialize_default_providers()
+
         # Dedicated read-only DB session for cache checks.
         # Separate from the DatabaseManager used by IngestionService.
         self._db    = DatabaseManager()
         self.cache  = DBCache(self._db)
+        self.redis  = RedisCache()
 
         logger.info("[Orchestrator] Provider Orchestrator initialized")
+
+    # ------------------------------------------------------------------
+    # Internal: multi-layer cache check (Redis → PostgreSQL → provider)
+    # ------------------------------------------------------------------
+
+    def _check_caches(self, data_type: str, ticker: str) -> Any:
+        """
+        Check Redis first, then PostgreSQL DBCache. Returns cached data
+        or None if both miss.
+        """
+        # Layer 1: Redis
+        cache_methods = {
+            "company_profile": "get_profile",
+            "financials":      "get_financials",
+            "market_price":    "get_price",
+            "news":            "get_news",
+            "filings":         "get_filings",
+        }
+        method_name = cache_methods.get(data_type)
+        if method_name:
+            redis_method = getattr(self.redis, method_name, None)
+            if redis_method:
+                result = redis_method(ticker)
+                if result is not None:
+                    return result
+
+        # Layer 2: PostgreSQL DBCache
+        db_methods = {
+            "company_profile": self.cache.get_fresh_profile,
+            "financials":      self.cache.get_fresh_financials,
+            "market_price":    self.cache.get_fresh_price,
+            "news":            self.cache.get_fresh_news,
+        }
+        db_method = db_methods.get(data_type)
+        if db_method:
+            result = db_method(ticker)
+            if result is not None:
+                return result
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Internal: write to caches after successful provider fetch
+    # ------------------------------------------------------------------
+
+    def _write_caches(self, data_type: str, ticker: str, data: Any) -> None:
+        """Write data to Redis cache (PostgreSQL is handled by IngestionService)."""
+        if data is None:
+            return
+        set_methods = {
+            "company_profile": self.redis.set_profile,
+            "financials":      self.redis.set_financials,
+            "market_price":    self.redis.set_price,
+            "news":            self.redis.set_news,
+            "filings":         self.redis.set_filings,
+        }
+        method = set_methods.get(data_type)
+        if method:
+            try:
+                method(ticker, data)
+            except Exception as exc:
+                logger.warning(f"[Orchestrator] Redis write failed for {data_type}/{ticker}: {exc}")
 
     # ------------------------------------------------------------------
     # Internal: single-provider attempt (retry + key rotation)
@@ -281,6 +349,37 @@ class ProviderOrchestrator:
     # Public fetch API
     # ------------------------------------------------------------------
 
+    def _with_cache(
+        self,
+        data_type: str,
+        method_name: str,
+        ticker: str,
+        providers: Optional[List[str]] = None,
+    ) -> Any:
+        """
+        Unified fetch pattern:
+          1. Check Redis cache
+          2. Check PostgreSQL DBCache
+          3. Fall through to provider failover
+          4. Write result to Redis cache
+          5. Return result
+        """
+        # Layers 1 & 2: Redis → PostgreSQL
+        cached = self._check_caches(data_type, ticker)
+        if cached is not None:
+            return cached
+
+        # Layer 3: Provider failover
+        result = self._fetch_with_failover(
+            data_type, method_name, ticker,
+            providers or _DEFAULT_API_PRIORITY,
+        )
+
+        # Layer 4: Write to Redis cache
+        self._write_caches(data_type, ticker, result)
+
+        return result
+
     def fetch_company_profile(
         self,
         ticker: str,
@@ -288,14 +387,10 @@ class ProviderOrchestrator:
     ) -> Dict:
         """
         Return company profile.
-        Cache window: 7 days. Falls back through providers on miss.
+        Cache chain: Redis (24h) → PostgreSQL (7d) → provider failover.
         """
-        cached = self.cache.get_fresh_profile(ticker)
-        if cached is not None:
-            return cached
-        return self._fetch_with_failover(
-            "company_profile", "fetch_company_profile", ticker,
-            providers or _DEFAULT_API_PRIORITY,
+        return self._with_cache(
+            "company_profile", "fetch_company_profile", ticker, providers
         )
 
     def fetch_financials(
@@ -305,14 +400,10 @@ class ProviderOrchestrator:
     ) -> Any:
         """
         Return financial statements.
-        Cache window: 24 hours. Falls back through providers on miss.
+        Cache chain: Redis (24h) → PostgreSQL (24h) → provider failover.
         """
-        cached = self.cache.get_fresh_financials(ticker)
-        if cached is not None:
-            return cached
-        return self._fetch_with_failover(
-            "financials", "fetch_financials", ticker,
-            providers or _DEFAULT_API_PRIORITY,
+        return self._with_cache(
+            "financials", "fetch_financials", ticker, providers
         )
 
     def fetch_market_price(
@@ -322,14 +413,10 @@ class ProviderOrchestrator:
     ) -> Dict:
         """
         Return market price.
-        Cache window: 5 minutes. Falls back through providers on miss.
+        Cache chain: Redis (5min) → PostgreSQL (5min) → provider failover.
         """
-        cached = self.cache.get_fresh_price(ticker)
-        if cached is not None:
-            return cached
-        return self._fetch_with_failover(
-            "market_price", "fetch_market_price", ticker,
-            providers or _DEFAULT_API_PRIORITY,
+        return self._with_cache(
+            "market_price", "fetch_market_price", ticker, providers
         )
 
     def fetch_news(
@@ -339,14 +426,10 @@ class ProviderOrchestrator:
     ) -> List[Dict]:
         """
         Return news articles.
-        Cache window: 15 minutes. Falls back through providers on miss.
+        Cache chain: Redis (30min) → PostgreSQL (15min) → provider failover.
         """
-        cached = self.cache.get_fresh_news(ticker)
-        if cached is not None:
-            return cached
-        return self._fetch_with_failover(
-            "news", "fetch_news", ticker,
-            providers or _DEFAULT_API_PRIORITY,
+        return self._with_cache(
+            "news", "fetch_news", ticker, providers
         )
 
     def fetch_filings(
@@ -356,12 +439,10 @@ class ProviderOrchestrator:
     ) -> List[Dict]:
         """
         Return regulatory filings.
-        No DB cache layer (filings are written once and don't expire).
-        Falls back through providers in priority order.
+        Cache chain: Redis (24h) → provider failover (no DB cache for filings).
         """
-        return self._fetch_with_failover(
-            "filings", "fetch_filings", ticker,
-            providers or _DEFAULT_API_PRIORITY,
+        return self._with_cache(
+            "filings", "fetch_filings", ticker, providers
         )
 
     # ------------------------------------------------------------------

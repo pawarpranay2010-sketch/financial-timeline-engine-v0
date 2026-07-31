@@ -5,11 +5,18 @@ Module 2 - Intelligent Document Chunking
 
 from __future__ import annotations
 
+import re
 from typing import List
 
 
 DEFAULT_CHUNK_SIZE = 10000
 DEFAULT_OVERLAP = 500
+
+# Marker-delimited table block produced by ingestion.parser
+_TABLE_BLOCK_RE = re.compile(
+    r"(=== TABLE .*? ===\n.*?=== END TABLE ===)",
+    re.DOTALL,
+)
 
 
 def chunk_text(
@@ -42,6 +49,45 @@ def chunk_text(
         start = end - overlap
 
     return chunks
+
+
+def chunk_document(
+    parsed: dict,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    overlap: int = DEFAULT_OVERLAP,
+) -> List[str]:
+    """
+    Chunk a parsed document while preserving table boundaries.
+
+    Table blocks (marked `=== TABLE ... === ... === END TABLE ===`) are
+    treated as atomic units and are NEVER split mid-table. Narrative text
+    continues to use normal character-based chunking.
+
+    Documents without marked tables fall back to chunk_text() unchanged.
+    """
+
+    text = parsed.get("text", "") or ""
+
+    if "=== TABLE" not in text:
+        return chunk_text(text, chunk_size=chunk_size, overlap=overlap)
+
+    parts = _TABLE_BLOCK_RE.split(text)
+
+    chunks: List[str] = []
+
+    for part in parts:
+
+        if not part:
+            continue
+
+        if part.startswith("=== TABLE"):
+            chunks.append(part)
+        else:
+            chunks.extend(
+                chunk_text(part, chunk_size=chunk_size, overlap=overlap)
+            )
+
+    return [c for c in chunks if c.strip()]
 
 
 def estimate_tokens(text: str) -> int:

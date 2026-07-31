@@ -18,21 +18,31 @@ class FMPAdapter(ProviderAdapter):
 
     def __init__(self, api_key=None):
         # Secrets Compatibility: Support both Streamlit Cloud secrets and local environment variables
+        # Priority: constructor param → Streamlit secrets → environment variable
         self.api_key = api_key
+        key_source = "constructor"
+
         if not self.api_key:
             try:
                 import streamlit as st
                 if hasattr(st, "secrets") and "FMP_API_KEY" in st.secrets:
                     self.api_key = st.secrets["FMP_API_KEY"]
-            except ImportError:
+                    key_source = "st.secrets"
+            except Exception:
                 pass
 
         if not self.api_key:
             self.api_key = os.getenv("FMP_API_KEY")
+            if self.api_key:
+                key_source = "os.environ"
 
         if not self.api_key:
             logger.error("FMP_API_KEY environment variable or Streamlit secret is missing.")
             raise ValueError("FMP_API_KEY must be provided, set in os.getenv, or configured in st.secrets.")
+
+        # Log masked key and source (safe for production logs)
+        masked = f"{self.api_key[:4]}***{self.api_key[-4:]}" if len(self.api_key) >= 8 else "***"
+        logger.info(f"[FMPAdapter] API key loaded from {key_source}: {masked}")
 
         # Base URL: Set clean endpoint target structure
         self.base_url = "https://financialmodelingprep.com/api/v3"
@@ -72,10 +82,10 @@ class FMPAdapter(ProviderAdapter):
             data = response.json()
             # Detect FMP API error payloads
             if isinstance(data, dict):
-    if data.get("Error Message") or data.get("error"):
-        raise RuntimeError(
-            data.get("Error Message") or data.get("error")
-        )
+                if data.get("Error Message") or data.get("error"):
+                    raise RuntimeError(
+                        data.get("Error Message") or data.get("error")
+                    )
             if data is None:
                 raise RuntimeError("Empty JSON returned by FMP.")
             return data

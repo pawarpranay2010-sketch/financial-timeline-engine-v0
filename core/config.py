@@ -107,25 +107,53 @@ class EngineSettings:
     google_model: str = "gemini-2.5-flash"
     openrouter_models: tuple = field(default=None)  # set in __post_init__
     groq_models: tuple = (
-        "openai/gpt-oss-20b",
-        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+    )
+
+    # --- AI Executive: provider key names --------------------------------
+    provider_key_names: dict = field(default_factory=lambda: {
+        "google": "GOOGLE_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "nvidia": "NVIDIA_API_KEY",
+        "rapidapi": "RAPIDAPI_KEY",
+        "sambanova": "SAMBANOVA_API_KEY",
+        "github": "GITHUB_TOKEN",
+        "cerebras": "CEREBRAS_API_KEY",
+        "cohere": "COHERE_API_KEY",
+    })
+
+    # --- AI Executive: provider priority order --------------------------
+    provider_priority: tuple = (
+        "google", "groq", "openrouter", "nvidia", "rapidapi",
+        "sambanova", "github", "cerebras", "cohere",
     )
 
     # --- AI Gateway: timeouts & retry -----------------------------------
     groq_timeout_seconds: int = 30
     openrouter_timeout_seconds: int = 45
+    nvidia_timeout_seconds: int = 60
+    sambanova_timeout_seconds: int = 60
+    github_timeout_seconds: int = 60
+    cerebras_timeout_seconds: int = 30
+    cohere_timeout_seconds: int = 30
     provider_retry_attempts: int = 2
     provider_retry_delay_seconds: float = 1.5
 
     # --- AI Gateway: circuit breaker -------------------------------------
-    circuit_breaker_failure_threshold: int = 3
+    circuit_breaker_failure_threshold: int = 5
     circuit_breaker_cooldown_seconds: float = 60.0
 
     # --- Document processing: chunking & hierarchical merge -------------
     chunk_size: int = 10000
     chunk_overlap: int = 500
     merge_batch_size: int = 8  # max summaries merged per AI call; recurses above this
+
+    # --- AI Executive: Redis quota -------------------------------------
+    redis_quota_ttl_seconds: int = 60
+    circuit_open_error_threshold: int = 5
 
     # --- Live market intelligence (Phase 6 scaffold) --------------------
     live_intelligence_api_key_name: str = "MARKET_INTEL_API_KEY"

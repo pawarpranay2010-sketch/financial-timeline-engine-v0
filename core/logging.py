@@ -152,6 +152,7 @@ provider_logger = ProviderEventLogger()
 def get_provider_health() -> dict:
     """Which AI providers currently have a configured API key.
 
+    Covers all providers from the AI Executive gateway (9 total).
     Uses `core.config.get_secret`, so this works whether the key is set in
     Streamlit secrets (today) or an environment variable (future
     backend/tests), without this function needing to change.
@@ -160,4 +161,10 @@ def get_provider_health() -> dict:
         "Google AI Studio": bool(get_secret("GOOGLE_API_KEY", "")),
         "Groq": bool(get_secret("GROQ_API_KEY", "")),
         "OpenRouter": bool(get_secret("OPENROUTER_API_KEY", "")),
+        "NVIDIA": bool(get_secret("NVIDIA_API_KEY", "")),
+        "RapidAPI": bool(get_secret("RAPIDAPI_KEY", "")),
+        "SambaNova": bool(get_secret("SAMBANOVA_API_KEY", "")),
+        "GitHub Models": bool(get_secret("GITHUB_TOKEN", "")),
+        "Cerebras": bool(get_secret("CEREBRAS_API_KEY", "")),
+        "Cohere": bool(get_secret("COHERE_API_KEY", "")),
     }

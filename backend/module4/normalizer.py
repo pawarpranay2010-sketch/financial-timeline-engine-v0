@@ -24,9 +24,14 @@ from typing import Dict, Any
 
 class MetricDictionary:
     """
-    Canonical financial metric mapping.
+    Canonical financial metric mapping with semantic identity.
 
     Expand this dictionary over time.
+
+    Now supports:
+    - Basic alias resolution (backward compatible)
+    - Semantic definition preservation (GAAP vs non-GAAP vs adjusted)
+    - Metric definition qualifiers for semantic identity comparisons
     """
 
     METRIC_ALIASES = {
@@ -68,6 +73,42 @@ class MetricDictionary:
         "operating cash flow": "OperatingCashFlow",
     }
 
+    # ------------------------------------------------------------------
+    # Semantic Definition Qualifiers
+    # ------------------------------------------------------------------
+    #
+    # These qualifiers are DETECTED in the raw metric name and preserved
+    # alongside the canonical name so the system can distinguish
+    # semantically different definitions of the same metric.
+    #
+    # Example:
+    #   "GAAP Revenue"       → canonical="Revenue", definition="GAAP"
+    #   "non-GAAP Revenue"   → canonical="Revenue", definition="non-GAAP"
+    #   "Gross Revenue"      → canonical="Revenue", definition="gross"
+    #   "Net Revenue"        → canonical="Revenue", definition="net"
+    #   "Adjusted Revenue"   → canonical="Revenue", definition="adjusted"
+
+    DEFINITION_QUALIFIERS = {
+        "gaap": "GAAP",
+        "non-gaap": "non-GAAP",
+        "adjusted": "adjusted",
+        "unadjusted": "unadjusted",
+        "gross": "gross",
+        "net": "net",
+        "operating": "operating",
+        "pro forma": "pro_forma",
+        "normalized": "normalized",
+        "underlying": "underlying",
+        "recurring": "recurring",
+        "core": "core",
+        "headline": "headline",
+        "reported": "reported",
+        "statutory": "statutory",
+        "ifrs": "IFRS",
+        "us gaap": "GAAP",
+        "ind as": "Ind_AS",
+    }
+
     @classmethod
     def resolve(cls, raw_metric: str):
 
@@ -78,6 +119,87 @@ class MetricDictionary:
 
         return cls.METRIC_ALIASES.get(key)
 
+    @classmethod
+    def resolve_with_definition(cls, raw_metric: str) -> tuple:
+        """
+        Resolve a metric name to (canonical_name, definition_qualifier).
+
+        Recursively strips ALL detected definition qualifiers from the
+        metric name, then resolves the remaining base metric name.
+
+        Returns:
+            tuple of (canonical_name: str, definition: str)
+            definition is empty string if no qualifier detected.
+
+        Examples:
+            "GAAP Revenue"                → ("Revenue", "GAAP")
+            "non-GAAP Revenue"            → ("Revenue", "non-GAAP")
+            "non-GAAP Adjusted Revenue"   → ("Revenue", "non-GAAP")
+            "Adjusted EBITDA"             → ("EBITDA", "adjusted")
+            "Revenue"                     → ("Revenue", "")
+        """
+        if raw_metric is None:
+            return (None, "")
+
+        # Sort qualifiers by length (longest first) for greedy matching
+        sorted_keywords = sorted(
+            cls.DEFINITION_QUALIFIERS.items(),
+            key=lambda x: -len(x[0]),
+        )
+
+        found_definition = ""
+        stripped = raw_metric.strip()
+
+        # Loop: keep stripping qualifiers until no more are found
+        # This handles cases like "non-GAAP Adjusted Revenue" where
+        # both "non-GAAP" and "Adjusted" are qualifiers.
+        changed = True
+        while changed:
+            changed = False
+            current_lower = stripped.lower()
+            for keyword, def_name in sorted_keywords:
+                if keyword in current_lower:
+                    if not found_definition:
+                        found_definition = def_name
+                    # Strip this qualifier from the metric name
+                    start = current_lower.find(keyword)
+                    end = start + len(keyword)
+                    stripped = stripped[:start] + stripped[end:]
+                    stripped = stripped.strip().strip("-").strip()
+                    changed = True
+                    break  # restart loop to check for remaining qualifiers
+
+        # Resolve the fully stripped metric name
+        canonical = cls.resolve(stripped) or stripped
+        return (canonical, found_definition)
+
+    @classmethod
+    def definitions_match(cls, def_a: str, def_b: str) -> bool:
+        """
+        Check if two metric definitions are semantically compatible.
+
+        Returns True if:
+        - Both are empty (no definition detected)
+        - Both are the same definition
+        - One is empty and the other is a common default (e.g., 'reported')
+
+        Returns False if they are explicitly different definitions
+        (e.g., 'GAAP' vs 'non-GAAP').
+        """
+        a = def_a.lower().strip() if def_a else ""
+        b = def_b.lower().strip() if def_b else ""
+
+        if not a and not b:
+            return True
+        if not a or not b:
+            # One is empty, other is not — assume compatible unless
+            # the explicit one is a specific accounting basis
+            explicit = a or b
+            if explicit in ("gaap", "ifrs", "ind_as", "statutory"):
+                return False
+            return True
+        return a == b
+
 
 class Normalizer:
 
@@ -87,7 +209,7 @@ class Normalizer:
 
             "company_id": raw.get("company_id"),
 
-            "ticker": raw.get("ticker"),
+            "ticker": raw.get("ticker") or raw.get("symbol"),
 
             "company_name": raw.get("company_name"),
 
@@ -165,13 +287,13 @@ class Normalizer:
 
             "company_id": raw.get("company_id"),
 
-            "headline": raw.get("headline"),
+            "headline": raw.get("headline") or raw.get("title"),
 
-            "url": raw.get("url"),
+            "url": raw.get("url") or raw.get("link"),
 
-            "source": raw.get("source"),
+            "source": raw.get("source") or raw.get("site") or raw.get("publisher"),
 
-            "published_at": raw.get("published_at")
+            "published_at": raw.get("published_at") or raw.get("published_date")
 
         }
 

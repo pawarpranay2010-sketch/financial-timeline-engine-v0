@@ -2,12 +2,15 @@ import logging
 from typing import Dict, List, Any
 
 # Imported from central base; no duplicated definitions
-from providers.base import ProviderAdapter
+from backend.module4.provider.base import ProviderAdapter
 
-from providers.nse_adapter import NSEAdapter
-from providers.bse_adapter import BSEAdapter
-from providers.sebi_adapter import SEBIAdapter
-from providers.fmp_adapter import FMPAdapter
+from backend.module4.provider.nse_adapter import NSEAdapter
+from backend.module4.provider.bse_adapter import BSEAdapter
+from backend.module4.provider.sebi_adapter import SEBIAdapter
+from backend.module4.provider.fmp_adapter import FMPAdapter
+from backend.module4.provider.yfinance_adapter import YFinanceAdapter
+from backend.module4.provider.finnhub_adapter import FinnhubAdapter
+from backend.module4.provider.alpha_vantage_adapter import AlphaVantageAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +117,10 @@ def initialize_default_providers():
         "nse": NSEAdapter,
         "bse": BSEAdapter,
         "sebi": SEBIAdapter,
+        "yfinance": YFinanceAdapter,
         "fmp": FMPAdapter,
+        "finnhub": FinnhubAdapter,
+        "alpha_vantage": AlphaVantageAdapter,
     }
 
     for name, adapter_class in providers_map.items():

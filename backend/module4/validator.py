@@ -49,7 +49,6 @@ class ValidationResult:
 class Validator:
 
     REQUIRED_COMPANY_FIELDS = [
-        "company_id",
         "ticker",
         "company_name",
         "exchange"
@@ -68,6 +67,10 @@ class Validator:
         result = ValidationResult()
 
         for field in self.REQUIRED_COMPANY_FIELDS:
+
+            # Accept both 'ticker' and 'symbol' as the identifier
+            if field == "ticker" and "ticker" not in data and "symbol" in data:
+                continue
 
             if field not in data:
 

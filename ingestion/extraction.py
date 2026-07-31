@@ -13,11 +13,45 @@ from __future__ import annotations
 
 from ingestion.parser import parse_document
 from ingestion.chunking import (
+    chunk_document,
     chunk_text,
     chunk_statistics,
     needs_chunking,
 )
 from ingestion.cache import document_cache
+from backend.extraction2.financial_extractor_v2 import FinancialExtractorV2
+
+
+# ---------------------------------------------------------------------------
+# Extraction 2.0 wiring (additive)
+# ---------------------------------------------------------------------------
+
+_financial_extractor_v2 = FinancialExtractorV2()
+
+
+def extract_financial_facts(parsed):
+    """
+    Run FinancialExtractorV2 over a parsed document.
+
+    Structured-first: XBRL -> tables -> contextual text -> guarded regex.
+    Never raises: any extraction failure returns an empty fact set so the
+    existing ingestion pipeline is never blocked by the extraction layer.
+    """
+    try:
+        return _financial_extractor_v2.extract_document(parsed)
+    except Exception:
+        return {
+            "facts": [],
+            "stats": {
+                "facts_total": 0,
+                "facts_unique": 0,
+                "duplicates_suppressed": 0,
+                "tables_detected": 0,
+                "extraction_time_ms": 0.0,
+                "document_type": parsed.get("type", ""),
+                "error": True,
+            },
+        }
 
 
 def extract_document(uploaded_file):
@@ -42,17 +76,19 @@ def extract_document(uploaded_file):
 
         cached = document_cache.get(fingerprint)
 
+        parsed = cached["data"]
+
+        chunks = chunk_document(parsed)
+
+        facts_result = extract_financial_facts(parsed)
+
         return {
             "cached": True,
-            "parsed_document": cached["data"],
-            "chunks": chunk_text(
-                cached["data"]["text"]
-            ),
-            "statistics": chunk_statistics(
-                chunk_text(
-                    cached["data"]["text"]
-                )
-            ),
+            "parsed_document": parsed,
+            "chunks": chunks,
+            "statistics": chunk_statistics(chunks),
+            "financial_facts": facts_result["facts"],
+            "extraction_stats": facts_result["stats"],
         }
 
     # -------------------------
@@ -62,12 +98,12 @@ def extract_document(uploaded_file):
     parsed = parse_document(uploaded_file)
 
     # -------------------------
-    # Chunk
+    # Chunk (table-boundary preserving)
     # -------------------------
 
     if needs_chunking(parsed["text"]):
 
-        chunks = chunk_text(parsed["text"])
+        chunks = chunk_document(parsed)
 
     else:
 
@@ -97,11 +133,15 @@ def extract_document(uploaded_file):
         parsed,
     )
 
+    facts_result = extract_financial_facts(parsed)
+
     return {
         "cached": False,
         "parsed_document": parsed,
         "chunks": chunks,
         "statistics": stats,
+        "financial_facts": facts_result["facts"],
+        "extraction_stats": facts_result["stats"],
     }
 
 

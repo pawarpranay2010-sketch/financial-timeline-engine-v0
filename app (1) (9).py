@@ -45,6 +45,12 @@ from core import (
     extract_json,
     contains_error_marker,
 )
+
+# AI Executive Gateway -- replaces the hard-coded provider chain with
+# workload-aware routing, deterministic failover, and Redis quota tracking.
+# Initialised lazily so the app still starts if the gateway module has an
+# import-time issue (unlikely, but keeps startup robust).
+_ai_executive = None
 from ingestion import (
     extract_multiple,
     merge_document_text,
@@ -278,13 +284,92 @@ def call_openrouter_engine(prompt_text, system_prompt=None, temperature=None):
     return result
 
 
+def _get_ai_executive():
+    """Lazy singleton: initialises the AI Executive gateway on first use.
+    Returns None if the module isn't available (safe fallback to old
+    chain)."""
+    global _ai_executive
+    if _ai_executive is None:
+        try:
+            from backend.gateway import AIExecutive
+            _ai_executive = AIExecutive()
+        except Exception:
+            _ai_executive = None
+    return _ai_executive
+
+
+def _detect_task_type(system_prompt, prompt_text):
+    """Heuristic: guess the workload type from prompt content so the AI
+    Executive router can select the best provider. Returns a task type
+    string compatible with backend.gateway.router.* constants.
+
+    Rules (checked in order):
+    - system_prompt mentions JSON / array / object → "structured"
+    - prompt asks for "investment memo" / "financial" → "financial"
+    - prompt is very short (< 200 chars) → "simple"
+    - otherwise → "financial" (safe default for this application)
+    """
+    combined = ((system_prompt or "") + " " + (prompt_text or "")).lower()
+    json_keywords = ["json", "return only valid json", "return a json", "as json",
+                     "return only a single valid json object", "expected_type"]
+    if any(kw in combined for kw in json_keywords):
+        return "structured"
+    memo_keywords = ["investment memo", "investment research", "analyze the document summary",
+                     "financial analysis", "financial statements", "analyze financial",
+                     "institutional", "key financial events", "market movements",
+                     "rag", "retrieved", "retrieved data", "retrieved documents",
+                     "based on the retrieved", "based only on the following",
+                     "source documents", "provided context"]
+    if any(kw in combined for kw in memo_keywords):
+        return "financial"
+    if len(prompt_text or "") < 200:
+        return "simple"
+    return "financial"
+
+
 def call_ai_with_fallback(prompt_text, system_prompt=None, temperature=None):
-    """Real multi-provider fallback chain: Google AI Studio -> Groq ->
-    OpenRouter, each with a retry-with-backoff before moving to the next
-    provider. Structured logging (see _log_provider_event) replaces the
-    old ad hoc print()/st.warning() debug pattern -- failures are recorded
-    to st.session_state['provider_log'] instead of being shown inline as
-    raw warnings on every call."""
+    """Multi-provider AI call with AI Executive gateway as the primary
+    path, falling back to the original Google -> Groq -> OpenRouter chain
+    if the gateway fails.
+
+    The gateway provides:
+    - Workload-aware routing (financial analysis -> NVIDIA, simple -> Groq)
+    - Deterministic failover across 9 providers
+    - Redis quota/circuit-breaker tracking
+    - Normalized responses
+
+    The original chain is preserved as a safety net in case of gateway
+    module errors or configuration issues.
+    """
+    # ------------------------------------------------------------------
+    # PATH A: AI Executive Gateway (primary)
+    # ------------------------------------------------------------------
+    executive = _get_ai_executive()
+    if executive is not None:
+        try:
+            task_type = _detect_task_type(system_prompt, prompt_text)
+            response = executive.generate(
+                prompt=prompt_text,
+                system_prompt=system_prompt or "",
+                temperature=temperature or 0.3,
+                task_type=task_type,
+            )
+            if response.success:
+                st.session_state["ai_connected"] = True
+                st.session_state["ai_provider_used"] = f"{response.provider}/{response.model}"
+                _log_provider_event("call_ai_with_fallback", response.provider, "success",
+                                    f"task={task_type}, model={response.model}, latency={response.latency_ms}ms")
+                return response.content
+            # Gateway returned an error -- log and fall through
+            _log_provider_event("call_ai_with_fallback", "gateway", "failed",
+                                f"task={task_type}, error={response.error[:100] if response.error else 'unknown'}")
+        except Exception as e:
+            _log_provider_event("call_ai_with_fallback", "gateway", "failed",
+                                f"exception={type(e).__name__}: {str(e)[:100]}")
+
+    # ------------------------------------------------------------------
+    # PATH B: Original fallback chain (preserved for safety)
+    # ------------------------------------------------------------------
     # 1) PRIMARY: Google AI Studio
     try:
         result = _retry(lambda: call_google_ai_studio(prompt_text, system_prompt=system_prompt, temperature=temperature))
