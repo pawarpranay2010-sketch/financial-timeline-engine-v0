@@ -1,3 +1,8 @@
+# Stage 2 web backend
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# Streamlit (legacy frontend — still present)
 streamlit>=1.32
 
 requests>=2.31

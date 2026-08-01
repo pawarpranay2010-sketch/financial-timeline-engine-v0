@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Financial Timeline Engine — Agentic RAG Intelligence Terminal</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark">FTE</span>
+      <div class="brand-text">
+        <strong>Financial Timeline Engine</strong>
+        <span>Agentic RAG Intelligence Terminal</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="health-pill" class="health-pill" title="API health">
+        <span class="dot"></span> checking…
+      </span>
+      <a class="btn btn-ghost" href="#analyze">Analyze</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero -->
+    <section class="hero">
+      <p class="eyebrow">Stage 2 · Standalone Web Backend</p>
+      <h1>Financial intelligence,<br /><em>grounded in evidence.</em></h1>
+      <p class="lede">
+        Ask a financial question about any company. The engine retrieves data from
+        PostgreSQL and live providers, then runs it through a multi-gate validation
+        pipeline — source resolution, currency checks, extraction audits — before
+        presenting a canonical evidence set.
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#analyze">Run an analysis</a>
+        <a class="btn btn-ghost" href="#status">View system status</a>
+      </div>
+      <ul class="pipeline-strip" aria-label="Pipeline">
+        <li>Browser</li><li class="arrow">→</li>
+        <li>FastAPI backend</li><li class="arrow">→</li>
+        <li>Phase 6 intelligence</li><li class="arrow">→</li>
+        <li>PostgreSQL</li><li class="arrow">→</li>
+        <li>AI &amp; financial providers</li>
+      </ul>
+    </section>
+
+    <!-- Analyzer -->
+    <section id="analyze" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Financial analyzer</h2>
+          <p>Goal-driven Agentic RAG over the evidence store.</p>
+        </div>
+      </div>
+      <form id="analyze-form" class="analyze-form" autocomplete="off">
+        <div class="field">
+          <label for="ticker">Ticker</label>
+          <input id="ticker" name="ticker" value="AAPL" required maxlength="20" spellcheck="false" />
+        </div>
+        <div class="field grow">
+          <label for="goal">Analysis goal</label>
+          <input
+            id="goal"
+            name="goal"
+            value="Analyze AAPL's FY2024 revenue and net income"
+            required
+            maxlength="1000"
+            spellcheck="false"
+          />
+        </div>
+        <button type="submit" class="btn btn-primary" id="analyze-btn">Run analysis</button>
+      </form>
+      <div id="analyze-result" class="result" hidden>
+        <div class="result-head">
+          <span class="terminal-state" id="term-state">—</span>
+          <span class="result-meta" id="result-meta"></span>
+        </div>
+        <pre id="summary-text" class="summary"></pre>
+        <div id="facts" class="facts"></div>
+      </div>
+      <div id="analyze-error" class="error-box" hidden></div>
+    </section>
+
+    <!-- Market snapshot -->
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Market snapshot</h2>
+          <p>Live profile, price, financials &amp; news via the provider failover chain.</p>
+        </div>
+        <button id="refresh-market" class="btn btn-ghost btn-sm" type="button">Refresh</button>
+      </div>
+      <form id="market-form" class="inline-form" autocomplete="off">
+        <div class="field">
+          <label for="mkt-ticker">Ticker</label>
+          <input id="mkt-ticker" name="mkt-ticker" value="AAPL" maxlength="20" spellcheck="false" />
+        </div>
+        <button type="submit" class="btn btn-secondary btn-sm">Load</button>
+      </form>
+      <div id="market-result" class="market-grid" hidden></div>
+      <div id="market-error" class="error-box" hidden></div>
+    </section>
+
+    <!-- System status -->
+    <section id="status" class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>System status</h2>
+          <p>Component connectivity — no credentials are ever exposed.</p>
+        </div>
+        <button id="refresh-status" class="btn btn-ghost btn-sm" type="button">Refresh</button>
+      </div>
+      <div id="status-result" class="status-grid"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Financial Timeline Engine — Stage 2</span>
+    <span class="api-ref">API: <code>/api/v1/health</code> · <code>/api/v1/market/{ticker}</code> · <code>/api/v1/intelligence/analyze</code></span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
