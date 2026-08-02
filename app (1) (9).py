@@ -19,6 +19,7 @@ Section map (Phase 12 -- modular organization within a single file):
 import streamlit as st
 import requests
 import io
+import html
 import json
 from datetime import datetime, timezone
 import pandas as pd
@@ -1372,11 +1373,586 @@ def render_terminal_embed() -> None:
 
 
 # =============================================================================
+# SECTION 10c: Institutional Terminal UI (Streamlit-native, Phase 1.6)
+# =============================================================================
+# Single-screen terminal rendered directly with Streamlit primitives
+# (columns / tabs / containers / dataframe selection / chat). ALL figures
+# come from existing backend outputs only — module3 financial_data/ratios,
+# intelligence outputs, provider health, and the chat assistant. Nothing is
+# ever invented: unknown metrics show "—" (Unanalyzed) and provenance shows
+# only fields the pipeline actually provides.
+_TERMINAL_CSS = """
+:root {
+  --fte-bg: #0a0d13;
+  --fte-panel: #0f131b;
+  --fte-border: #222a38;
+  --fte-text: #e6e9ef;
+  --fte-muted: #8b93a3;
+  --fte-ok: #2fbf71;
+  --fte-derived: #d9a13b;
+  --fte-conflict: #4f8ef7;
+  --fte-blocked: #e05252;
+  --fte-unanalyzed: #5a6270;
+  --fade-quick: 100ms;
+  --fade-provenance: 150ms;
+  --hover: 180ms;
+}
+.stApp { background: var(--fte-bg); }
+.fte-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fte-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border: 1px solid var(--fte-border); border-radius: 999px;
+  background: var(--fte-panel); color: var(--fte-text); font-size: 13px;
+  transition: border-color var(--hover) ease;
+}
+.fte-pill:hover { border-color: #33405a; }
+.fte-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.fte-dot.ok { background: var(--fte-ok); box-shadow: 0 0 6px rgba(47,191,113,.5); }
+.fte-dot.warn { background: var(--fte-derived); }
+.fte-dot.off { background: var(--fte-unanalyzed); }
+.fte-rail-title {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fte-muted); margin: 14px 0 6px; font-weight: 600;
+}
+.fte-source { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; padding: 3px 0; }
+.fte-source .nm { color: var(--fte-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fte-source .st { color: var(--fte-muted); flex-shrink: 0; font-size: 12px; }
+.fte-count-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.fte-count-row .k { color: var(--fte-text); }
+.fte-count-row .v { color: var(--fte-muted); }
+.fte-tray {
+  border: 1px solid var(--fte-border); border-radius: 10px;
+  background: var(--fte-panel); padding: 14px 16px; margin-top: 10px;
+  animation: fteFade var(--fade-provenance) ease-out;
+}
+.fte-tray-head { font-weight: 600; color: var(--fte-text); margin-bottom: 8px; font-size: 14px; }
+.fte-metric-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 3px 0; font-size: 13px; }
+.fte-metric-row .k { color: var(--fte-muted); }
+.fte-metric-row .v { color: var(--fte-text); }
+.fte-tray-empty { color: var(--fte-muted); font-size: 13px; }
+.fte-cap { color: var(--fte-muted); font-size: 12px; padding: 2px 0; }
+.fte-ok-c { color: var(--fte-ok); } .fte-derived-c { color: var(--fte-derived); }
+.fte-conflict-c { color: var(--fte-conflict); } .fte-blocked-c { color: var(--fte-blocked); }
+.fte-unanalyzed-c { color: var(--fte-unanalyzed); }
+[data-testid="stDataFrame"] { border: 1px solid var(--fte-border); border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+"""
+
+_TERMINAL_METRICS = [
+    ("Revenue", "Revenue"),
+    ("Net Profit", "Net Income"),
+    ("EBITDA", "EBITDA"),
+    ("Operating Profit", "Operating Income"),
+    ("EPS", "EPS"),
+    ("Debt", "Total Debt"),
+    ("Assets", "Total Assets"),
+    ("Liabilities", "Total Liabilities"),
+    ("Equity", "Shareholders' Equity"),
+    ("Cash Flow", "Operating Cash Flow"),
+    ("Profit Margin", "Profit Margin"),
+    ("ROE", "ROE"),
+    ("ROA", "ROA"),
+    ("Debt to Equity", "Debt / Equity"),
+    ("Current Ratio", "Current Ratio"),
+    ("CAGR", "CAGR"),
+]
+
+
+def _inject_terminal_css() -> None:
+    """Inject the terminal stylesheet once per session."""
+    if st.session_state.get("fte_css_injected"):
+        return
+    st.markdown(f"<style>{_TERMINAL_CSS}</style>", unsafe_allow_html=True)
+    st.session_state["fte_css_injected"] = True
+
+
+def _init_terminal_state() -> None:
+    """Session-state defaults for the terminal (selected metric, results)."""
+    for key, default in [
+        ("fte_selected_metric", None),
+        ("fte_module3_result", {}),
+        ("fte_module3_key", None),
+        ("fte_css_injected", False),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+
+def _fmt_num(v) -> str:
+    """Compact human formatting for grid values (real value, presentation only)."""
+    if v is None:
+        return "—"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if abs(f) >= 1e9:
+        return f"{f / 1e9:,.2f}B"
+    if abs(f) >= 1e6:
+        return f"{f / 1e6:,.2f}M"
+    if abs(f) >= 1e3:
+        return f"{f / 1e3:,.2f}K"
+    if f == int(f):
+        return f"{int(f):,}"
+    return f"{f:,.2f}".rstrip("0").rstrip(".")
+
+
+def _parse_gateway_latency():
+    """Last recorded provider latency from the activity log, if any."""
+    for entry in reversed(st.session_state.get("provider_log", []) or []):
+        detail = entry.get("detail") or ""
+        idx = detail.find("latency=")
+        if idx >= 0:
+            num = ""
+            for ch in detail[idx + len("latency="):]:
+                if ch.isdigit() or ch == ".":
+                    num += ch
+                else:
+                    break
+            if num:
+                try:
+                    return float(num)
+                except ValueError:
+                    pass
+    return None
+
+
+def render_gateway_pill() -> None:
+    """Compact header chrome: '🌐 Gateway · 🟢 Groq · 412ms' with a popover."""
+    status = get_canonical_provider_status()
+    latency = _parse_gateway_latency()
+    active = next((s for s, stt in status.items() if stt == "available"), None)
+    if active is None:
+        active = next((s for s, stt in status.items() if stt == "configured_unavailable"), None)
+    label = (active or "none").replace("_", " ").title()
+    if active and status.get(active) == "available":
+        dot, icon = "ok", "🟢"
+    elif active:
+        dot, icon = "warn", "🟡"
+    else:
+        dot, icon = "off", "⚪"
+    latency_txt = f" · {latency:.0f}ms" if latency else ""
+    with st.popover(f"🌐 Gateway · {icon} {label}{latency_txt}", use_container_width=True):
+        st.caption("Provider status (masked — no secrets shown)")
+        for slug, stt in status.items():
+            icon_s = {"available": "🟢", "configured_unavailable": "🟡", "not_configured": "⚪"}.get(stt, "⚪")
+            st.markdown(f"{icon_s} `{slug}` — {stt.replace('_', ' ')}")
+        if latency:
+            st.caption(f"Last latency: {latency:.0f}ms")
+        st.caption(f"Active provider: {st.session_state.get('ai_provider_used') or '—'}")
+
+
+def _build_terminal_rows(module3_result):
+    """Canonical grid rows from module3 financial_data + ratios ONLY.
+
+    Never invents values: a metric missing from both dicts renders as
+    '—' with ⚪ Unanalyzed status."""
+    financial_data = (module3_result or {}).get("financial_data") or {}
+    ratios = (module3_result or {}).get("ratios") or {}
+    rows = []
+    for key, label in _TERMINAL_METRICS:
+        fact = financial_data.get(key) or ratios.get(key) or {}
+        value = fact.get("value")
+        source = fact.get("source") or ""
+        if value is None:
+            rows.append({
+                "metric": key, "Metric": label, "Value": "—", "Period": "—",
+                "Source": "—", "Status": "⚪ Unanalyzed", "_kind": "unanalyzed",
+            })
+        else:
+            period = fact.get("reporting_period") or fact.get("period") or "—"
+            if source == "Calculated":
+                rows.append({
+                    "metric": key, "Metric": label, "Value": _fmt_num(value),
+                    "Period": period, "Source": "Calculated", "Status": "🟡 Derived", "_kind": "derived",
+                })
+            else:
+                rows.append({
+                    "metric": key, "Metric": label, "Value": _fmt_num(value),
+                    "Period": period, "Source": source or "Document", "Status": "🟢 Verified", "_kind": "verified",
+                })
+    return rows
+
+
+def _run_ingestion(uploaded_files):
+    """Shared ingestion for the terminal (same pipeline as the classic view)."""
+    extraction_results = []
+    combined_raw_text = ""
+    document_summaries = []
+    if uploaded_files:
+        extraction_results = extract_multiple(uploaded_files)
+        combined_raw_text = merge_document_text(extraction_results)
+        for doc in extraction_results:
+            file_name = doc["file_name"]
+            extracted_text = doc["parsed_document"]["text"]
+            cache_key = f"{file_name}:{_hash_text(extracted_text)}"
+            summary_text, _ = _cached_call(
+                "summary_cache", cache_key,
+                lambda et=extracted_text, fn=file_name: summarize_document_with_chunking(et, fn)
+            )
+            document_summaries.append({"file_name": file_name, "summary": summary_text})
+    return extraction_results, combined_raw_text, document_summaries
+
+
+def _terminal_module3(combined_raw_text, extraction_results):
+    """Run Module 3 (cached, same cache key as the classic view)."""
+    if not combined_raw_text:
+        return {}
+    key = _hash_text(combined_raw_text)
+    if st.session_state["fte_module3_key"] == key and st.session_state["fte_module3_result"]:
+        return st.session_state["fte_module3_result"]
+    result, _ = _cached_call(
+        "module3_cache", key,
+        lambda: run_module3(combined_raw_text, extraction_results)
+    )
+    st.session_state["fte_module3_result"] = result or {}
+    st.session_state["fte_module3_key"] = key
+    return result or {}
+
+
+def _count_conflicts(module3_result) -> int:
+    """Conflicts from cross-document verification (real data only; 0 if absent)."""
+    x = (module3_result or {}).get("cross_document_verification")
+    if isinstance(x, list):
+        return sum(1 for item in x if isinstance(item, dict) and item.get("match") is False)
+    return 0
+
+
+def _count_blocked(module3_result) -> int:
+    """Blocked items from the missing-data detector (real data only; 0 if absent)."""
+    md = (module3_result or {}).get("missing_data")
+    if isinstance(md, list):
+        return len(md)
+    if isinstance(md, dict):
+        return sum(1 for v in md.values() if v)
+    return 0
+
+
+def _render_source_rail(uploaded_files, extraction_results, module3_result) -> None:
+    """Left rail: active sources, taxonomy integrity, exceptions."""
+    st.markdown('<div class="fte-rail-title">📁 Active Sources</div>', unsafe_allow_html=True)
+    if not uploaded_files:
+        st.markdown('<div class="fte-cap">No documents uploaded.</div>', unsafe_allow_html=True)
+    else:
+        for i, doc in enumerate(extraction_results or []):
+            name = doc.get("file_name", "Unknown Document")
+            state = "✓ cached" if doc.get("cached") else "✓ parsed"
+            st.markdown(
+                f'<div class="fte-source"><span class="nm">{html.escape(str(name))}</span>'
+                f'<span class="st">{state}</span></div>',
+                unsafe_allow_html=True,
+            )
+        if not extraction_results:
+            for f in uploaded_files:
+                st.markdown(
+                    f'<div class="fte-source"><span class="nm">{html.escape(str(getattr(f, "name", "file")))}</span>'
+                    '<span class="st">queued</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+    rows = _build_terminal_rows(module3_result)
+    verified = sum(1 for r in rows if r["_kind"] == "verified")
+    derived = sum(1 for r in rows if r["_kind"] == "derived")
+    unanalyzed = sum(1 for r in rows if r["_kind"] == "unanalyzed")
+
+    st.markdown('<div class="fte-rail-title">🧭 Taxonomy Integrity</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-count-row"><span class="k fte-ok-c">🟢 Verified</span><span class="v">{verified}</span></div>'
+        f'<div class="fte-count-row"><span class="k fte-derived-c">🟡 Derived</span><span class="v">{derived}</span></div>'
+        f'<div class="fte-count-row"><span class="k fte-unanalyzed-c">⚪ Unanalyzed</span><span class="v">{unanalyzed}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    conflicts = _count_conflicts(module3_result)
+    blocked = _count_blocked(module3_result)
+    st.markdown('<div class="fte-rail-title">🚨 Exceptions</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-count-row"><span class="k fte-conflict-c">🔵 Conflicts</span><span class="v">{conflicts}</span></div>'
+        f'<div class="fte-count-row"><span class="k fte-blocked-c">🔴 Blocked</span><span class="v">{blocked}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_financial_grid(module3_result) -> None:
+    """Center grid: stable metric table with single-row selection."""
+    st.markdown('<div class="fte-rail-title">Financial Grid</div>', unsafe_allow_html=True)
+    rows = _build_terminal_rows(module3_result)
+    st.session_state["fte_grid_rows"] = rows
+
+    df = pd.DataFrame(
+        [{"Metric": r["Metric"], "Value": r["Value"], "Period": r["Period"],
+          "Source": r["Source"], "Status": r["Status"]} for r in rows]
+    )
+    if df.empty:
+        st.caption("Upload a financial document and run the intelligence pipeline to populate the grid.")
+        return
+
+    event = st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        key="fte_grid_table",
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Metric": st.column_config.TextColumn("Metric"),
+            "Value": st.column_config.TextColumn("Value", width="small", alignment="right"),
+            "Period": st.column_config.TextColumn("Period", width="small", alignment="center"),
+            "Source": st.column_config.TextColumn("Source", width="medium"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+        },
+    )
+    try:
+        sel = st.session_state.get("fte_grid_table")
+        sel_rows = sel.selection.rows if sel is not None else ()
+    except Exception:
+        sel_rows = ()
+    if sel_rows:
+        st.session_state["fte_selected_metric"] = rows[int(sel_rows[0])]["metric"]
+
+
+def _provenance_tray_html(rows, module3_result, metric) -> str:
+    """Provenance tray content — only fields the pipeline provides; '—' otherwise."""
+    selected = next((r for r in rows if r["metric"] == metric), None)
+    if selected is None:
+        return '<div class="fte-tray"><div class="fte-tray-empty">Select a metric in the grid to inspect its provenance.</div></div>'
+    fact = {}
+    fd = (module3_result or {}).get("financial_data") or {}
+    rt = (module3_result or {}).get("ratios") or {}
+    fact = fd.get(selected["metric"]) or rt.get(selected["metric"]) or {}
+
+    def g(*keys, default="—"):
+        for k in keys:
+            v = fact.get(k)
+            if v not in (None, ""):
+                return str(v)
+        return default
+
+    location = g("page", "table_id", "chunk_id", "anchor")
+    evidence = g("anchor", "evidence", "context")
+    item_rows = [
+        ("Metric", selected["Metric"]),
+        ("Value", selected["Value"]),
+        ("Origin", "Document extraction" if selected["_kind"] == "verified" else "Calculated ratio"),
+        ("Period", selected["Period"]),
+        ("Source", selected["Source"]),
+        ("Location", location),
+        ("Currency", g("unit", "currency")),
+        ("Scale", g("scale")),
+        ("Evidence", evidence),
+    ]
+    body = "".join(
+        f'<div class="fte-metric-row"><div class="k">{html.escape(str(k))}</div><div class="v">{html.escape(str(v))}</div></div>'
+        for k, v in item_rows
+    )
+    return f'<div class="fte-tray"><div class="fte-tray-head">{html.escape(str(selected["Metric"]))} · {html.escape(str(selected["Status"]))}</div>{body}</div>'
+
+
+def _render_provenance_tray(module3_result) -> None:
+    """Anchored provenance tray below the grid (persistent lower section)."""
+    rows = st.session_state.get("fte_grid_rows") or []
+    metric = st.session_state.get("fte_selected_metric")
+    st.markdown(_provenance_tray_html(rows, module3_result, metric), unsafe_allow_html=True)
+
+
+def _render_intelligence_tab(module3_result, intelligence_outputs) -> None:
+    """Intelligence tab: module3 sections + AI intelligence outputs (existing renderers)."""
+    st.markdown('<div class="fte-rail-title">Module 3 — Deterministic Intelligence</div>', unsafe_allow_html=True)
+    with st.expander("📊 Financial Data", expanded=False):
+        _render_module3_value((module3_result or {}).get("financial_data"))
+    with st.expander("📐 Ratios", expanded=False):
+        _render_module3_value((module3_result or {}).get("ratios"))
+    with st.expander("🧾 Verification (OCR / Cross-document)", expanded=False):
+        _render_module3_value((module3_result or {}).get("ocr_verification"))
+        _render_module3_value((module3_result or {}).get("cross_document_verification"))
+    with st.expander("🎯 Confidence", expanded=False):
+        _render_module3_value((module3_result or {}).get("confidence"))
+    with st.expander("📅 Events / Timeline", expanded=False):
+        _render_module3_value((module3_result or {}).get("events"))
+        _render_module3_value((module3_result or {}).get("timeline"))
+    with st.expander("🗜️ Optimized Context (sent to AI)", expanded=False):
+        _render_module3_value((module3_result or {}).get("optimized_context"))
+
+    st.markdown('<div class="fte-rail-title">AI Intelligence Sections</div>', unsafe_allow_html=True)
+    if intelligence_outputs:
+        for module_key in INTELLIGENCE_MODULES:
+            render_intelligence_output(module_key, intelligence_outputs.get(module_key))
+    else:
+        st.caption("Run the full analysis pipeline (Classic Dashboard → Generate Timeline Report) to populate AI sections.")
+
+
+def _render_system_tab() -> None:
+    """System tab: provider health, roadmap, diagnostics (technical detail lives here)."""
+    st.markdown('<div class="fte-rail-title">🌐 Gateway</div>', unsafe_allow_html=True)
+    status = get_canonical_provider_status()
+    if status:
+        for slug, stt in status.items():
+            icon_s = {"available": "🟢", "configured_unavailable": "🟡", "not_configured": "⚪"}.get(stt, "⚪")
+            st.markdown(f"{icon_s} `{slug}` — {stt.replace('_', ' ')}")
+    else:
+        st.caption("Gateway unavailable.")
+
+    st.markdown('<div class="fte-rail-title">🔮 Roadmap</div>', unsafe_allow_html=True)
+    try:
+        roadmap = get_future_module_status()
+        st.dataframe(
+            pd.DataFrame([{"Module": v["name"], "Status": v["status"].title()} for v in roadmap.values()]),
+            use_container_width=True, hide_index=True,
+        )
+    except Exception:
+        st.caption("Roadmap unavailable.")
+
+    st.markdown('<div class="fte-rail-title">🧾 Ingestion Statistics</div>', unsafe_allow_html=True)
+    stats = st.session_state.get("ingestion_stats")
+    if stats:
+        st.caption(str(stats))
+    else:
+        st.caption("Upload a document to see ingestion statistics.")
+
+    st.markdown('<div class="fte-rail-title">🔍 Pipeline Debug Trace</div>', unsafe_allow_html=True)
+    debug_entries = st.session_state.get("pipeline_debug_log", [])
+    if debug_entries:
+        st.dataframe(
+            pd.DataFrame([
+                {"Stage": e["stage"], "Length": e["length"],
+                 "Error Marker?": "⚠️" if e.get("error_marker_detected") else ""}
+                for e in debug_entries
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("No pipeline stages recorded for this run.")
+
+
+def _copilot_structure(metadata) -> list:
+    """Structured sections from the last assistant metadata (real fields only)."""
+    intent = (metadata or {}).get("intent", "")
+    evidence = (metadata or {}).get("evidence") or []
+    calc = (metadata or {}).get("calculation")
+    blocked_intents = (
+        "blocked", "calculation_miss", "document_miss", "company_blocked",
+        "company_empty", "company_error", "no_provider", "provider_error",
+    )
+    parts = []
+    if intent in blocked_intents:
+        parts.append("🚫 BLOCKED / NOT VERIFIED")
+    if evidence:
+        parts.append(f"🟢 {len(evidence)} verified fact(s)")
+    if calc:
+        parts.append("🟡 1 calculation")
+    return parts or ["⚪ No structured facts for this turn"]
+
+
+def _render_co_pilot(extraction_results, provider_health) -> None:
+    """Compact Co-Pilot: capability line, bounded conversation, structured sections."""
+    st.markdown("---")
+    st.markdown('<div class="fte-rail-title">💬 Co-Pilot</div>', unsafe_allow_html=True)
+
+    # Active context (real data only): the uploaded document names.
+    active_docs = [html.escape(str(d.get("file_name", ""))) for d in (extraction_results or [])]
+    active_docs = [d for d in active_docs if d]
+    context_line = " · ".join(active_docs[:3]) if active_docs else "No document loaded"
+    st.markdown(f'<div class="fte-cap">📄 Active context: {context_line}</div>', unsafe_allow_html=True)
+
+    # Capability status (real state only).
+    m3 = st.session_state.get("fte_module3_result") or {}
+    intel = st.session_state.get("intelligence_outputs") or {}
+    caps = []
+    caps.append("● Financial grid ready" if m3.get("financial_data") else "○ Financial grid awaiting data")
+    caps.append("● Intelligence ready" if intel else "○ Intelligence pending full analysis")
+    has_key = any((provider_health or {}).values())
+    caps.append(
+        "● AI provider live"
+        if (has_key and st.session_state.get("ai_connected"))
+        else ("○ AI provider configured" if has_key else "○ no AI provider configured")
+    )
+    st.markdown('<div class="fte-cap">' + " · ".join(caps) + "</div>", unsafe_allow_html=True)
+
+    if not extraction_results:
+        st.caption("Upload a document, then ask about its verified evidence.")
+
+    # Bounded conversation (last 4 messages).
+    messages = st.session_state.get("chat_messages", []) or []
+    for msg in messages[-4:]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg["role"] == "assistant" and msg.get("metadata"):
+                structure = _copilot_structure(msg["metadata"])
+                st.caption(" · ".join(structure))
+                _render_chat_provenance(msg["metadata"])
+
+    user_input = st.chat_input("Ask about the selected financial evidence…")
+    if user_input:
+        _submit_chat_question(user_input, extraction_results, provider_health)
+        st.rerun()
+
+
+def _render_terminal(uploaded_files) -> None:
+    """Single-screen terminal: left rail | center tabs + grid | provenance | Co-Pilot."""
+    extraction_results, combined_raw_text, document_summaries = _run_ingestion(uploaded_files)
+    module3_result = {}
+    try:
+        module3_result = _terminal_module3(combined_raw_text, extraction_results)
+    except Exception as e:
+        st.warning("⚠️ Financial intelligence temporarily unavailable — verified data tools remain below.")
+        st.session_state["pipeline_debug_log"] = [{"stage": "module3", "length": 0, "error_marker_detected": True, "preview": str(e)[:300]}]
+
+    intelligence_outputs = st.session_state.get("intelligence_outputs") or {}
+    provider_health = get_provider_health()
+
+    rail_col, center_col = st.columns([1, 3.2], gap="medium")
+    with rail_col:
+        _render_source_rail(uploaded_files, extraction_results, module3_result)
+    with center_col:
+        tab_grid, tab_intel, tab_sys = st.tabs(["Financial Grid", "Intelligence", "System"])
+        with tab_grid:
+            _render_financial_grid(module3_result)
+        with tab_intel:
+            _render_intelligence_tab(module3_result, intelligence_outputs)
+        with tab_sys:
+            _render_system_tab()
+
+    # Persistent, anchored provenance tray below the workspace.
+    _render_provenance_tray(module3_result)
+    _render_co_pilot(extraction_results, provider_health)
+
+
+# =============================================================================
 # SECTION 11: Main App / UI
 # =============================================================================
 def main():
-    st.title("📈 Financial Timeline Engine")
+    _inject_terminal_css()
+    _init_terminal_state()
 
+    # Header chrome: brand + compact gateway pill (shared by both views).
+    header_l, header_r = st.columns([4, 1], gap="medium")
+    with header_l:
+        st.title("📈 Financial Timeline Engine")
+    with header_r:
+        render_gateway_pill()
+
+    # Workspace selector + shared ingestion (sidebar).
+    fte_view = st.sidebar.radio(
+        "Workspace",
+        ["Institutional Terminal", "Classic Dashboard"],
+        index=0,
+        key="fte_view_radio",
+    )
+    uploaded_files = st.sidebar.file_uploader(
+        "Upload Financial Documents (.txt, .csv, .xlsx, .docx, .pdf)",
+        type=["txt", "csv", "xlsx", "docx", "pdf"],
+        accept_multiple_files=True
+    )
+
+    if fte_view == "Classic Dashboard":
+        _render_classic_dashboard(uploaded_files)
+    else:
+        _render_terminal(uploaded_files)
+
+
+def _render_classic_dashboard(uploaded_files):
     # --- AI status (canonical provider health via backend/gateway) ---
     # Status states: 🔴 no eligible provider / 🟢 live generation verified /
     # 🟡 configured but no live call yet. Per-provider detail comes from the
@@ -1391,13 +1967,6 @@ def main():
         st.success(f"🟢 AI Status: Live ({provider})")
     else:
         st.info("🟡 AI Status: Provider(s) configured — awaiting first live generation")
-
-    # --- Institutional Terminal (Phase 0–1 frontend, embedded via iframe) ---
-    # The FastAPI service (scripts/dev.sh / Procfile) serves the terminal SPA
-    # at its own origin; Streamlit hosts it so the existing ingestion →
-    # analysis workflow stays available below. Degrades to a link when the
-    # service isn't reachable — never an error screen.
-    render_terminal_embed()
 
     with st.expander("🩺 Provider Health & Activity Log", expanded=False):
         provider_display = {
@@ -1435,14 +2004,6 @@ def main():
 
     if is_live_market_intelligence_enabled():
         st.caption("🌐 Live Market Intelligence: key detected (provider integration pending).")
-
-    # --- Sidebar Document Ingestion ---
-    st.sidebar.header("📁 Document Ingestion")
-    uploaded_files = st.sidebar.file_uploader(
-        "Upload Financial Documents (.txt, .csv, .xlsx, .docx, .pdf)",
-        type=["txt", "csv", "xlsx", "docx", "pdf"],
-        accept_multiple_files=True
-    )
 
     combined_raw_text = ""
     document_summaries = []
