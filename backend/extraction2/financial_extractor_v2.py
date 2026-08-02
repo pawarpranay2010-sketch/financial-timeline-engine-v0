@@ -101,6 +101,12 @@ METRIC_REGISTRY: Dict[str, List[str]] = {
     ],
     "DividendPerShare": ["dividend per share"],
     "CapitalExpenditure": ["capital expenditure", "capital expenditures", "capex"],
+    "CurrentAssets": [
+        "current assets", "total current assets",
+    ],
+    "CurrentLiabilities": [
+        "current liabilities", "total current liabilities",
+    ],
 }
 
 # Concept tags that get preserved as-is (never collapsed into generic metrics)
@@ -123,6 +129,8 @@ _XBRL_CONCEPT_MAP: Dict[str, str] = {
     "EarningsPerShareDiluted": "EPS",
     "Assets": "TotalAssets",
     "Liabilities": "TotalLiabilities",
+    "AssetsCurrent": "CurrentAssets",
+    "LiabilitiesCurrent": "CurrentLiabilities",
     "StockholdersEquity": "ShareholdersEquity",
     "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": "ShareholdersEquity",
     "RetainedEarningsAccumulatedDeficit": "RetainedEarnings",
@@ -182,6 +190,8 @@ _IFRS_CONCEPT_MAP: Dict[str, str] = {
     # --- Statement of financial position --------------------------------
     "Assets": "TotalAssets",
     "Liabilities": "TotalLiabilities",
+    "CurrentAssets": "CurrentAssets",
+    "CurrentLiabilities": "CurrentLiabilities",
     "Equity": "ShareholdersEquity",
     "EquityAttributableToOwnersOfParent": "ShareholdersEquity",
     "CashAndCashEquivalents": "CashAndEquivalents",

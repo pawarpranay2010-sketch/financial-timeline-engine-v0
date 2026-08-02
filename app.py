@@ -164,7 +164,7 @@ def _debug_stage(label, text):
 def call_google_ai_studio(prompt_text, system_prompt=None, temperature=None):
     """Calls Google AI Studio (Gemini) via the official google-genai SDK.
     PRIMARY provider in the fallback chain."""
-    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    api_key = get_secret("GOOGLE_API_KEY", "")
     if not api_key:
         raise ValueError("Missing Google Key")
     client = genai.Client(api_key=api_key)
@@ -187,7 +187,7 @@ def call_groq_engine(prompt_text, system_prompt=None, temperature=None):
     chain. Tries each model in GROQ_MODELS in order; if one is
     decommissioned, rate-limited (429), or errors out, automatically
     retries with the next model. Only raises once every model has failed."""
-    api_key = st.secrets.get("GROQ_API_KEY", "")
+    api_key = get_secret("GROQ_API_KEY", "")
     if not api_key:
         raise ValueError("Missing Groq Key")
 
@@ -220,7 +220,7 @@ def call_groq_engine(prompt_text, system_prompt=None, temperature=None):
 def _openrouter_request(prompt_text, model_id, system_prompt=None, temperature=None):
     """Shared helper for a single OpenRouter chat-completion call.
     Returns (success: bool, content_or_error: str)."""
-    api_key = st.secrets.get("OPENROUTER_API_KEY", "")
+    api_key = get_secret("OPENROUTER_API_KEY", "")
     if not api_key:
         return False, "❌ OpenRouter API Key missing inside Streamlit Secrets panel."
 
@@ -1175,6 +1175,196 @@ def fetch_live_market_intelligence(query):
         "message": "Live market intelligence key detected, but no data provider integration has been selected yet.",
     }
 # =============================================================================
+# SECTION 10.5: AI Financial Assistant (interactive chatbot)
+# =============================================================================
+# A conversational UI layer on top of the existing frozen intelligence
+# stack (Agentic RAG + verified facts + CalculationSafetyGate + provider
+# chain). It deliberately does NOT reimplement any intelligence -- it
+# orchestrates backend.chat_assistant.FinancialChatAssistant, which in
+# turn composes the existing components.
+
+# Suggested prompts shown in the assistant's empty state.
+CHAT_SUGGESTED_PROMPTS = [
+    "What was the company's revenue?",
+    "Compare revenue across fiscal years.",
+    "Why did profitability change?",
+    "What are the major financial risks?",
+    "Summarize this company's financial position.",
+]
+
+
+@st.cache_resource(show_spinner=False)
+def _build_chat_assistant():
+    """Cached singleton for the chat assistant (lazy import keeps app
+    startup light and keeps the module unit-testable outside Streamlit)."""
+    from backend.chat_assistant import build_chat_assistant
+    return build_chat_assistant()
+
+
+def _chat_documents(extraction_results):
+    """Shape ingestion results into the {file_name, financial_facts}
+    structure the assistant's document-Q&A path expects."""
+    documents = []
+    for doc in extraction_results or []:
+        documents.append({
+            "file_name": doc.get("file_name", "Unknown Document"),
+            "financial_facts": doc.get("financial_facts", []) or [],
+        })
+    return documents
+
+
+def _render_chat_provenance(metadata):
+    """Render concise provenance under a fact-backed assistant answer.
+
+    - BLOCKED / miss intents show the reason instead of a badge.
+    - Verified answers get a "✓ Verified" badge plus source / period /
+      source-tier line and an expandable Evidence section.
+    - Calculation answers get an expandable formula/inputs section.
+    Internal hashes / technical objects are never shown.
+    """
+    intent = metadata.get("intent", "")
+    evidence = metadata.get("evidence") or []
+    calculation = metadata.get("calculation")
+
+    blocked_intents = (
+        "blocked", "calculation_miss", "document_miss", "company_blocked",
+        "company_empty", "company_error", "no_provider", "provider_error",
+    )
+    if intent in blocked_intents:
+        st.caption("🚫 **BLOCKED / NOT VERIFIED** — no fabricated figures.")
+        reason = metadata.get("blocked_reason")
+        if reason:
+            st.caption(f"Reason: {reason}")
+        return
+
+    if evidence:
+        top = evidence[0]
+        source = top.get("source") or ""
+        period = top.get("period") or ""
+        tier = top.get("source_tier")
+        document = top.get("document") or ""
+        badge_parts = ["✅ **Verified**"]
+        if source:
+            badge_parts.append(f"Source: {source}")
+        if period:
+            badge_parts.append(f"Period: {period}")
+        if tier is not None:
+            badge_parts.append(f"Source tier: {tier}")
+        if document:
+            badge_parts.append(f"Document: {document}")
+        st.caption(" · ".join(badge_parts))
+        with st.expander("🔍 Evidence", expanded=False):
+            evidence_rows = [
+                {
+                    "Metric": e.get("metric", ""),
+                    "Value": e.get("display", e.get("value", "")),
+                    "Period": e.get("period", ""),
+                    "Scale": e.get("scale", ""),
+                    "Source": e.get("source", ""),
+                    "Tier": e.get("source_tier", ""),
+                    "Document": e.get("document", ""),
+                }
+                for e in evidence
+            ]
+            st.dataframe(pd.DataFrame(evidence_rows), use_container_width=True, hide_index=True)
+
+    if calculation:
+        with st.expander("🧮 Calculation", expanded=False):
+            st.markdown(f"**{calculation.get('name', 'Calculation')}**")
+            if calculation.get("formula"):
+                st.markdown(f"Formula: `{calculation['formula']}`")
+            if calculation.get("value") is not None:
+                st.markdown(f"Value: **{calculation['value']}**")
+            if calculation.get("inputs"):
+                st.markdown("Inputs: " + ", ".join(
+                    f"{k}={v}" for k, v in calculation["inputs"].items()
+                ))
+            if calculation.get("periods"):
+                st.markdown("Periods: " + ", ".join(calculation["periods"]))
+
+
+def _submit_chat_question(question, extraction_results, provider_health):
+    """Run one user turn through the assistant and persist messages +
+    bounded conversation context in session state."""
+    from backend.chat_assistant import ChatContext
+
+    question = (question or "").strip()
+    if not question:
+        return
+
+    ctx = ChatContext.from_state(st.session_state.get("chat_context_state"))
+    assistant = _build_chat_assistant()
+    documents = _chat_documents(extraction_results)
+
+    ctx.add_user(question)
+    st.session_state.setdefault("chat_messages", []).append(
+        {"role": "user", "content": question}
+    )
+
+    with st.spinner("Consulting verified evidence…"):
+        response = assistant.answer(
+            question,
+            context=ctx,
+            documents=documents,
+            provider_health=provider_health,
+        )
+
+    content = response.get("content", "")
+    metadata = response.get("metadata", {}) or {}
+    ctx.add_assistant(content, metadata)
+    st.session_state["chat_context_state"] = ctx.to_state()
+    st.session_state.setdefault("chat_messages", []).append(
+        {"role": "assistant", "content": content, "metadata": metadata}
+    )
+
+
+def render_financial_assistant(extraction_results, provider_health):
+    """AI Financial Assistant section -- st.chat_message / st.chat_input
+    conversation with suggested prompts, persistent bounded history, and
+    provenance rendering."""
+    st.markdown("---")
+    st.subheader("🤖 AI Financial Assistant")
+    st.caption(
+        "Ask questions about your financial documents, verified metrics, "
+        "companies, and market data. Every figure is verified against "
+        "evidence — the assistant never invents numbers."
+    )
+
+    # --- Session state ---
+    if "chat_messages" not in st.session_state:
+        st.session_state["chat_messages"] = []
+    if "chat_context_state" not in st.session_state:
+        st.session_state["chat_context_state"] = None
+
+    messages = st.session_state["chat_messages"]
+
+    # --- Empty state with suggested prompts ---
+    if not messages:
+        st.markdown("#### 💬 Start a conversation")
+        cols = st.columns(2)
+        for i, prompt in enumerate(CHAT_SUGGESTED_PROMPTS):
+            with cols[i % 2]:
+                if st.button(prompt, key=f"chat_suggest_{i}", use_container_width=True):
+                    _submit_chat_question(prompt, extraction_results, provider_health)
+                    st.rerun()
+    else:
+        # --- Conversation history ---
+        for msg in messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg["role"] == "assistant" and msg.get("metadata"):
+                    _render_chat_provenance(msg["metadata"])
+
+    # --- Chat input ---
+    user_input = st.chat_input(
+        "Ask about your financial documents, verified metrics, or companies…"
+    )
+    if user_input:
+        _submit_chat_question(user_input, extraction_results, provider_health)
+        st.rerun()
+
+
+# =============================================================================
 # SECTION 11: Main App / UI
 # =============================================================================
 def main():
@@ -1254,6 +1444,12 @@ def main():
     if extraction_results:
         with st.expander("🧾 Ingestion Statistics (pages, tables, chunks, tokens)", expanded=False):
             st.text(print_statistics(document_statistics(extraction_results)))
+
+    # --- AI Financial Assistant (interactive chatbot) ---
+    # Runs after ingestion so the assistant can answer questions against
+    # the uploaded documents' extracted financial facts. Passes provider
+    # health so it degrades gracefully when no AI key is configured.
+    render_financial_assistant(extraction_results, health)
 
     st.markdown("---")
     st.subheader("🔬 AI Analysis Engine")

@@ -1,7 +1,7 @@
 """ProviderManager — registration, health, lifecycle for all AI providers."""
-import os
 import logging
 from typing import Dict, Optional, List
+from core.config import get_secret
 from .provider_adapter import ProviderAdapter
 from .providers import (
     GoogleAdapter, GroqAdapter, OpenRouterAdapter,
@@ -57,7 +57,7 @@ class ProviderManager:
     def _initialize(self) -> None:
         for name in self.DEFAULT_PRIORITY:
             env_key = self.ENV_KEY_MAP.get(name, "")
-            api_key = os.getenv(env_key, "")
+            api_key = get_secret(env_key, "")
             self._key_status[name] = bool(api_key)
             if api_key:
                 adapter_cls = self.ADAPTER_MAP.get(name)

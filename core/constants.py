@@ -48,4 +48,7 @@ DEFAULT_SESSION_STATE: dict = {
     "memo_cache": {},
     "timeline_cache": {},
     "intelligence_cache": {},
+    # AI Financial Assistant (interactive chatbot) session state.
+    "chat_messages": [],
+    "chat_context_state": None,
 }

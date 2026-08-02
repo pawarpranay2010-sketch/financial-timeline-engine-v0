@@ -80,12 +80,13 @@ class CompositeSecretsProvider:
 
 
 def get_default_secrets_provider() -> SecretsProvider:
-    """Builds the default provider chain: Streamlit secrets first (current
-    production path), then environment variables (future backend / local
-    dev / tests). Streamlit failures (e.g. no script run context, as
-    happens in a plain `python` or pytest process) are swallowed by
-    CompositeSecretsProvider, so this is safe to call from anywhere."""
-    return CompositeSecretsProvider([StreamlitSecretsProvider(), EnvSecretsProvider()])
+    """Builds the default provider chain: environment variables first
+    (local dev, tests, and any non-Streamlit runtime), then Streamlit
+    secrets (the deployed Streamlit Cloud path). Streamlit failures
+    (e.g. no script run context, as happens in a plain `python` or
+    pytest process) are swallowed by CompositeSecretsProvider, so this
+    is safe to call from anywhere."""
+    return CompositeSecretsProvider([EnvSecretsProvider(), StreamlitSecretsProvider()])
 
 
 # =============================================================================
