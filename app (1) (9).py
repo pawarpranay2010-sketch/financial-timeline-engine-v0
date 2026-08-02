@@ -1175,10 +1175,10 @@ def _render_chat_provenance(metadata):
         "company_empty", "company_error", "no_provider", "provider_error",
     )
     if intent in blocked_intents:
-        st.caption("🚫 **BLOCKED / NOT VERIFIED** — no fabricated figures.")
+        st.caption("⚠️ **Analysis limited** — this could not be verified from the current evidence.")
         reason = metadata.get("blocked_reason")
         if reason:
-            st.caption(f"Reason: {reason}")
+            st.caption(f"Missing input: {reason}")
         return
 
     if evidence:
@@ -1435,6 +1435,30 @@ _TERMINAL_CSS = """
 .fte-conflict-c { color: var(--fte-conflict); } .fte-blocked-c { color: var(--fte-blocked); }
 .fte-unanalyzed-c { color: var(--fte-unanalyzed); }
 [data-testid="stDataFrame"] { border: 1px solid var(--fte-border); border-radius: 8px; }
+.fte-limited {
+  border: 1px solid rgba(224,82,82,.35); background: rgba(224,82,82,.08);
+  color: var(--fte-text); border-radius: 8px; padding: 8px 12px; font-size: 13px;
+  animation: fteFade var(--fade-quick) ease-out;
+}
+.fte-caps {
+  color: var(--fte-muted); font-size: 12px; padding: 6px 0 2px;
+  border-top: 1px solid var(--fte-border); margin-top: 4px;
+}
+.fte-pv-avail .v { color: var(--fte-text); }
+.fte-pv-missing .v { color: var(--fte-muted); font-style: italic; opacity: .75; }
+.fte-pv-missing .k { opacity: .75; }
+.fte-block-note {
+  margin-top: 8px; padding: 6px 10px; font-size: 12px; color: var(--fte-blocked);
+  border-left: 2px solid var(--fte-blocked); background: rgba(224,82,82,.06);
+  border-radius: 4px; animation: fteFade var(--fade-provenance) ease-out;
+}
+.fte-partial { color: var(--fte-derived); font-size: 12px; font-weight: 500; }
+[data-testid="stButton"] button { font-size: 13px; min-height: 30px; }
+[data-testid="stSidebar"] [data-testid="stButton"] button { font-size: 12px; min-height: 28px; padding: 2px 10px; }
+@keyframes fteFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
@@ -1475,6 +1499,7 @@ def _init_terminal_state() -> None:
         ("fte_module3_result", {}),
         ("fte_module3_key", None),
         ("fte_css_injected", False),
+        ("fte_taxonomy_filter", "all"),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -1547,32 +1572,81 @@ def render_gateway_pill() -> None:
 def _build_terminal_rows(module3_result):
     """Canonical grid rows from module3 financial_data + ratios ONLY.
 
-    Never invents values: a metric missing from both dicts renders as
-    '—' with ⚪ Unanalyzed status."""
+    Status semantics (presentation only — backend values are untouched):
+      🔵 Conflict   — cross-document verifier reports disagreement
+      🔴 Blocked    — required metric listed as missing by the detector
+      🟡 Derived    — calculated ratio (source == "Calculated")
+      🟢 Verified   — value + source present in the backend output
+      ⚪ Unanalyzed — pipeline has not established the metric yet
+    A metric never receives a stronger status than its evidence
+    supports; missing provenance fields render as '—' and the tray
+    distinguishes available from unavailable metadata. Blocked/conflict
+    keys reported by the pipeline but absent from the canonical list are
+    appended so exception filters can reach them."""
     financial_data = (module3_result or {}).get("financial_data") or {}
     ratios = (module3_result or {}).get("ratios") or {}
+    conflicts = _conflict_metrics(module3_result)
+    blocked = _blocked_metrics(module3_result)
     rows = []
+    seen = set()
+
     for key, label in _TERMINAL_METRICS:
+        seen.add(key)
         fact = financial_data.get(key) or ratios.get(key) or {}
         value = fact.get("value")
         source = fact.get("source") or ""
-        if value is None:
-            rows.append({
-                "metric": key, "Metric": label, "Value": "—", "Period": "—",
-                "Source": "—", "Status": "⚪ Unanalyzed", "_kind": "unanalyzed",
-            })
-        else:
-            period = fact.get("reporting_period") or fact.get("period") or "—"
-            if source == "Calculated":
+        period = fact.get("reporting_period") or fact.get("period") or "—"
+        if value is not None:
+            if key in conflicts:
                 rows.append({
                     "metric": key, "Metric": label, "Value": _fmt_num(value),
-                    "Period": period, "Source": "Calculated", "Status": "🟡 Derived", "_kind": "derived",
+                    "Period": period, "Source": source or "—", "Status": "🔵 Conflict",
+                    "_kind": "conflict", "_fact": fact,
+                })
+            elif source == "Calculated":
+                rows.append({
+                    "metric": key, "Metric": label, "Value": _fmt_num(value),
+                    "Period": period, "Source": "Calculated", "Status": "🟡 Derived",
+                    "_kind": "derived", "_fact": fact,
                 })
             else:
                 rows.append({
                     "metric": key, "Metric": label, "Value": _fmt_num(value),
-                    "Period": period, "Source": source or "Document", "Status": "🟢 Verified", "_kind": "verified",
+                    "Period": period, "Source": source or "Document", "Status": "🟢 Verified",
+                    "_kind": "verified", "_fact": fact,
                 })
+        elif key in blocked:
+            rows.append({
+                "metric": key, "Metric": label, "Value": "—", "Period": "—",
+                "Source": "—", "Status": "🔴 Blocked", "_kind": "blocked",
+                "_reason": blocked[key], "_fact": {},
+            })
+        else:
+            rows.append({
+                "metric": key, "Metric": label, "Value": "—", "Period": "—",
+                "Source": "—", "Status": "⚪ Unanalyzed", "_kind": "unanalyzed",
+                "_fact": {},
+            })
+
+    # Exceptions reported by the pipeline but outside the canonical list
+    # (e.g. PAT, ROCE) — appended as real, honest rows so the grid's
+    # exception filters can reach them.
+    for key, reason in blocked.items():
+        if key not in seen:
+            seen.add(key)
+            rows.append({
+                "metric": key, "Metric": key, "Value": "—", "Period": "—",
+                "Source": "—", "Status": "🔴 Blocked", "_kind": "blocked",
+                "_reason": reason, "_fact": {},
+            })
+    for key, info in conflicts.items():
+        if key not in seen:
+            seen.add(key)
+            rows.append({
+                "metric": key, "Metric": key, "Value": "—", "Period": "—",
+                "Source": "—", "Status": "🔵 Conflict", "_kind": "conflict",
+                "_fact": info,
+            })
     return rows
 
 
@@ -1612,22 +1686,128 @@ def _terminal_module3(combined_raw_text, extraction_results):
     return result or {}
 
 
-def _count_conflicts(module3_result) -> int:
-    """Conflicts from cross-document verification (real data only; 0 if absent)."""
+_BLOCKED_INTENTS = (
+    "blocked", "calculation_miss", "document_miss", "company_blocked",
+    "company_empty", "company_error", "no_provider", "provider_error",
+)
+
+
+def _conflict_metrics(module3_result) -> dict:
+    """Metric keys the cross-document verifier marks as 'Conflict'
+    (multiple sources disagree). Reads the real module3 shape (dict of
+    {field: {status, verified_value, documents}}) defensively; a legacy
+    list shape is also accepted. Presentation only — the verifier's
+    output is produced by the backend and is never altered here."""
     x = (module3_result or {}).get("cross_document_verification")
-    if isinstance(x, list):
-        return sum(1 for item in x if isinstance(item, dict) and item.get("match") is False)
-    return 0
+    conflicts = {}
+    if isinstance(x, dict):
+        for field, info in x.items():
+            if isinstance(info, dict) and str(info.get("status", "")).lower() == "conflict":
+                conflicts[str(field)] = info
+    elif isinstance(x, list):
+        for item in x:
+            if isinstance(item, dict) and item.get("match") is False and item.get("metric"):
+                conflicts[str(item["metric"])] = item
+    return conflicts
+
+
+def _blocked_metrics(module3_result) -> dict:
+    """Metric keys the pipeline's missing-data detector lists as required
+    but absent (financial_data + ratios sections). Returns {key: reason}.
+    Presentation only — the report is produced by the backend
+    (backend/missing_data_detector.py)."""
+    md = (module3_result or {}).get("missing_data")
+    blocked = {}
+    if isinstance(md, dict):
+        for section, label in (
+            ("financial_data", "Required financial evidence is missing"),
+            ("ratios", "Required ratio is not available"),
+        ):
+            items = md.get(section)
+            if isinstance(items, list):
+                for key in items:
+                    if isinstance(key, str) and key.strip():
+                        blocked.setdefault(key.strip(), f"{label} ({section})")
+            elif isinstance(items, dict):
+                for key, present in items.items():
+                    if not present:
+                        blocked.setdefault(str(key), f"{label} ({section})")
+    elif isinstance(md, list):
+        for key in md:
+            if isinstance(key, str) and key.strip():
+                blocked.setdefault(key.strip(), "Listed as missing by the pipeline report")
+    return blocked
+
+
+def _row_counts(rows) -> dict:
+    """Taxonomy counts over grid rows (real rows only, nothing invented)."""
+    counts = {"verified": 0, "derived": 0, "unanalyzed": 0, "conflict": 0, "blocked": 0}
+    for r in rows or []:
+        kind = r.get("_kind", "unanalyzed")
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+_FILTER_LABELS = {
+    "all": "All metrics",
+    "verified": "🟢 Verified",
+    "derived": "🟡 Derived",
+    "unanalyzed": "⚪ Unanalyzed",
+    "conflict": "🔵 Conflicts",
+    "blocked": "🔴 Blocked",
+}
+
+
+def _set_taxonomy_filter(kind: str) -> None:
+    """Button callback: set the grid taxonomy filter (runs pre-rerun)."""
+    st.session_state["fte_taxonomy_filter"] = kind
+
+
+def _grid_rows_filtered(rows, kind: str):
+    """Filter grid rows by taxonomy state; 'all' returns everything."""
+    if not kind or kind == "all":
+        return list(rows)
+    return [r for r in rows if r.get("_kind") == kind]
+
+
+def _render_taxonomy_controls(rows, include_exceptions: bool = False) -> None:
+    """Actionable taxonomy filter buttons (rail). Clicking a state
+    filters the Financial Grid to that state; 'All metrics' restores.
+    Presentation only — metric values are never altered."""
+    counts = _row_counts(rows)
+    current = st.session_state.get("fte_taxonomy_filter", "all")
+    if include_exceptions:
+        options = [
+            ("conflict", "🔵 Conflicts", counts["conflict"]),
+            ("blocked", "🔴 Blocked", counts["blocked"]),
+        ]
+    else:
+        options = [
+            ("all", "All metrics", 0),
+            ("verified", "🟢 Verified", counts["verified"]),
+            ("derived", "🟡 Derived", counts["derived"]),
+            ("unanalyzed", "⚪ Unanalyzed", counts["unanalyzed"]),
+        ]
+    for kind, label, count in options:
+        label_txt = label if kind == "all" else f"{label} · {count}"
+        st.button(
+            label_txt,
+            key=f"fte_filter_{kind}_{'x' if include_exceptions else 'm'}",
+            use_container_width=True,
+            type="primary" if current == kind else "secondary",
+            on_click=_set_taxonomy_filter,
+            args=(kind,),
+        )
+
+
+def _count_conflicts(module3_result) -> int:
+    """Conflict count from cross-document verification (real data only)."""
+    return len(_conflict_metrics(module3_result))
 
 
 def _count_blocked(module3_result) -> int:
-    """Blocked items from the missing-data detector (real data only; 0 if absent)."""
-    md = (module3_result or {}).get("missing_data")
-    if isinstance(md, list):
-        return len(md)
-    if isinstance(md, dict):
-        return sum(1 for v in md.values() if v)
-    return 0
+    """Blocked count from the missing-data detector (real data only)."""
+    return len(_blocked_metrics(module3_result))
 
 
 def _render_source_rail(uploaded_files, extraction_results, module3_result) -> None:
@@ -1653,43 +1833,69 @@ def _render_source_rail(uploaded_files, extraction_results, module3_result) -> N
                 )
 
     rows = _build_terminal_rows(module3_result)
-    verified = sum(1 for r in rows if r["_kind"] == "verified")
-    derived = sum(1 for r in rows if r["_kind"] == "derived")
-    unanalyzed = sum(1 for r in rows if r["_kind"] == "unanalyzed")
 
     st.markdown('<div class="fte-rail-title">🧭 Taxonomy Integrity</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="fte-count-row"><span class="k fte-ok-c">🟢 Verified</span><span class="v">{verified}</span></div>'
-        f'<div class="fte-count-row"><span class="k fte-derived-c">🟡 Derived</span><span class="v">{derived}</span></div>'
-        f'<div class="fte-count-row"><span class="k fte-unanalyzed-c">⚪ Unanalyzed</span><span class="v">{unanalyzed}</span></div>',
-        unsafe_allow_html=True,
-    )
+    _render_taxonomy_controls(rows, include_exceptions=False)
 
-    conflicts = _count_conflicts(module3_result)
-    blocked = _count_blocked(module3_result)
     st.markdown('<div class="fte-rail-title">🚨 Exceptions</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="fte-count-row"><span class="k fte-conflict-c">🔵 Conflicts</span><span class="v">{conflicts}</span></div>'
-        f'<div class="fte-count-row"><span class="k fte-blocked-c">🔴 Blocked</span><span class="v">{blocked}</span></div>',
-        unsafe_allow_html=True,
+    _render_taxonomy_controls(rows, include_exceptions=True)
+
+
+def _render_analysis_limited_banner(rows) -> None:
+    """One compact institutional state line above the grid (no repeated
+    blocked messaging) with an 'Inspect exceptions' action."""
+    counts = _row_counts(rows)
+    show = (counts["blocked"] + counts["conflict"] > 0) or (
+        counts["unanalyzed"] > 0 and (counts["verified"] + counts["derived"]) > 0
     )
+    if not show:
+        return
+    line = (
+        f"⚠️ **Analysis limited** — {counts['blocked']} metric(s) blocked · "
+        f"{counts['unanalyzed']} unanalyzed · {counts['verified']} verified"
+    )
+    b_col, btn_col = st.columns([4, 1], gap="small")
+    with b_col:
+        st.markdown(f'<div class="fte-limited">{line}</div>', unsafe_allow_html=True)
+    with btn_col:
+        st.button(
+            "Inspect exceptions",
+            key="fte_inspect_exceptions",
+            use_container_width=True,
+            on_click=_set_taxonomy_filter,
+            args=("blocked",),
+        )
 
 
 def _render_financial_grid(module3_result) -> None:
-    """Center grid: stable metric table with single-row selection."""
+    """Center grid: stable metric table with single-row selection and
+    taxonomy filtering. Row dimensions never change between reruns."""
     st.markdown('<div class="fte-rail-title">Financial Grid</div>', unsafe_allow_html=True)
     rows = _build_terminal_rows(module3_result)
     st.session_state["fte_grid_rows"] = rows
 
+    _render_analysis_limited_banner(rows)
+
+    filter_kind = st.session_state.get("fte_taxonomy_filter", "all")
+    shown = _grid_rows_filtered(rows, filter_kind)
+    if filter_kind != "all":
+        st.caption(
+            f"Filtered to {_FILTER_LABELS.get(filter_kind, filter_kind).lower()} — "
+            f"{len(shown)} of {len(rows)} metrics."
+        )
+
     df = pd.DataFrame(
         [{"Metric": r["Metric"], "Value": r["Value"], "Period": r["Period"],
-          "Source": r["Source"], "Status": r["Status"]} for r in rows]
+          "Source": r["Source"], "Status": r["Status"]} for r in shown]
     )
     if df.empty:
-        st.caption("Upload a financial document and run the intelligence pipeline to populate the grid.")
+        if filter_kind != "all":
+            st.caption("No metrics match the current filter — choose another taxonomy state or 'All metrics'.")
+        else:
+            st.caption("Upload a financial document and run the intelligence pipeline to populate the grid.")
         return
 
-    event = st.dataframe(
+    st.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
@@ -1704,50 +1910,110 @@ def _render_financial_grid(module3_result) -> None:
             "Status": st.column_config.TextColumn("Status", width="medium"),
         },
     )
+
+    # Selection: honor a fresh click; otherwise restore the persisted
+    # selected metric so it survives reruns and filter changes (row
+    # indexes can shift, but the metric key is stable).
     try:
         sel = st.session_state.get("fte_grid_table")
         sel_rows = sel.selection.rows if sel is not None else ()
     except Exception:
         sel_rows = ()
     if sel_rows:
-        st.session_state["fte_selected_metric"] = rows[int(sel_rows[0])]["metric"]
+        idx = int(sel_rows[0])
+        if 0 <= idx < len(shown):
+            st.session_state["fte_selected_metric"] = shown[idx]["metric"]
+    else:
+        selected_metric = st.session_state.get("fte_selected_metric")
+        if selected_metric:
+            restore_idx = next(
+                (i for i, r in enumerate(shown) if r["metric"] == selected_metric), None
+            )
+            if restore_idx is not None:
+                try:
+                    sel = st.session_state.get("fte_grid_table")
+                    if sel is not None and not sel.selection.rows:
+                        sel.selection.rows = [restore_idx]
+                except Exception:
+                    pass
 
 
 def _provenance_tray_html(rows, module3_result, metric) -> str:
-    """Provenance tray content — only fields the pipeline provides; '—' otherwise."""
+    """Provenance tray content — only fields the pipeline provides; '—'
+    otherwise. Available evidence and unavailable metadata are visually
+    distinct (fte-pv-avail / fte-pv-missing); blocked metrics get one
+    compact limitation note instead of repeated blocked banners."""
     selected = next((r for r in rows if r["metric"] == metric), None)
     if selected is None:
         return '<div class="fte-tray"><div class="fte-tray-empty">Select a metric in the grid to inspect its provenance.</div></div>'
-    fact = {}
+    kind = selected.get("_kind", "unanalyzed")
     fd = (module3_result or {}).get("financial_data") or {}
     rt = (module3_result or {}).get("ratios") or {}
-    fact = fd.get(selected["metric"]) or rt.get(selected["metric"]) or {}
+    fact = selected.get("_fact") or fd.get(selected["metric"]) or rt.get(selected["metric"]) or {}
 
     def g(*keys, default="—"):
         for k in keys:
-            v = fact.get(k)
+            v = fact.get(k) if isinstance(fact, dict) else None
             if v not in (None, ""):
                 return str(v)
         return default
 
-    location = g("page", "table_id", "chunk_id", "anchor")
-    evidence = g("anchor", "evidence", "context")
+    status = selected.get("Status") or "—"
+    period = selected.get("Period") or "—"
+    source = selected.get("Source") or "—"
+    value = selected.get("Value") or "—"
+    note = None
+    if kind == "blocked":
+        origin = "Pipeline missing-data report"
+        location = "—"
+        evidence = "—"
+        note = selected.get("_reason") or "Required evidence is not available from the current pipeline."
+    elif kind == "conflict":
+        origin = "Cross-document verification"
+        location = "—"
+        conflicts = _conflict_metrics(module3_result)
+        info = conflicts.get(selected["metric"]) or {}
+        docs = info.get("documents") or []
+        if isinstance(docs, list) and docs:
+            evidence = " · ".join(
+                f"{d.get('document', '?')}={d.get('value', '?')}"
+                for d in docs if isinstance(d, dict)
+            )
+        else:
+            evidence = "Multiple sources disagree"
+    else:
+        origin = "Calculated ratio" if kind == "derived" else ("Document extraction" if kind == "verified" else "—")
+        location = g("page", "table_id", "chunk_id", "anchor")
+        evidence = g("anchor", "evidence", "context")
+
+    currency = g("unit", "currency", "currency_code")
+    scale = g("scale")
+
     item_rows = [
-        ("Metric", selected["Metric"]),
-        ("Value", selected["Value"]),
-        ("Origin", "Document extraction" if selected["_kind"] == "verified" else "Calculated ratio"),
-        ("Period", selected["Period"]),
-        ("Source", selected["Source"]),
+        ("Metric", selected.get("Metric") or "—"),
+        ("Value", value),
+        ("Status", status),
+        ("Origin", origin),
+        ("Period", period),
+        ("Source", source),
         ("Location", location),
-        ("Currency", g("unit", "currency")),
-        ("Scale", g("scale")),
+        ("Currency", currency),
+        ("Scale", scale),
         ("Evidence", evidence),
     ]
-    body = "".join(
-        f'<div class="fte-metric-row"><div class="k">{html.escape(str(k))}</div><div class="v">{html.escape(str(v))}</div></div>'
-        for k, v in item_rows
-    )
-    return f'<div class="fte-tray"><div class="fte-tray-head">{html.escape(str(selected["Metric"]))} · {html.escape(str(selected["Status"]))}</div>{body}</div>'
+
+    def _row(k, v):
+        v = "—" if v in (None, "") else str(v)
+        cls = "fte-pv-missing" if v == "—" else "fte-pv-avail"
+        return f'<div class="fte-metric-row {cls}"><div class="k">{html.escape(str(k))}</div><div class="v">{html.escape(v)}</div></div>'
+
+    body = "".join(_row(k, v) for k, v in item_rows)
+    head = f'{html.escape(str(selected.get("Metric") or ""))} · {html.escape(str(selected.get("Status") or ""))}'
+    if kind in ("verified", "derived") and (period == "—" or scale == "—"):
+        head += ' <span class="fte-partial">· partial provenance</span>'
+    if note:
+        body += f'<div class="fte-block-note">⚠️ Analysis limited — {html.escape(str(note))}</div>'
+    return f'<div class="fte-tray"><div class="fte-tray-head">{head}</div>{body}</div>'
 
 
 def _render_provenance_tray(module3_result) -> None:
@@ -1826,29 +2092,43 @@ def _render_system_tab() -> None:
         st.caption("No pipeline stages recorded for this run.")
 
 
-def _copilot_structure(metadata) -> list:
-    """Structured sections from the last assistant metadata (real fields only)."""
+def _copilot_structure(metadata, rows=None) -> list:
+    """Structured sections for the Co-Pilot: real metadata fields plus,
+    when grid rows are available, an honest evidence summary instead of
+    a bare 'BLOCKED / NOT VERIFIED' message."""
     intent = (metadata or {}).get("intent", "")
     evidence = (metadata or {}).get("evidence") or []
     calc = (metadata or {}).get("calculation")
-    blocked_intents = (
-        "blocked", "calculation_miss", "document_miss", "company_blocked",
-        "company_empty", "company_error", "no_provider", "provider_error",
-    )
     parts = []
-    if intent in blocked_intents:
-        parts.append("🚫 BLOCKED / NOT VERIFIED")
+    if intent in _BLOCKED_INTENTS:
+        parts.append("⚠️ Analysis limited — not verifiable from current evidence")
     if evidence:
         parts.append(f"🟢 {len(evidence)} verified fact(s)")
     if calc:
         parts.append("🟡 1 calculation")
+    if rows:
+        counts = _row_counts(rows)
+        summary = []
+        if counts["verified"]:
+            summary.append(f"🟢 {counts['verified']} verified")
+        if counts["derived"]:
+            summary.append(f"🟡 {counts['derived']} derived")
+        if counts["blocked"]:
+            summary.append(f"🔴 {counts['blocked']} blocked")
+        if counts["unanalyzed"]:
+            summary.append(f"⚪ {counts['unanalyzed']} unanalyzed")
+        if summary:
+            parts.append(" · ".join(summary))
     return parts or ["⚪ No structured facts for this turn"]
 
 
 def _render_co_pilot(extraction_results, provider_health) -> None:
-    """Compact Co-Pilot: capability line, bounded conversation, structured sections."""
+    """Compact Co-Pilot: capability line, bounded conversation, structured
+    sections, and an honest blocked/empty state (no duplicated messages)."""
     st.markdown("---")
     st.markdown('<div class="fte-rail-title">💬 Co-Pilot</div>', unsafe_allow_html=True)
+
+    rows = st.session_state.get("fte_grid_rows") or []
 
     # Active context (real data only): the uploaded document names.
     active_docs = [html.escape(str(d.get("file_name", ""))) for d in (extraction_results or [])]
@@ -1870,18 +2150,43 @@ def _render_co_pilot(extraction_results, provider_health) -> None:
     )
     st.markdown('<div class="fte-cap">' + " · ".join(caps) + "</div>", unsafe_allow_html=True)
 
-    if not extraction_results:
-        st.caption("Upload a document, then ask about its verified evidence.")
-
     # Bounded conversation (last 4 messages).
     messages = st.session_state.get("chat_messages", []) or []
+    last_assistant_intent = ""
     for msg in messages[-4:]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and msg.get("metadata"):
-                structure = _copilot_structure(msg["metadata"])
+                metadata = msg["metadata"]
+                last_assistant_intent = metadata.get("intent", "")
+                structure = _copilot_structure(metadata, rows)
                 st.caption(" · ".join(structure))
-                _render_chat_provenance(msg["metadata"])
+                _render_chat_provenance(metadata)
+
+    # Honest blocked/empty state for broad questions: one compact line
+    # plus what the workspace actually holds — never a second duplicate
+    # 'BLOCKED / NOT VERIFIED' banner.
+    if last_assistant_intent in _BLOCKED_INTENTS:
+        counts = _row_counts(rows) if rows else {"verified": 0, "derived": 0, "unanalyzed": 0, "conflict": 0, "blocked": 0}
+        st.markdown(
+            '<div class="fte-caps">'
+            f"Grid status — {counts['verified']} verified · {counts['derived']} derived · "
+            f"{counts['blocked']} blocked · {counts['unanalyzed']} unanalyzed. "
+            "Try a specific metric (revenue, ROE, current ratio…), a calculation (CAGR, change), "
+            "or a company ticker."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Empty state: suggested prompts lead into the same verified flow.
+    if not messages and not extraction_results:
+        st.caption("Upload a document, then ask about its verified evidence — or start with one of these:")
+        cols = st.columns(2)
+        for i, prompt in enumerate(CHAT_SUGGESTED_PROMPTS[:4]):
+            with cols[i % 2]:
+                if st.button(prompt, key=f"fte_suggest_{i}", use_container_width=True):
+                    _submit_chat_question(prompt, extraction_results, provider_health)
+                    st.rerun()
 
     user_input = st.chat_input("Ask about the selected financial evidence…")
     if user_input:
