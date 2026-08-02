@@ -1,64 +1,203 @@
 <!doctype html>
+<!--
+  Financial Timeline Engine — Institutional Terminal (Phase 0–1)
+  ------------------------------------------------------------------
+  Layout contract (later phases plug into this without a redesign):
+    header.site-header          → brand + gateway chrome + rail toggles
+    .workspace                  → CSS grid, three fixed panes:
+      aside.rail--left          → Source / Context rail   (company context, market)
+      section.center            → Financial workspace     (tabs + grid + provenance tray)
+      aside.rail--right         → Co-Pilot rail           (goal-driven analyst)
+    .provenance-tray            → anchored bottom tray, fixed height, 150ms crossfade
+
+  Phase 0–1 scope only: theme layer, stable 3-pane foundation, financial grid
+  foundation, anchored provenance tray, header chrome, humanized language,
+  zero-layout-shift (motion tokens, skeletons, textContent-only updates).
+
+  Deliberately NOT implemented yet (later phases): blocked/conflict workflows,
+  override flows, student mode, mobile UX, watchlist/alerts, compliance UI,
+  progressive-hydration backend integration.
+-->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Financial Timeline Engine — Agentic RAG Intelligence Terminal</title>
+  <title>Financial Timeline Engine — Institutional Terminal</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
 
+  <!-- ===================== Header chrome ===================== -->
   <header class="site-header">
     <div class="brand">
-      <span class="brand-mark">FTE</span>
+      <span class="brand-mark" aria-hidden="true">FTE</span>
       <div class="brand-text">
         <strong>Financial Timeline Engine</strong>
-        <span>Agentic RAG Intelligence Terminal</span>
+        <span>Institutional Terminal</span>
       </div>
     </div>
+
     <div class="header-actions">
-      <span id="health-pill" class="health-pill" title="API health">
-        <span class="dot"></span> checking…
-      </span>
-      <a class="btn btn-ghost" href="#analyze">Analyze</a>
+      <!-- Gateway indicator: compact, click to open the status popover -->
+      <button
+        type="button"
+        id="gateway-pill"
+        class="gateway-pill"
+        aria-haspopup="true"
+        aria-expanded="false"
+        title="Gateway status — click for details"
+      >
+        <span class="dot" aria-hidden="true"></span>
+        <span id="gateway-label">Gateway · connecting…</span>
+      </button>
+
+      <!-- Status popover (compact detail; full status lives in the System tab) -->
+      <div id="gateway-popover" class="popover" hidden role="region" aria-label="Gateway status">
+        <div class="popover-head">
+          <strong>Gateway status</strong>
+          <span id="popover-latency" class="popover-meta"></span>
+        </div>
+        <div id="popover-status" class="popover-body"><span class="skeleton-line"></span></div>
+        <details class="debug-drawer">
+          <summary>Technical detail</summary>
+          <div id="popover-technical" class="debug-drawer-body"></div>
+        </details>
+      </div>
+
+      <div class="rail-controls" role="group" aria-label="Pane controls">
+        <button type="button" id="rail-left-toggle" class="btn btn-ghost btn-sm" title="Collapse source rail" aria-label="Collapse source rail">&laquo;</button>
+        <button type="button" id="rail-right-toggle" class="btn btn-ghost btn-sm" title="Collapse Co-Pilot rail" aria-label="Collapse Co-Pilot rail">&raquo;</button>
+      </div>
     </div>
   </header>
 
-  <main>
-    <!-- Hero -->
-    <section class="hero">
-      <p class="eyebrow">Stage 2 · Standalone Web Backend</p>
-      <h1>Financial intelligence,<br /><em>grounded in evidence.</em></h1>
-      <p class="lede">
-        Ask a financial question about any company. The engine retrieves data from
-        PostgreSQL and live providers, then runs it through a multi-gate validation
-        pipeline — source resolution, currency checks, extraction audits — before
-        presenting a canonical evidence set.
-      </p>
-      <div class="hero-cta">
-        <a class="btn btn-primary" href="#analyze">Run an analysis</a>
-        <a class="btn btn-ghost" href="#status">View system status</a>
+  <!-- ===================== 3-pane workspace ===================== -->
+  <div class="workspace" id="workspace">
+
+    <!-- ---------- Left rail: Source / Context ---------- -->
+    <aside class="rail rail--left" id="rail-left" aria-label="Source and context">
+      <div class="rail-head">
+        <span class="rail-title">Source &amp; Context</span>
+        <button type="button" class="btn btn-ghost btn-sm" id="refresh-market" title="Refresh market context">↻</button>
       </div>
-      <ul class="pipeline-strip" aria-label="Pipeline">
-        <li>Browser</li><li class="arrow">→</li>
-        <li>FastAPI backend</li><li class="arrow">→</li>
-        <li>Phase 6 intelligence</li><li class="arrow">→</li>
-        <li>PostgreSQL</li><li class="arrow">→</li>
-        <li>AI &amp; financial providers</li>
-      </ul>
+
+      <form id="market-form" class="inline-form" autocomplete="off">
+        <div class="field">
+          <label for="mkt-ticker">Company</label>
+          <input id="mkt-ticker" name="mkt-ticker" value="AAPL" maxlength="20" spellcheck="false" aria-label="Ticker" />
+        </div>
+        <button type="submit" class="btn btn-secondary btn-sm">Load</button>
+      </form>
+
+      <!-- Market context cards (stable container, skeleton on load) -->
+      <div id="market-result" class="context-stack" aria-live="polite"></div>
+      <div id="market-error" class="error-box" hidden></div>
+    </aside>
+
+    <!-- ---------- Center: Financial workspace ---------- -->
+    <section class="center" id="center" aria-label="Financial workspace">
+
+      <!-- Center tabs: stable, state preserved across data updates -->
+      <div class="center-tabs" role="tablist" aria-label="Workspace views">
+        <button type="button" id="tab-grid" class="tab active" role="tab" aria-selected="true" aria-controls="panel-grid">Financial Grid</button>
+        <button type="button" id="tab-intel" class="tab" role="tab" aria-selected="false" aria-controls="panel-intel">Intelligence</button>
+        <button type="button" id="tab-system" class="tab" role="tab" aria-selected="false" aria-controls="panel-system">System</button>
+      </div>
+
+      <div class="center-body">
+
+        <!-- ===== Tab 1: Financial grid ===== -->
+        <div id="panel-grid" class="tabpanel active" role="tabpanel" aria-labelledby="tab-grid">
+          <div class="grid-toolbar">
+            <div class="grid-context">
+              <span class="grid-ticker" id="grid-ticker">—</span>
+              <span class="grid-goal" id="grid-goal">Run an analysis from the Co-Pilot rail to populate verified metrics.</span>
+            </div>
+            <span class="grid-status" id="grid-status" role="status" aria-live="polite"></span>
+          </div>
+
+          <!-- Stable financial table: fixed layout, reserved row heights.
+               Rows are created once; only cell textContent/class update on
+               data arrival so the workspace never reflows. -->
+          <div class="grid-scroll">
+            <table class="financial-grid" id="financial-grid" aria-label="Verified financial metrics">
+              <thead>
+                <tr>
+                  <th scope="col" class="col-metric">Metric</th>
+                  <th scope="col" class="col-value">Value</th>
+                  <th scope="col" class="col-period">Period</th>
+                  <th scope="col" class="col-source">Source</th>
+                  <th scope="col" class="col-status">Status</th>
+                </tr>
+              </thead>
+              <tbody id="grid-body"><!-- rows rendered by app.js --></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== Tab 2: Intelligence ===== -->
+        <div id="panel-intel" class="tabpanel" role="tabpanel" aria-labelledby="tab-intel" hidden>
+          <div class="intel-head">
+            <div>
+              <h2 class="panel-title">Analysis summary</h2>
+              <p class="panel-sub" id="intel-goal"></p>
+            </div>
+            <span class="intel-state" id="intel-state">—</span>
+          </div>
+          <div id="intel-summary" class="summary">
+            <p class="empty-note">No analysis run yet. Ask a question in the Co-Pilot rail.</p>
+          </div>
+          <div class="intel-list-head">
+            <h3 class="panel-title">Evidence set</h3>
+            <span class="intel-meta" id="intel-meta"></span>
+          </div>
+          <div id="intel-facts" class="intel-facts"><p class="empty-note">No verified facts yet.</p></div>
+        </div>
+
+        <!-- ===== Tab 3: System ===== -->
+        <div id="panel-system" class="tabpanel" role="tabpanel" aria-labelledby="tab-system" hidden>
+          <div class="intel-head">
+            <div>
+              <h2 class="panel-title">System status</h2>
+              <p class="panel-sub">Component connectivity — credentials are never exposed.</p>
+            </div>
+            <button type="button" id="refresh-status" class="btn btn-ghost btn-sm">Refresh</button>
+          </div>
+          <div id="status-result" class="status-grid"></div>
+          <details class="debug-drawer" id="pipeline-drawer">
+            <summary>Pipeline technical detail</summary>
+            <div class="pipeline-strip" aria-hidden="false">
+              Browser → FastAPI backend → Phase 6 intelligence → PostgreSQL → AI &amp; financial providers
+            </div>
+          </details>
+        </div>
+
+        <!-- ===== Anchored Provenance Tray (persistent, fixed height) ===== -->
+        <div class="provenance-tray" id="provenance-tray" role="region" aria-label="Provenance tray" aria-live="polite">
+          <div class="tray-head">
+            <span class="tray-title">Provenance</span>
+            <span class="tray-status" id="tray-status">⚪ Unanalyzed</span>
+          </div>
+          <div class="tray-body" id="tray-body">
+            <p class="tray-empty">Select a metric in the grid to inspect its provenance.</p>
+          </div>
+        </div>
+
+      </div>
     </section>
 
-    <!-- Analyzer -->
-    <section id="analyze" class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>Financial analyzer</h2>
-          <p>Goal-driven Agentic RAG over the evidence store.</p>
-        </div>
+    <!-- ---------- Right rail: Co-Pilot ---------- -->
+    <aside class="rail rail--right" id="rail-right" aria-label="Co-Pilot">
+      <div class="rail-head">
+        <span class="rail-title">Co-Pilot</span>
+        <span class="rail-capability" id="capability-dots" title="Capabilities update as analysis progresses">○ idle</span>
       </div>
-      <form id="analyze-form" class="analyze-form" autocomplete="off">
+
+      <div class="copilot-context" id="copilot-context">No company loaded</div>
+
+      <form id="analyze-form" class="copilot-form" autocomplete="off">
         <div class="field">
           <label for="ticker">Ticker</label>
           <input id="ticker" name="ticker" value="AAPL" required maxlength="20" spellcheck="false" />
@@ -74,54 +213,20 @@
             spellcheck="false"
           />
         </div>
-        <button type="submit" class="btn btn-primary" id="analyze-btn">Run analysis</button>
+        <button type="submit" class="btn btn-primary" id="analyze-btn">Analyze</button>
       </form>
-      <div id="analyze-result" class="result" hidden>
-        <div class="result-head">
-          <span class="terminal-state" id="term-state">—</span>
-          <span class="result-meta" id="result-meta"></span>
-        </div>
-        <pre id="summary-text" class="summary"></pre>
-        <div id="facts" class="facts"></div>
+
+      <!-- Analyst response (bounded; direct answer first, detail behind accordion) -->
+      <div id="copilot-response" class="copilot-response" aria-live="polite">
+        <p class="empty-note">Ask a financial question. Every figure is verified against evidence — the terminal never invents numbers.</p>
       </div>
       <div id="analyze-error" class="error-box" hidden></div>
-    </section>
+    </aside>
 
-    <!-- Market snapshot -->
-    <section class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>Market snapshot</h2>
-          <p>Live profile, price, financials &amp; news via the provider failover chain.</p>
-        </div>
-        <button id="refresh-market" class="btn btn-ghost btn-sm" type="button">Refresh</button>
-      </div>
-      <form id="market-form" class="inline-form" autocomplete="off">
-        <div class="field">
-          <label for="mkt-ticker">Ticker</label>
-          <input id="mkt-ticker" name="mkt-ticker" value="AAPL" maxlength="20" spellcheck="false" />
-        </div>
-        <button type="submit" class="btn btn-secondary btn-sm">Load</button>
-      </form>
-      <div id="market-result" class="market-grid" hidden></div>
-      <div id="market-error" class="error-box" hidden></div>
-    </section>
-
-    <!-- System status -->
-    <section id="status" class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>System status</h2>
-          <p>Component connectivity — no credentials are ever exposed.</p>
-        </div>
-        <button id="refresh-status" class="btn btn-ghost btn-sm" type="button">Refresh</button>
-      </div>
-      <div id="status-result" class="status-grid"></div>
-    </section>
-  </main>
+  </div>
 
   <footer class="site-footer">
-    <span>Financial Timeline Engine — Stage 2</span>
+    <span>Financial Timeline Engine — Institutional Terminal</span>
     <span class="api-ref">API: <code>/api/v1/health</code> · <code>/api/v1/market/{ticker}</code> · <code>/api/v1/intelligence/analyze</code></span>
   </footer>
 
