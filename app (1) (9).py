@@ -73,7 +73,7 @@ from backend.module3_controller import run_module3
 # why. The names below are kept as module-level aliases so every existing
 # reference further down in this file (PRIMARY_MODEL, CHUNK_SIZE, etc.)
 # continues to work completely unchanged.
-st.set_page_config(page_title="Financial Timeline Engine", layout="centered")
+st.set_page_config(page_title="Financial Timeline Engine", layout="wide")
 
 PRIMARY_MODEL = SETTINGS.primary_model
 FALLBACK_MODEL = SETTINGS.fallback_model
@@ -1308,6 +1308,70 @@ def render_financial_assistant(extraction_results, provider_health):
 
 
 # =============================================================================
+# SECTION 10b: Institutional Terminal embed (Phase 0–1 frontend via iframe)
+# =============================================================================
+# The Phase 0–1 institutional terminal (frontend/index.html, styles.css,
+# app.js) is a static SPA served by the FastAPI backend (api.main:app →
+# StaticFiles at "/", data at /api/v1/*). It runs on its own origin, so
+# Streamlit embeds it with an iframe. URL resolution: FTE_TERMINAL_URL
+# secret/env override → http://localhost:5000/ (the dev launcher runs the
+# FastAPI service on that port alongside Streamlit).
+_TERMINAL_EMBED_HEIGHT = 780
+_TERMINAL_PROBE_TTL_SECONDS = 30
+
+
+def _terminal_base_url() -> str:
+    """Resolve the terminal URL: FTE_TERMINAL_URL override, else local FastAPI."""
+    override = str(get_secret("FTE_TERMINAL_URL", "") or "").strip().rstrip("/")
+    return f"{override}/" if override else "http://localhost:5000/"
+
+
+def _terminal_reachable(url: str, timeout: float = 2.5) -> bool:
+    """Server-side reachability probe (short timeout; never blocks the app)."""
+    try:
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "fte-embed-probe"})
+        return resp.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def render_terminal_embed() -> None:
+    """Render the institutional terminal inside the Streamlit workspace.
+
+    The financial grid, provenance tray and gateway chrome live in the
+    FastAPI-served SPA; Streamlit hosts it in a fixed-height iframe so the
+    existing ingestion → analysis workflow stays available below. If the
+    terminal service is unreachable the section degrades to a link instead
+    of a dead iframe.
+    """
+    st.subheader("🖥️ Institutional Terminal")
+    url = _terminal_base_url()
+
+    probe_key = "fte_terminal_probe"
+    cached = st.session_state.get(probe_key)
+    now = datetime.now(timezone.utc)
+    if cached and (now - cached["at"]).total_seconds() < _TERMINAL_PROBE_TTL_SECONDS:
+        reachable = cached["ok"]
+    else:
+        reachable = _terminal_reachable(url)
+        st.session_state[probe_key] = {"ok": reachable, "at": now}
+
+    if reachable:
+        st.components.v1.iframe(src=url, height=_TERMINAL_EMBED_HEIGHT, scrolling=True)
+        st.caption(f"Embedded terminal — {url}")
+    else:
+        st.info("The institutional terminal service isn't reachable from this instance right now.")
+        st.link_button("Open terminal in new tab", url)
+
+    with st.expander("Terminal connection", expanded=False):
+        st.caption(f"Resolved URL: `{url}`")
+        st.caption(
+            "Set the `FTE_TERMINAL_URL` secret/env var to point at a publicly "
+            "deployed FastAPI terminal (e.g. Render/Railway via the Procfile)."
+        )
+
+
+# =============================================================================
 # SECTION 11: Main App / UI
 # =============================================================================
 def main():
@@ -1327,6 +1391,13 @@ def main():
         st.success(f"🟢 AI Status: Live ({provider})")
     else:
         st.info("🟡 AI Status: Provider(s) configured — awaiting first live generation")
+
+    # --- Institutional Terminal (Phase 0–1 frontend, embedded via iframe) ---
+    # The FastAPI service (scripts/dev.sh / Procfile) serves the terminal SPA
+    # at its own origin; Streamlit hosts it so the existing ingestion →
+    # analysis workflow stays available below. Degrades to a link when the
+    # service isn't reachable — never an error screen.
+    render_terminal_embed()
 
     with st.expander("🩺 Provider Health & Activity Log", expanded=False):
         provider_display = {
