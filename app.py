@@ -159,135 +159,81 @@ def _debug_stage(label, text):
 
 
 # =============================================================================
-# SECTION 3: AI Providers (Google AI Studio -> Groq -> OpenRouter)
+# SECTION 3: AI Providers (canonical gateway — backend/gateway/)
 # =============================================================================
+# backend/gateway/ is the SINGLE canonical AI provider/fallback system for
+# the whole application (workload-aware routing, capability detection,
+# provider health, deterministic failover, normalized responses, graceful
+# no-provider behavior, env-vars -> Streamlit-secrets configuration).
+#
+# The four legacy functions below are retained ONLY as thin compatibility
+# wrappers so existing callers/tests keep working; none of them implements
+# its own provider chain anymore. Every real generation request flows
+# through call_ai_with_fallback() -> AIExecutive.generate() ->
+# ProviderManager/router/adapters. A missing optional provider (e.g.
+# OpenRouter) is skipped by the gateway's failover and can NEVER surface as
+# a raw provider-specific error string.
+
+NO_ELIGIBLE_PROVIDER_MESSAGE = (
+    "No eligible AI provider is configured. Add an AI provider key to continue."
+)
+
+
 def call_google_ai_studio(prompt_text, system_prompt=None, temperature=None):
-    """Calls Google AI Studio (Gemini) via the official google-genai SDK.
-    PRIMARY provider in the fallback chain."""
+    """Thin compatibility wrapper — generation now flows through the
+    canonical AI gateway (backend/gateway). Kept only so existing
+    callers/tests keep working; checks the Google key, then delegates
+    to `call_ai_with_fallback` (the app's single provider chain)."""
     api_key = get_secret("GOOGLE_API_KEY", "")
     if not api_key:
         raise ValueError("Missing Google Key")
-    client = genai.Client(api_key=api_key)
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt if system_prompt else None,
-        temperature=temperature if temperature is not None else None,
-    )
-    res = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=str(prompt_text),
-        config=config,
-    )
-    if res.text:
-        return res.text
-    raise RuntimeError("Empty response")
+    return call_ai_with_fallback(prompt_text, system_prompt=system_prompt, temperature=temperature)
 
 
 def call_groq_engine(prompt_text, system_prompt=None, temperature=None):
-    """Calls the Groq API directly. SECONDARY provider in the fallback
-    chain. Tries each model in GROQ_MODELS in order; if one is
-    decommissioned, rate-limited (429), or errors out, automatically
-    retries with the next model. Only raises once every model has failed."""
+    """Thin compatibility wrapper — generation now flows through the
+    canonical AI gateway (backend/gateway). Kept only so existing
+    callers/tests keep working; checks the Groq key, then delegates
+    to `call_ai_with_fallback` (the app's single provider chain)."""
     api_key = get_secret("GROQ_API_KEY", "")
     if not api_key:
         raise ValueError("Missing Groq Key")
-
-    endpoint = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": str(prompt_text)})
-
-    last_error = None
-    for model_id in GROQ_MODELS:
-        try:
-            payload = {"model": model_id, "messages": messages}
-            if temperature is not None:
-                payload["temperature"] = temperature
-            res = requests.post(endpoint, headers=headers, json=payload, timeout=GROQ_TIMEOUT_SECONDS)
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"]
-            elif res.status_code == 429:
-                last_error = RuntimeError(f"Groq model '{model_id}' rate-limited (HTTP 429); trying next model.")
-            else:
-                last_error = RuntimeError(f"Groq model '{model_id}' failed with status: {res.status_code}")
-        except Exception as e:
-            last_error = e
-
-    raise last_error
+    return call_ai_with_fallback(prompt_text, system_prompt=system_prompt, temperature=temperature)
 
 
 def _openrouter_request(prompt_text, model_id, system_prompt=None, temperature=None):
-    """Shared helper for a single OpenRouter chat-completion call.
-    Returns (success: bool, content_or_error: str)."""
+    """Thin compatibility wrapper — generation now flows through the
+    canonical AI gateway (backend/gateway), which skips unavailable
+    providers deterministically. Returns (success: bool, content_or_error).
+    A missing OpenRouter key yields the shared graceful no-provider
+    message — never a raw provider-specific error string."""
     api_key = get_secret("OPENROUTER_API_KEY", "")
     if not api_key:
-        return False, "❌ OpenRouter API Key missing inside Streamlit Secrets panel."
-
-    endpoint = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://streamlit.app",
-        "X-Title": "Financial Timeline Engine"
-    }
-
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": str(prompt_text)})
-
-    payload = {"model": model_id, "messages": messages}
-    if temperature is not None:
-        payload["temperature"] = temperature
-
-    try:
-        res = requests.post(endpoint, headers=headers, json=payload, timeout=OPENROUTER_TIMEOUT_SECONDS)
-    except requests.exceptions.Timeout:
-        return False, "TIMEOUT"
-    except Exception:
-        return False, "🔴 AI server busy or experiencing high latency volume right now. Please tap regenerate to claim a fresh server slot link."
-
-    if res.status_code == 200:
-        try:
-            data = res.json()
-            if "choices" in data and len(data["choices"]) > 0:
-                st.session_state["ai_connected"] = True
-                return True, data["choices"][0]["message"]["content"]
-            return False, "⚠️ OpenRouter returned an empty choices payload. Please try clicking the button again."
-        except Exception:
-            return False, "⚠️ OpenRouter server returned a malformed response. The free pool is heavily congested right now. Please try again in 10 seconds!"
-    else:
-        return False, f"❌ OpenRouter Connection Failed. Server status code: {res.status_code}. Please retry."
+        return False, NO_ELIGIBLE_PROVIDER_MESSAGE
+    result = call_ai_with_fallback(prompt_text, system_prompt=system_prompt, temperature=temperature)
+    if result.startswith(("❌", "🔴", "⚠️")):
+        return False, result
+    return True, result
 
 
 def call_openrouter_engine(prompt_text, system_prompt=None, temperature=None):
-    """Sends requests to OpenRouter, with a retry against a fallback
-    OpenRouter model. FINAL fallback in the three-provider chain."""
+    """Thin compatibility wrapper — generation now flows through the
+    canonical AI gateway (backend/gateway). Kept only so existing
+    callers/tests keep working."""
     if system_prompt is None:
         system_prompt = (
             "You are an elite Wall Street financial research analyst. Generate "
             "structured multi-section corporate reports with key dates, events, "
             "and milestones."
         )
-
-    success, result = _openrouter_request(prompt_text, PRIMARY_MODEL, system_prompt=system_prompt, temperature=temperature)
-    if success:
-        return result
-
-    success, result = _openrouter_request(prompt_text, FALLBACK_MODEL, system_prompt=system_prompt, temperature=temperature)
-    if success:
-        return result
-
-    if result == "TIMEOUT":
-        return "🔴 AI server busy or experiencing high latency volume right now. Please tap regenerate to claim a fresh server slot link."
+    _, result = _openrouter_request(prompt_text, PRIMARY_MODEL, system_prompt=system_prompt, temperature=temperature)
     return result
 
 
 def _get_ai_executive():
     """Lazy singleton: initialises the AI Executive gateway on first use.
-    Returns None if the module isn't available (safe fallback to old
-    chain)."""
+    Returns None if the module isn't available (graceful no-provider
+    behavior downstream)."""
     global _ai_executive
     if _ai_executive is None:
         try:
@@ -296,6 +242,30 @@ def _get_ai_executive():
         except Exception:
             _ai_executive = None
     return _ai_executive
+
+
+def get_canonical_provider_status():
+    """Per-provider status from the canonical ProviderManager
+    (backend/gateway). Returns {slug: "available" |
+    "configured_unavailable" | "not_configured"} for every registered
+    provider, so the UI can distinguish 🟢 available / 🟡 configured but
+    unavailable / ⚪ not configured instead of claiming live connectivity
+    from a key alone."""
+    executive = _get_ai_executive()
+    if executive is None:
+        return {}
+    pm = executive.provider_manager
+    status = {}
+    for name in pm.DEFAULT_PRIORITY:
+        keyed = pm.key_status().get(name, False)
+        adapter = pm.get(name)
+        if keyed and adapter is not None and adapter.health_check():
+            status[name] = "available"
+        elif keyed:
+            status[name] = "configured_unavailable"
+        else:
+            status[name] = "not_configured"
+    return status
 
 
 def _detect_task_type(system_prompt, prompt_text):
@@ -328,22 +298,20 @@ def _detect_task_type(system_prompt, prompt_text):
 
 
 def call_ai_with_fallback(prompt_text, system_prompt=None, temperature=None):
-    """Multi-provider AI call with AI Executive gateway as the primary
-    path, falling back to the original Google -> Groq -> OpenRouter chain
-    if the gateway fails.
+    """SINGLE canonical AI entry point for the entire application.
 
-    The gateway provides:
-    - Workload-aware routing (financial analysis -> NVIDIA, simple -> Groq)
-    - Deterministic failover across 9 providers
-    - Redis quota/circuit-breaker tracking
-    - Normalized responses
+    Delegates exclusively to the AI Executive gateway (backend/gateway/):
+        prompt -> AIExecutive.generate -> Router (workload-aware)
+               -> ProviderManager + adapters (Google -> Groq -> OpenRouter
+                  -> NVIDIA -> ... deterministic failover)
+               -> normalized response -> content
 
-    The original chain is preserved as a safety net in case of gateway
-    module errors or configuration issues.
+    There is no second provider chain anywhere in app.py. Missing optional
+    providers are skipped by the gateway's failover, so a missing
+    OPENROUTER_API_KEY can never block an available Groq key and can never
+    surface as a raw error string. If no eligible provider exists (or the
+    gateway is unavailable), the shared graceful message is returned.
     """
-    # ------------------------------------------------------------------
-    # PATH A: AI Executive Gateway (primary)
-    # ------------------------------------------------------------------
     executive = _get_ai_executive()
     if executive is not None:
         try:
@@ -360,45 +328,20 @@ def call_ai_with_fallback(prompt_text, system_prompt=None, temperature=None):
                 _log_provider_event("call_ai_with_fallback", response.provider, "success",
                                     f"task={task_type}, model={response.model}, latency={response.latency_ms}ms")
                 return response.content
-            # Gateway returned an error -- log and fall through
+            # Gateway returned an error -- log and return the graceful
+            # no-provider message (never a raw provider error string).
             _log_provider_event("call_ai_with_fallback", "gateway", "failed",
-                                f"task={task_type}, error={response.error[:100] if response.error else 'unknown'}")
+                                f"task={task_type}, error={(response.error or 'unknown')[:100]}")
         except Exception as e:
             _log_provider_event("call_ai_with_fallback", "gateway", "failed",
                                 f"exception={type(e).__name__}: {str(e)[:100]}")
 
-    # ------------------------------------------------------------------
-    # PATH B: Original fallback chain (preserved for safety)
-    # ------------------------------------------------------------------
-    # 1) PRIMARY: Google AI Studio
-    try:
-        result = _retry(lambda: call_google_ai_studio(prompt_text, system_prompt=system_prompt, temperature=temperature))
-        st.session_state["ai_connected"] = True
-        st.session_state["ai_provider_used"] = "Google AI Studio"
-        _log_provider_event("call_ai_with_fallback", "Google AI Studio", "success")
-        return result
-    except Exception as e:
-        _log_provider_event("call_ai_with_fallback", "Google AI Studio", "failed", f"{type(e).__name__}: {e}")
-
-    # 2) SECONDARY: Groq
-    try:
-        result = _retry(lambda: call_groq_engine(prompt_text, system_prompt=system_prompt, temperature=temperature))
-        st.session_state["ai_connected"] = True
-        st.session_state["ai_provider_used"] = "Groq"
-        _log_provider_event("call_ai_with_fallback", "Groq", "success")
-        return result
-    except Exception as e:
-        _log_provider_event("call_ai_with_fallback", "Groq", "failed", f"{type(e).__name__}: {e}")
-
-    # 3) FINAL FALLBACK: OpenRouter (already has its own internal 2-model retry)
-    result = call_openrouter_engine(prompt_text, system_prompt=system_prompt, temperature=temperature)
-    if not (result.startswith("❌") or result.startswith("🔴") or result.startswith("⚠️")):
-        st.session_state["ai_connected"] = True
-        st.session_state["ai_provider_used"] = "OpenRouter"
-        _log_provider_event("call_ai_with_fallback", "OpenRouter", "success")
-    else:
-        _log_provider_event("call_ai_with_fallback", "OpenRouter", "failed", result)
-    return result
+    # No eligible provider / gateway unavailable: graceful and machine-
+    # detectable (⚠️ is in ERROR_RESPONSE_MARKERS) so downstream pipeline
+    # stages degrade instead of treating this as generated content.
+    st.session_state["ai_connected"] = False
+    st.session_state["ai_provider_used"] = ""
+    return f"⚠️ {NO_ELIGIBLE_PROVIDER_MESSAGE}"
   
 # =============================================================================
 # SECTION 4: Document Processing (chunking, summarization, hierarchical merge)
@@ -1370,19 +1313,42 @@ def render_financial_assistant(extraction_results, provider_health):
 def main():
     st.title("📈 Financial Timeline Engine")
 
-    # --- AI status (Phase 1: provider health detection) ---
+    # --- AI status (canonical provider health via backend/gateway) ---
+    # Status states: 🔴 no eligible provider / 🟢 live generation verified /
+    # 🟡 configured but no live call yet. Per-provider detail comes from the
+    # canonical ProviderManager (available / configured_unavailable /
+    # not_configured), never from a bare key presence check.
     health = get_provider_health()
     has_any_key = any(health.values())
     if not has_any_key:
-        st.error("🔴 AI Status: Offline (No AI Provider Keys Found in Streamlit Secrets)")
+        st.error(f"🔴 AI Status: Offline — {NO_ELIGIBLE_PROVIDER_MESSAGE}")
     elif st.session_state["ai_connected"]:
         provider = st.session_state.get("ai_provider_used", "AI Provider")
-        st.success(f"🟢 AI Status: Connected & Verified Live ({provider})")
+        st.success(f"🟢 AI Status: Live ({provider})")
     else:
-        st.info("🟡 AI Status: API Key(s) Loaded (Awaiting First Live Document Generation Connection)")
+        st.info("🟡 AI Status: Provider(s) configured — awaiting first live generation")
 
     with st.expander("🩺 Provider Health & Activity Log", expanded=False):
-        health_df = pd.DataFrame([{"Provider": k, "Configured": "✅" if v else "❌"} for k, v in health.items()])
+        provider_display = {
+            "google": "Google AI Studio", "groq": "Groq", "openrouter": "OpenRouter",
+            "nvidia": "NVIDIA", "rapidapi": "RapidAPI", "sambanova": "SambaNova",
+            "github": "GitHub Models", "cerebras": "Cerebras", "cohere": "Cohere",
+        }
+        status_icon = {"available": "🟢", "configured_unavailable": "🟡", "not_configured": "⚪"}
+        canonical_status = get_canonical_provider_status()
+        health_rows = []
+        for slug, state in canonical_status.items():
+            health_rows.append({
+                "Provider": provider_display.get(slug, slug.replace("_", " ").title()),
+                "Status": f"{status_icon.get(state, '⚪')} {state.replace('_', ' ')}",
+            })
+        # Fall back to key-presence rows only if the gateway is unavailable.
+        if not health_rows:
+            health_rows = [
+                {"Provider": k, "Status": ("🟢 available" if v else "⚪ not configured")}
+                for k, v in health.items()
+            ]
+        health_df = pd.DataFrame(health_rows)
         st.dataframe(health_df, use_container_width=True, hide_index=True)
         if st.session_state["provider_log"]:
             st.dataframe(pd.DataFrame(st.session_state["provider_log"][-20:]), use_container_width=True, hide_index=True)

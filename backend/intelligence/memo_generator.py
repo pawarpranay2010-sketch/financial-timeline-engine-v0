@@ -275,6 +275,7 @@ Generate the investment memo below. Remember:
                 not memo_text
                 or "❌" in memo_text
                 or "🔴" in memo_text
+                or "⚠️" in memo_text
             )
 
             if is_error:

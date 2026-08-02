@@ -909,12 +909,22 @@ class FinancialChatAssistant:
                     v = _re.sub(pat, "[REDACTED]", v)
                 safe[k] = v
             elif isinstance(v, list):
-                safe[k] = [
-                    {kk: (_re.sub(r"sk-[A-Za-z0-9]{8,}", "[REDACTED]", str(vv)) if isinstance(vv, str) else vv)
-                     for kk, vv in (item.items() if isinstance(item, dict) else [])}
-                    if isinstance(item, dict) else item
-                    for item in v
-                ]
+                safe[k] = []
+                for item in v:
+                    if isinstance(item, dict):
+                        cleaned_item = {}
+                        for kk, vv in item.items():
+                            if isinstance(vv, str):
+                                for pat in patterns:
+                                    vv = _re.sub(pat, "[REDACTED]", vv)
+                            cleaned_item[kk] = vv
+                        safe[k].append(cleaned_item)
+                    elif isinstance(item, str):
+                        for pat in patterns:
+                            item = _re.sub(pat, "[REDACTED]", item)
+                        safe[k].append(item)
+                    else:
+                        safe[k].append(item)
             else:
                 safe[k] = v
         return safe

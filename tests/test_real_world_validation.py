@@ -104,11 +104,9 @@ test_cases = [
 ]
 
 from backend.gateway.ai_executive import AIExecutive as AE
-import importlib.util
-_app_spec = importlib.util.spec_from_file_location("app", "app (1) (9).py")
-_app_module = importlib.util.module_from_spec(_app_spec)
-_app_spec.loader.exec_module(_app_module)
-_detect_task_type = _app_module._detect_task_type
+# Canonical app module — the stale `app (1) (9).py` duplicate was retired
+# as part of the AI architecture unification.
+from app import _detect_task_type, _get_ai_executive, call_ai_with_fallback
 
 for name, prompt, sys_prompt, expected in test_cases:
     detected = _detect_task_type(sys_prompt, prompt)
@@ -615,11 +613,6 @@ check("Fallback chain does not crash", "PASS", "confirmed by all previous phases
 # 10c: Verify the original call_ai_with_fallback wrapper works
 # (import test — can't fully test without Streamlit)
 try:
-    import sys
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    # Verify the function exists and has the new signature
-    _get_ai_executive = _app_module._get_ai_executive
-    call_ai_with_fallback = _app_module.call_ai_with_fallback
     exec_ = _get_ai_executive()
     check("app.py call_ai_with_fallback imports", "PASS" if exec_ is not None else "WARN",
           "AIExecutive lazy singleton available")

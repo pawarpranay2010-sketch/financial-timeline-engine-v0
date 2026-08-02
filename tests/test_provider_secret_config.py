@@ -194,24 +194,23 @@ class TestAppProviderFunctions(unittest.TestCase):
             m.assert_called_once_with("GROQ_API_KEY", "")
             self.assertIn("Missing Groq Key", str(ctx.exception))
 
-    def test_groq_sends_configured_key_without_exposing(self):
-        # With a key present via get_secret, the Authorization header
-        # carries it (runtime-only) and no value leaks into the response.
+    def test_groq_delegates_to_canonical_gateway_without_exposing(self):
+        # With a key present via get_secret, the thin compatibility wrapper
+        # delegates to the canonical AI gateway (call_ai_with_fallback). The
+        # key value must never leak into the returned response.
         import app as app_module
 
         os.environ["GROQ_API_KEY"] = "runtime-groq-secret"
         with mock.patch.object(app_module, "get_secret",
                                return_value="runtime-groq-secret") as m:
-            with mock.patch("app.requests.post") as post:
-                post.return_value.status_code = 200
-                post.return_value.json.return_value = {
-                    "choices": [{"message": {"content": "ok"}}]
-                }
+            with mock.patch.object(app_module, "call_ai_with_fallback",
+                                   return_value="ok") as fallback:
                 result = app_module.call_groq_engine("hello")
-            self.assertEqual(result, "ok")
-            m.assert_called_once_with("GROQ_API_KEY", "")
-            auth_header = post.call_args.kwargs["headers"]["Authorization"]
-            self.assertEqual(auth_header, "Bearer runtime-groq-secret")
+        self.assertEqual(result, "ok")
+        m.assert_called_once_with("GROQ_API_KEY", "")
+        fallback.assert_called_once()
+        self.assertNotIn("runtime-groq-secret", str(result))
+        self.assertNotIn("runtime-groq-secret", str(fallback.call_args))
 
     def test_no_st_secrets_reads_in_provider_functions(self):
         # Regression: provider functions must not bypass the chain with
