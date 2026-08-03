@@ -1527,6 +1527,48 @@ _FTE_CSS = """
 [data-testid="stSegmentedControl"] label:has(input:focus-visible) {
   outline: 2px solid var(--fte-conflict); outline-offset: 1px;
 }
+
+/* Sprint 2: focused metric-detail overlay (grid stays visible behind it) */
+.fte-modal-wrap {
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(6, 9, 14, 0.62); backdrop-filter: blur(2px);
+  padding: 1.5rem;
+  animation: fteFade var(--fade-provenance) ease-out;
+}
+.fte-modal-card {
+  width: min(440px, 100%); max-height: 88vh; overflow: auto;
+  background: var(--fte-panel); border: 1px solid var(--fte-border);
+  border-radius: 12px; padding: 1.15rem 1.25rem 1.1rem;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .5);
+}
+.fte-modal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.fte-modal-title { font-weight: 650; font-size: 1.05rem; color: var(--fte-text); }
+.fte-modal-status { font-size: .85rem; white-space: nowrap; }
+.fte-modal-value {
+  font-size: 1.55rem; font-weight: 700; color: var(--fte-text);
+  margin: .55rem 0 .9rem; letter-spacing: .01em;
+}
+.fte-modal-sec { border-top: 1px solid var(--fte-border); margin-top: .7rem; padding-top: .6rem; }
+.fte-modal-sec-t {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--fte-muted); font-weight: 600; margin-bottom: .35rem;
+}
+.fte-modal-sec-b { font-size: .86rem; color: var(--fte-text); line-height: 1.5; }
+.fte-modal-pv { display: grid; grid-template-columns: 96px 1fr; gap: 5px; font-size: .82rem; padding: 2px 0; }
+.fte-modal-pv .k { color: var(--fte-muted); }
+.fte-modal-pv .v { color: var(--fte-text); overflow-wrap: anywhere; }
+.fte-modal-pv.missing .v { color: var(--fte-muted); font-style: italic; opacity: .75; }
+.fte-modal-note {
+  margin-top: .65rem; padding: .45rem .6rem; font-size: .78rem; color: var(--fte-blocked);
+  border-left: 2px solid var(--fte-blocked); background: rgba(224,82,82,.06); border-radius: 4px;
+}
+.fte-modal-frag {
+  font-size: .8rem; color: var(--fte-text); background: rgba(127,127,127,.06);
+  border-left: 2px solid var(--fte-border); padding: .5rem .6rem; border-radius: 4px;
+  margin-top: .35rem; max-height: 130px; overflow: auto; line-height: 1.45;
+}
+.fte-modal-frag.empty { color: var(--fte-muted); font-style: italic; }
 """
 
 _TERMINAL_METRICS = [
@@ -1572,6 +1614,9 @@ def _init_terminal_state() -> None:
         ("fte_user_email", ""),
         ("fte_forgot_hint", False),
         ("fte_memo_draft", ""),
+        ("fte_overlay_open", False),
+        ("fte_overlay_show_source", False),
+        ("fte_prev_selection_rows", ()),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -2014,6 +2059,8 @@ def _render_financial_grid(module3_result) -> None:
             st.caption("No metrics match the current filter — choose another taxonomy state or 'All metrics'.")
         else:
             st.caption("Upload a financial document and run the intelligence pipeline to populate the grid.")
+        st.session_state["fte_overlay_open"] = False
+        st.session_state["fte_overlay_show_source"] = False
         return
 
     st.dataframe(
@@ -2041,9 +2088,16 @@ def _render_financial_grid(module3_result) -> None:
         sel_rows = sel.selection.rows if sel is not None else ()
     except Exception:
         sel_rows = ()
-    resolved = _resolve_grid_selection(
-        shown, st.session_state.get("fte_selected_metric"), sel_rows
-    )
+    prev_sel_rows = tuple(st.session_state.get("fte_prev_selection_rows") or ())
+    st.session_state["fte_prev_selection_rows"] = tuple(sel_rows) if sel_rows else ()
+    fresh_click = bool(sel_rows) and tuple(sel_rows) != prev_sel_rows
+
+    was_selected = st.session_state.get("fte_selected_metric")
+    resolved = _resolve_grid_selection(shown, was_selected, sel_rows)
+    # A stale selection index (row order changed after a filter) must not
+    # leave the grid unselected: fall back to the persisted-metric rules.
+    if resolved is None and shown:
+        resolved = _resolve_grid_selection(shown, was_selected, ())
     if resolved is not None:
         st.session_state["fte_selected_metric"] = resolved
     if not sel_rows and resolved is not None:
@@ -2056,6 +2110,22 @@ def _render_financial_grid(module3_result) -> None:
                 widget.selection.rows = [restore_idx]
         except Exception:
             pass
+
+    # Sprint 2: focused metric-detail overlay. Opens on a fresh row click;
+    # stays open only while its metric remains selected and visible.
+    if fresh_click and resolved is not None:
+        st.session_state["fte_overlay_open"] = True
+        st.session_state["fte_overlay_show_source"] = False
+    elif st.session_state.get("fte_overlay_open"):
+        metric_now = st.session_state.get("fte_selected_metric")
+        visible = metric_now is not None and any(
+            r["metric"] == metric_now for r in shown
+        )
+        if not visible or resolved != was_selected:
+            st.session_state["fte_overlay_open"] = False
+            st.session_state["fte_overlay_show_source"] = False
+
+    _render_metric_overlay(module3_result)
 
 
 def _provenance_tray_html(rows, module3_result, metric) -> str:
@@ -2141,6 +2211,215 @@ def _render_provenance_tray(module3_result) -> None:
     rows = st.session_state.get("fte_grid_rows") or []
     metric = st.session_state.get("fte_selected_metric")
     st.markdown(_provenance_tray_html(rows, module3_result, metric), unsafe_allow_html=True)
+
+
+# =============================================================================
+# Sprint 2: focused metric-detail overlay (presentation only — pipeline is the
+# only source of truth; missing fields render "—", never fabricated).
+# =============================================================================
+# Static, human-written one-line explanations. Educational text only — never
+# used to generate values. Metrics without an entry simply omit the section.
+_METRIC_EXPLAINER = {
+    "revenue": "Money the company earned from selling its products or services during the period.",
+    "net profit": "What the company kept after all expenses, interest and taxes.",
+    "net income": "What the company kept after all expenses, interest and taxes.",
+    "ebitda": "Operating profit before interest, taxes, depreciation and amortisation — a cash-earnings view.",
+    "operating profit": "Profit from core operations, before interest and tax.",
+    "operating income": "Profit from core operations, before interest and tax.",
+    "eps": "Earnings per share — the profit attributable to each share of stock.",
+    "debt": "Borrowings the company must repay, including loans and bonds.",
+    "total debt": "Borrowings the company must repay, including loans and bonds.",
+    "assets": "Everything the company owns or is owed, as recorded on the balance sheet.",
+    "total assets": "Everything the company owns or is owed, as recorded on the balance sheet.",
+    "liabilities": "What the company owes to others.",
+    "total liabilities": "What the company owes to others.",
+    "equity": "Shareholders' equity — the owners' stake in the company.",
+    "shareholders' equity": "Shareholders' equity — the owners' stake in the company.",
+    "cash flow": "Cash generated from operations during the period.",
+    "operating cash flow": "Cash generated from core operations during the period.",
+    "profit margin": "Profit as a share of revenue — how much of each sale is kept.",
+    "operating margin": "Operating profit as a share of revenue — core business efficiency.",
+    "net margin": "Net profit as a share of revenue — overall profitability per rupee of sales.",
+    "roe": "Return on equity — the profit the company generates per unit of shareholder money.",
+    "roa": "Return on assets — the profit the company generates per unit of total assets.",
+    "debt to equity": "Borrowings relative to shareholder equity — a measure of financial leverage.",
+    "debt/equity": "Borrowings relative to shareholder equity — a measure of financial leverage.",
+    "debt / equity": "Borrowings relative to shareholder equity — a measure of financial leverage.",
+    "current ratio": "Current assets divided by current liabilities — a short-term solvency check.",
+    "cagr": "Compound annual growth rate — the smoothed yearly growth over the period.",
+    "pat": "Profit after tax — the bottom-line profit attributable to shareholders.",
+    "pat growth": "Year-on-year change in profit after tax, expressed as a percentage.",
+    "revenue growth": "Year-on-year change in revenue, expressed as a percentage.",
+    "free cash flow": "Cash left after capital spending — funds available to investors.",
+    "market cap": "Total market value of the company's shares.",
+}
+
+
+def _metric_explainer(metric: str) -> str:
+    """Short human-readable explanation for a metric name (static text)."""
+    if not metric:
+        return ""
+    norm = str(metric).strip().lower()
+    return _METRIC_EXPLAINER.get(norm, "")
+
+
+def _metric_overlay_fields(rows, module3_result, metric) -> dict:
+    """Detail fields for the overlay — only what the pipeline provides;
+    every missing field is '—'. Never fabricates provenance."""
+    out = {
+        "metric": metric, "label": metric or "—", "kind": "unanalyzed",
+        "value": "—", "status": "—", "origin": "—", "period": "—",
+        "source": "—", "location": "—", "currency": "—", "scale": "—",
+        "evidence": "—", "note": None, "fragment": None, "fact": None,
+    }
+    if not metric:
+        return out
+    selected = next((r for r in rows if r["metric"] == metric), None)
+    if selected is None:
+        return out
+    kind = selected.get("_kind", "unanalyzed")
+    out["kind"] = kind
+    out["label"] = selected.get("Metric") or metric
+    fd = (module3_result or {}).get("financial_data") or {}
+    rt = (module3_result or {}).get("ratios") or {}
+    fact = selected.get("_fact") or fd.get(metric) or rt.get(metric) or {}
+    out["fact"] = fact
+
+    def g(*keys, default="—"):
+        for k in keys:
+            v = fact.get(k) if isinstance(fact, dict) else None
+            if v not in (None, ""):
+                return str(v)
+        return default
+
+    out["status"] = selected.get("Status") or "—"
+    out["period"] = selected.get("Period") or "—"
+    out["source"] = selected.get("Source") or "—"
+    out["value"] = selected.get("Value") or "—"
+    if kind == "blocked":
+        out["origin"] = "Pipeline missing-data report"
+        out["note"] = selected.get("_reason") or "Required evidence is not available from the current pipeline."
+    elif kind == "conflict":
+        out["origin"] = "Cross-document verification"
+        conflicts = _conflict_metrics(module3_result)
+        info = conflicts.get(metric) or {}
+        docs = info.get("documents") or []
+        if isinstance(docs, list) and docs:
+            evidence = " · ".join(
+                f"{d.get('document', '?')}={d.get('value', '?')}"
+                for d in docs if isinstance(d, dict)
+            )
+            out["evidence"] = evidence
+            out["fragment"] = evidence
+        else:
+            out["evidence"] = "Multiple sources disagree"
+    else:
+        out["origin"] = (
+            "Calculated ratio" if kind == "derived"
+            else ("Document extraction" if kind == "verified" else "—")
+        )
+        out["location"] = g("page", "table_id", "chunk_id", "anchor")
+        out["evidence"] = g("anchor", "evidence", "context")
+        if out["evidence"] != "—":
+            out["fragment"] = out["evidence"]
+    out["currency"] = g("unit", "currency", "currency_code")
+    out["scale"] = g("scale")
+    return out
+
+
+def _metric_overlay_html(fields: dict, explainer: str, show_source: bool) -> str:
+    """Compact overlay card body (HTML). Only real fields render; '—' otherwise."""
+    parts = [
+        '<div class="fte-modal-head">'
+        f'<span class="fte-modal-title">{html.escape(str(fields["label"]))}</span>'
+        f'<span class="fte-modal-status">{html.escape(str(fields["status"]))}</span>'
+        "</div>",
+        f'<div class="fte-modal-value">{html.escape(str(fields["value"]))}</div>',
+    ]
+    if explainer:
+        parts.append(
+            '<div class="fte-modal-sec"><div class="fte-modal-sec-t">What it means</div>'
+            f'<div class="fte-modal-sec-b">{html.escape(explainer)}</div></div>'
+        )
+    pv_rows = [
+        ("Origin", fields["origin"]),
+        ("Period", fields["period"]),
+        ("Source", fields["source"]),
+        ("Location", fields["location"]),
+        ("Currency", fields["currency"]),
+        ("Scale", fields["scale"]),
+        ("Evidence", fields["evidence"]),
+    ]
+    body = ""
+    for k, v in pv_rows:
+        vtxt = "—" if v in (None, "") else str(v)
+        cls = "fte-modal-pv missing" if vtxt == "—" else "fte-modal-pv"
+        body += (
+            f'<div class="{cls}"><div class="k">{html.escape(str(k))}</div>'
+            f'<div class="v">{html.escape(vtxt)}</div></div>'
+        )
+    parts.append(f'<div class="fte-modal-sec"><div class="fte-modal-sec-t">Provenance</div>{body}</div>')
+    if fields.get("note"):
+        parts.append(
+            f'<div class="fte-modal-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
+        )
+    if show_source:
+        frag = fields.get("fragment")
+        if frag:
+            parts.append(
+                '<div class="fte-modal-sec"><div class="fte-modal-sec-t">Source fragment</div>'
+                f'<div class="fte-modal-frag">{html.escape(str(frag))}</div></div>'
+            )
+        else:
+            parts.append(
+                '<div class="fte-modal-sec"><div class="fte-modal-sec-t">Source fragment</div>'
+                '<div class="fte-modal-frag empty">No source fragment is available from the current pipeline.</div></div>'
+            )
+    return "".join(parts)
+
+
+def _fte_toggle_overlay_source() -> None:
+    """Toggle the 'View source fragment' section inside the overlay."""
+    st.session_state["fte_overlay_show_source"] = not st.session_state.get("fte_overlay_show_source", False)
+
+
+def _fte_close_overlay() -> None:
+    """Close the metric-detail overlay (selection itself is kept)."""
+    st.session_state["fte_overlay_open"] = False
+    st.session_state["fte_overlay_show_source"] = False
+
+
+def _render_metric_overlay(module3_result) -> None:
+    """Small focused overlay for the selected metric — the Financial Grid
+    stays visible behind it. Uses real Streamlit buttons for actions."""
+    metric = st.session_state.get("fte_selected_metric")
+    if not metric or not st.session_state.get("fte_overlay_open"):
+        return
+    rows = st.session_state.get("fte_grid_rows") or []
+    if not any(r["metric"] == metric for r in rows):
+        st.session_state["fte_overlay_open"] = False
+        return
+    fields = _metric_overlay_fields(rows, module3_result, metric)
+    explainer = _metric_explainer(metric)
+    show_source = bool(st.session_state.get("fte_overlay_show_source"))
+
+    st.markdown('<div class="fte-modal-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="fte-modal-card">', unsafe_allow_html=True)
+    st.markdown(_metric_overlay_html(fields, explainer, show_source), unsafe_allow_html=True)
+    src_lbl = "Hide source fragment" if show_source else "View source fragment"
+    b1, b2 = st.columns([3, 1], gap="small")
+    with b1:
+        st.button(
+            src_lbl, key="fte_modal_source", use_container_width=True,
+            on_click=_fte_toggle_overlay_source,
+        )
+    with b2:
+        st.button(
+            "Close", key="fte_modal_close", use_container_width=True,
+            type="primary", on_click=_fte_close_overlay,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_intelligence_tab(module3_result, intelligence_outputs) -> None:
