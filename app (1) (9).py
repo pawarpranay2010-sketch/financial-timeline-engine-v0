@@ -1464,6 +1464,71 @@ _TERMINAL_CSS = """
 }
 """
 
+_FTE_CSS = """
+/* ============ FT-E entrance / auth / selection / workspace chrome ============ */
+.fte-spacer-lg { height: 12vh; }
+.fte-spacer-md { height: 7vh; }
+.fte-spacer-sm { height: 2.4rem; }
+.fte-stage { text-align: center; }
+.fte-brand {
+  font-weight: 750; letter-spacing: .24em; text-indent: .24em;
+  color: var(--fte-text); line-height: 1;
+}
+.fte-brand-xl { font-size: clamp(2.75rem, 7vw, 4.5rem); }
+.fte-moat {
+  margin-top: 1.1rem; font-size: .8rem; letter-spacing: .42em; text-indent: .42em;
+  color: var(--fte-muted); font-weight: 400;
+}
+.fte-auth-title { font-size: 1.4rem; font-weight: 650; color: var(--fte-text); letter-spacing: .01em; line-height: 1.2; }
+.fte-auth-sub { color: var(--fte-muted); font-size: .92rem; margin-top: .4rem; }
+.fte-ws-card {
+  border: 1px solid var(--fte-border); border-radius: 12px;
+  padding: 1.4rem 1rem 1.1rem; text-align: center; background: transparent;
+  transition: border-color var(--hover) ease, background var(--hover) ease,
+              transform var(--hover) ease;
+}
+.fte-ws-card:hover {
+  border-color: #33405a; background: rgba(127,127,127,.04); transform: translateY(-1px);
+}
+.fte-ws-card .ic { line-height: 1; margin-bottom: .6rem; color: var(--fte-text); }
+.fte-ws-card .ic svg { display: block; margin: 0 auto; }
+.fte-ws-card .nm { font-weight: 600; font-size: .95rem; color: var(--fte-text); letter-spacing: .02em; }
+.fte-ws-card .tg { font-size: .76rem; color: var(--fte-muted); margin-top: .3rem; }
+.fte-ws-header-brand { font-weight: 750; letter-spacing: .18em; font-size: 1rem; color: var(--fte-text); }
+.fte-ws-header-brand span {
+  color: var(--fte-muted); font-weight: 400; letter-spacing: .1em;
+  font-size: .78rem; margin-left: .7rem;
+}
+[data-testid="stBaseButton-primary"] {
+  min-height: 42px; border-radius: 8px; font-size: .9rem; letter-spacing: .05em;
+  transition: transform var(--hover) ease, box-shadow var(--hover) ease,
+              background var(--hover) ease;
+}
+[data-testid="stBaseButton-primary"]:hover { transform: translateY(-1px); }
+[data-testid="stButton"] button:focus-visible,
+[data-testid="stBaseButton-primary"]:focus-visible,
+[data-testid="stBaseButton-secondary"]:focus-visible {
+  outline: 2px solid var(--fte-conflict); outline-offset: 2px;
+}
+[data-testid="stSegmentedControl"] { margin: .5rem 0 .75rem; }
+[data-testid="stSegmentedControl"] > div {
+  gap: 2px; border: 1px solid var(--fte-border); border-radius: 8px;
+  padding: 3px; width: fit-content; background: rgba(127,127,127,.05);
+}
+[data-testid="stSegmentedControl"] label {
+  border-radius: 6px; padding: .32rem .95rem; font-size: .82rem; letter-spacing: .05em;
+  color: var(--fte-muted);
+  transition: background var(--hover) ease, color var(--hover) ease;
+}
+[data-testid="stSegmentedControl"] label:hover { color: var(--fte-text); }
+[data-testid="stSegmentedControl"] label:has(input:checked) {
+  background: rgba(127,127,127,.16); color: var(--fte-text); font-weight: 600;
+}
+[data-testid="stSegmentedControl"] label:has(input:focus-visible) {
+  outline: 2px solid var(--fte-conflict); outline-offset: 1px;
+}
+"""
+
 _TERMINAL_METRICS = [
     ("Revenue", "Revenue"),
     ("Net Profit", "Net Income"),
@@ -1488,7 +1553,7 @@ def _inject_terminal_css() -> None:
     """Inject the terminal stylesheet once per session."""
     if st.session_state.get("fte_css_injected"):
         return
-    st.markdown(f"<style>{_TERMINAL_CSS}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>{_TERMINAL_CSS}\n{_FTE_CSS}</style>", unsafe_allow_html=True)
     st.session_state["fte_css_injected"] = True
 
 
@@ -1499,7 +1564,14 @@ def _init_terminal_state() -> None:
         ("fte_module3_result", {}),
         ("fte_module3_key", None),
         ("fte_css_injected", False),
-        ("fte_taxonomy_filter", "all"),
+        ("fte_metric_filter", "all"),
+        ("fte_route", "entrance"),
+        ("fte_page", "Financial Grid"),
+        ("fte_workspace", None),
+        ("fte_user_name", ""),
+        ("fte_user_email", ""),
+        ("fte_forgot_hint", False),
+        ("fte_memo_draft", ""),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -1757,10 +1829,21 @@ _FILTER_LABELS = {
     "blocked": "🔴 Blocked",
 }
 
+# Plain (un-emoji'd) kind words for the grid status caption.
+_METRIC_FILTER_PLAIN = {
+    "all": "all",
+    "verified": "verified",
+    "derived": "derived",
+    "unanalyzed": "unanalyzed",
+    "conflict": "conflict",
+    "blocked": "blocked",
+}
+
 
 def _set_taxonomy_filter(kind: str) -> None:
-    """Button callback: set the grid taxonomy filter (runs pre-rerun)."""
-    st.session_state["fte_taxonomy_filter"] = kind
+    """Button callback: set the grid metric filter (runs pre-rerun).
+    Fires only on an explicit user click — never on plain reruns."""
+    st.session_state["fte_metric_filter"] = kind
 
 
 def _grid_rows_filtered(rows, kind: str):
@@ -1770,12 +1853,54 @@ def _grid_rows_filtered(rows, kind: str):
     return [r for r in rows if r.get("_kind") == kind]
 
 
+def _grid_status_caption(rows, shown, filter_kind) -> str:
+    """Caption under the Financial Grid title (presentation only).
+
+    'all' (the default) reads as dataset status — never as a filter:
+      "Showing all 20 metrics · 4 verified · 1 derived · 7 blocked · 8 unanalyzed"
+    An explicit filter reads as a subset view:
+      "Showing 4 verified metrics · 4 of 20"
+    """
+    if not filter_kind or filter_kind == "all":
+        counts = _row_counts(rows)
+        return (
+            f"Showing all {len(rows)} metrics · {counts['verified']} verified · "
+            f"{counts['derived']} derived · {counts['blocked']} blocked · "
+            f"{counts['unanalyzed']} unanalyzed"
+        )
+    plain_label = _METRIC_FILTER_PLAIN.get(filter_kind, filter_kind)
+    return f"Showing {len(shown)} {plain_label} metrics · {len(shown)} of {len(rows)}"
+
+
+def _resolve_grid_selection(shown, selected_metric, sel_rows):
+    """Resolve the metric that should be selected after a rerun.
+
+    - A fresh click (sel_rows) wins.
+    - Otherwise keep the persisted selected metric while it is visible.
+    - If the persisted metric is hidden by an explicit filter, fall back
+      to the first visible metric (or None when nothing is visible).
+    Selection stays independent of the filter state.
+    """
+    if sel_rows:
+        idx = int(sel_rows[0])
+        if 0 <= idx < len(shown):
+            return shown[idx]["metric"]
+        return None
+    if not shown:
+        return None
+    if selected_metric is None:
+        return None
+    if all(r["metric"] != selected_metric for r in shown):
+        return shown[0]["metric"]
+    return selected_metric
+
+
 def _render_taxonomy_controls(rows, include_exceptions: bool = False) -> None:
     """Actionable taxonomy filter buttons (rail). Clicking a state
     filters the Financial Grid to that state; 'All metrics' restores.
     Presentation only — metric values are never altered."""
     counts = _row_counts(rows)
-    current = st.session_state.get("fte_taxonomy_filter", "all")
+    current = st.session_state.get("fte_metric_filter", "all")
     if include_exceptions:
         options = [
             ("conflict", "🔵 Conflicts", counts["conflict"]),
@@ -1851,7 +1976,7 @@ def _render_analysis_limited_banner(rows) -> None:
     if not show:
         return
     line = (
-        f"⚠️ **Analysis limited** — {counts['blocked']} metric(s) blocked · "
+        f"⚠️ **Analysis limited** · {counts['blocked']} blocked · "
         f"{counts['unanalyzed']} unanalyzed · {counts['verified']} verified"
     )
     b_col, btn_col = st.columns([4, 1], gap="small")
@@ -1876,13 +2001,9 @@ def _render_financial_grid(module3_result) -> None:
 
     _render_analysis_limited_banner(rows)
 
-    filter_kind = st.session_state.get("fte_taxonomy_filter", "all")
+    filter_kind = st.session_state.get("fte_metric_filter", "all")
     shown = _grid_rows_filtered(rows, filter_kind)
-    if filter_kind != "all":
-        st.caption(
-            f"Filtered to {_FILTER_LABELS.get(filter_kind, filter_kind).lower()} — "
-            f"{len(shown)} of {len(rows)} metrics."
-        )
+    st.caption(_grid_status_caption(rows, shown, filter_kind))
 
     df = pd.DataFrame(
         [{"Metric": r["Metric"], "Value": r["Value"], "Period": r["Period"],
@@ -1911,31 +2032,30 @@ def _render_financial_grid(module3_result) -> None:
         },
     )
 
-    # Selection: honor a fresh click; otherwise restore the persisted
-    # selected metric so it survives reruns and filter changes (row
-    # indexes can shift, but the metric key is stable).
+    # Selection is independent of the filter: honor a fresh click;
+    # otherwise keep the persisted selected metric while it is visible,
+    # and fall back to the first visible metric when an explicit filter
+    # hides it (grid and Provenance Tray always stay consistent).
     try:
         sel = st.session_state.get("fte_grid_table")
         sel_rows = sel.selection.rows if sel is not None else ()
     except Exception:
         sel_rows = ()
-    if sel_rows:
-        idx = int(sel_rows[0])
-        if 0 <= idx < len(shown):
-            st.session_state["fte_selected_metric"] = shown[idx]["metric"]
-    else:
-        selected_metric = st.session_state.get("fte_selected_metric")
-        if selected_metric:
+    resolved = _resolve_grid_selection(
+        shown, st.session_state.get("fte_selected_metric"), sel_rows
+    )
+    if resolved is not None:
+        st.session_state["fte_selected_metric"] = resolved
+    if not sel_rows and resolved is not None:
+        try:
+            widget = st.session_state.get("fte_grid_table")
             restore_idx = next(
-                (i for i, r in enumerate(shown) if r["metric"] == selected_metric), None
+                (i for i, r in enumerate(shown) if r["metric"] == resolved), None
             )
-            if restore_idx is not None:
-                try:
-                    sel = st.session_state.get("fte_grid_table")
-                    if sel is not None and not sel.selection.rows:
-                        sel.selection.rows = [restore_idx]
-                except Exception:
-                    pass
+            if widget is not None and restore_idx is not None and not widget.selection.rows:
+                widget.selection.rows = [restore_idx]
+        except Exception:
+            pass
 
 
 def _provenance_tray_html(rows, module3_result, metric) -> str:
@@ -2194,8 +2314,198 @@ def _render_co_pilot(extraction_results, provider_health) -> None:
         st.rerun()
 
 
-def _render_terminal(uploaded_files) -> None:
-    """Single-screen terminal: left rail | center tabs + grid | provenance | Co-Pilot."""
+# =============================================================================
+# FT-E account & workspace architecture (frontend-only foundation)
+# =============================================================================
+# Minimal line icons (monochrome, stroke-based) for the workspace cards.
+_ICON_STUDENT = (
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M2 9.5 L12 4.5 L22 9.5 L12 14.5 Z"/>'
+    '<path d="M6 11.8 v3.1 c0 1.7 2.7 3.1 6 3.1 s6 -1.4 6 -3.1 v-3.1"/>'
+    '<path d="M12 14.5 v3.5"/></svg>'
+)
+_ICON_PROFESSIONAL = (
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M3.5 3.5 v17 h17"/>'
+    '<path d="M6.5 14.5 l3.5 -3.5 l3 3 l4.5 -5.5"/></svg>'
+)
+_ICON_CA = (
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M6 3 h9 l4 4 v14 H6 Z"/>'
+    '<path d="M9.5 12.5 l2 2 l3.5 -4"/></svg>'
+)
+_ICON_ENTERPRISE = (
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M5 21 V8.5 h14 V21"/>'
+    '<path d="M9 8.5 V4 h6 v4.5"/>'
+    '<path d="M8.5 13 h1.5 M8.5 17 h1.5 M14 13 h1.5 M14 17 h1.5"/></svg>'
+)
+
+
+def _fte_goto(route: str) -> None:
+    """Move between FT-E views (frontend routing state only)."""
+    st.session_state["fte_route"] = route
+
+
+def _fte_forgot() -> None:
+    """Forgot-password hint (UI scaffolding only — real recovery later)."""
+    st.session_state["fte_forgot_hint"] = True
+
+
+def _fte_set_workspace(kind: str) -> None:
+    """Persist the chosen workspace and enter the FT-E shell."""
+    st.session_state["fte_workspace"] = kind
+    st.session_state["fte_page"] = "Financial Grid"
+    st.session_state["fte_route"] = "workspace"
+
+
+def _fte_display_name(email: str) -> str:
+    """Derive a display name from the email local part (frontend only)."""
+    local = (email or "").split("@", 1)[0].strip()
+    words = local.replace("_", " ").replace(".", " ").split()
+    return " ".join(w.capitalize() for w in words if w) or "Analyst"
+
+
+def _render_entrance() -> None:
+    """FT-E entrance: centered brand + two entry actions (UI only)."""
+    st.markdown('<div class="fte-spacer-lg"></div>', unsafe_allow_html=True)
+    l, m, r = st.columns([1, 2, 1], gap="large")
+    with m:
+        st.markdown(
+            '<div class="fte-stage">'
+            '<div class="fte-brand fte-brand-xl">FT-E</div>'
+            '<div class="fte-moat">(Moat)</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        b1, b2 = st.columns(2, gap="small")
+        with b1:
+            st.button(
+                "Sign in", key="fte_btn_signin", use_container_width=True,
+                type="primary", on_click=_fte_goto, args=("signin",),
+            )
+        with b2:
+            st.button(
+                "Create account", key="fte_btn_create", use_container_width=True,
+                on_click=_fte_goto, args=("signup",),
+            )
+
+
+def _render_signin() -> None:
+    """Sign-in page — UI only; Continue simulates successful authentication."""
+    st.markdown('<div class="fte-spacer-md"></div>', unsafe_allow_html=True)
+    l, m, r = st.columns([1, 2, 1], gap="large")
+    with m:
+        st.markdown('<div class="fte-auth-title">Welcome to</div>', unsafe_allow_html=True)
+        st.markdown('<div class="fte-auth-sub">Your financial workspace starts here.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        st.text_input("Email", key="fte_email", placeholder="you@example.com")
+        st.text_input("Password", key="fte_password", type="password", placeholder="••••••••")
+        if st.button("Continue →", key="fte_btn_continue", use_container_width=True, type="primary"):
+            st.session_state["fte_user_email"] = (st.session_state.get("fte_email") or "").strip()
+            st.session_state["fte_user_name"] = _fte_display_name(st.session_state.get("fte_email") or "")
+            st.session_state["fte_route"] = "select"
+            st.rerun()
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        f1, f2, f3 = st.columns(3, gap="small")
+        with f1:
+            st.button("← Back", key="fte_btn_back_signin", use_container_width=True,
+                      on_click=_fte_goto, args=("entrance",))
+        with f2:
+            st.button("Forgot password?", key="fte_btn_forgot", use_container_width=True,
+                      on_click=_fte_forgot)
+        with f3:
+            st.button("Create account", key="fte_btn_to_signup", use_container_width=True,
+                      on_click=_fte_goto, args=("signup",))
+        if st.session_state.get("fte_forgot_hint"):
+            st.caption("Password recovery arrives with the full authentication phase — UI scaffolding for now.")
+
+
+def _render_signup() -> None:
+    """Create-account page — UI only; simulates account creation."""
+    st.markdown('<div class="fte-spacer-md"></div>', unsafe_allow_html=True)
+    l, m, r = st.columns([1, 2, 1], gap="large")
+    with m:
+        st.markdown('<div class="fte-auth-title">Create your account</div>', unsafe_allow_html=True)
+        st.markdown('<div class="fte-auth-sub">Start your financial workspace.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        st.text_input("Name", key="fte_name", placeholder="Your name")
+        st.text_input("Email", key="fte_email_signup", placeholder="you@example.com")
+        st.text_input("Password", key="fte_password_signup", type="password", placeholder="••••••••")
+        if st.button("Create account →", key="fte_btn_signup_submit", use_container_width=True, type="primary"):
+            st.session_state["fte_user_name"] = (st.session_state.get("fte_name") or "").strip() or "Analyst"
+            st.session_state["fte_user_email"] = (st.session_state.get("fte_email_signup") or "").strip()
+            st.session_state["fte_route"] = "select"
+            st.rerun()
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        g1, g2 = st.columns(2, gap="small")
+        with g1:
+            st.button("← Back", key="fte_btn_back_signup", use_container_width=True,
+                      on_click=_fte_goto, args=("entrance",))
+        with g2:
+            st.button("Sign in", key="fte_btn_to_signin", use_container_width=True,
+                      on_click=_fte_goto, args=("signin",))
+
+
+def _render_workspace_select() -> None:
+    """Workspace selection: four minimal line-icon cards (frontend state only)."""
+    st.markdown('<div class="fte-spacer-md"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="fte-stage">'
+        '<div class="fte-auth-title">What are you here to do?</div>'
+        '<div class="fte-auth-sub">Choose your workspace</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+    workspaces = [
+        ("student", _ICON_STUDENT, "Student", "Coursework, research and learning"),
+        ("professional", _ICON_PROFESSIONAL, "Professional", "Analysis and decision support"),
+        ("ca", _ICON_CA, "CA / Auditor", "Assurance, audit and compliance"),
+        ("enterprise", _ICON_ENTERPRISE, "Enterprise", "Institutional scale workflows"),
+    ]
+    for row_start in (0, 2):
+        c1, c2 = st.columns(2, gap="medium")
+        for col, (key, icon, nm, tag) in zip((c1, c2), workspaces[row_start:row_start + 2]):
+            with col:
+                st.markdown(
+                    f'<div class="fte-ws-card"><div class="ic">{icon}</div>'
+                    f'<div class="nm">{nm}</div><div class="tg">{tag}</div></div>',
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "Select", key=f"fte_ws_{key}", use_container_width=True,
+                    on_click=_fte_set_workspace, args=(key,),
+                )
+
+
+def _render_account_popover() -> None:
+    """Tiny account control in the workspace header (frontend state only)."""
+    name = st.session_state.get("fte_user_name") or "Analyst"
+    email = st.session_state.get("fte_user_email") or "user@example.com"
+    ws_label = {
+        "student": "Student", "professional": "Professional",
+        "ca": "CA / Auditor", "enterprise": "Enterprise",
+    }.get(st.session_state.get("fte_workspace"), "—")
+    with st.popover("Account", use_container_width=True):
+        st.markdown(f"**{html.escape(str(name))}**")
+        st.caption(html.escape(str(email)))
+        st.caption(f"Workspace · {ws_label}")
+        if st.button("Sign out", key="fte_btn_signout", use_container_width=True):
+            st.session_state["fte_route"] = "entrance"
+            st.session_state["fte_workspace"] = None
+            st.session_state["fte_user_name"] = ""
+            st.session_state["fte_user_email"] = ""
+            st.rerun()
+
+
+def _render_workspace_shell(uploaded_files) -> None:
+    """FT-E workspace: shared shell with three separate page views."""
     extraction_results, combined_raw_text, document_summaries = _run_ingestion(uploaded_files)
     module3_result = {}
     try:
@@ -2203,25 +2513,143 @@ def _render_terminal(uploaded_files) -> None:
     except Exception as e:
         st.warning("⚠️ Financial intelligence temporarily unavailable — verified data tools remain below.")
         st.session_state["pipeline_debug_log"] = [{"stage": "module3", "length": 0, "error_marker_detected": True, "preview": str(e)[:300]}]
-
-    intelligence_outputs = st.session_state.get("intelligence_outputs") or {}
     provider_health = get_provider_health()
 
-    rail_col, center_col = st.columns([1, 3.2], gap="medium")
-    with rail_col:
-        _render_source_rail(uploaded_files, extraction_results, module3_result)
-    with center_col:
-        tab_grid, tab_intel, tab_sys = st.tabs(["Financial Grid", "Intelligence", "System"])
-        with tab_grid:
-            _render_financial_grid(module3_result)
-        with tab_intel:
-            _render_intelligence_tab(module3_result, intelligence_outputs)
-        with tab_sys:
-            _render_system_tab()
+    # Header chrome: brand | gateway | account.
+    h_l, h_r = st.columns([3, 2], gap="medium", vertical_alignment="center")
+    with h_l:
+        st.markdown(
+            '<div class="fte-ws-header-brand">FT-E<span>Financial Timeline Engine</span></div>',
+            unsafe_allow_html=True,
+        )
+    with h_r:
+        g_c, a_c = st.columns([2, 1], gap="small", vertical_alignment="center")
+        with g_c:
+            render_gateway_pill()
+        with a_c:
+            _render_account_popover()
 
-    # Persistent, anchored provenance tray below the workspace.
-    _render_provenance_tray(module3_result)
-    _render_co_pilot(extraction_results, provider_health)
+    # Persistent workspace navigation — three separate page views, never a
+    # single scrolling page. Page choice lives in fte_page (session state),
+    # so switching pages preserves grid selection, filters, chat and memo.
+    st.segmented_control(
+        "Workspace",
+        options=["Financial Grid", "Intelligence", "System"],
+        key="fte_page",
+        label_visibility="collapsed",
+    )
+    page = st.session_state["fte_page"]
+
+    if page == "Financial Grid":
+        rail_col, center_col = st.columns([1, 3.2], gap="medium")
+        with rail_col:
+            _render_source_rail(uploaded_files, extraction_results, module3_result)
+        with center_col:
+            _render_financial_grid(module3_result)
+        _render_provenance_tray(module3_result)
+    elif page == "Intelligence":
+        _render_co_pilot(extraction_results, provider_health)
+        st.markdown("---")
+        _render_selected_metric_analysis(module3_result)
+        st.markdown("---")
+        _render_memo_generator(document_summaries)
+    else:
+        _render_system_tab()
+
+
+def _render_selected_metric_analysis(module3_result) -> None:
+    """Selected Metric Analysis: the module-3 record for the grid selection."""
+    st.markdown('<div class="fte-rail-title">Selected Metric Analysis</div>', unsafe_allow_html=True)
+    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
+    metric = st.session_state.get("fte_selected_metric")
+    if not metric:
+        st.caption("Select a metric in the Financial Grid to analyze it here.")
+        return
+    if not any(r["metric"] == metric for r in rows):
+        st.caption("The selected metric is no longer in the grid — select another in the Financial Grid.")
+        return
+    st.markdown(_provenance_tray_html(rows, module3_result, metric), unsafe_allow_html=True)
+    fd = (module3_result or {}).get("financial_data") or {}
+    rt = (module3_result or {}).get("ratios") or {}
+    fact = None
+    for r in rows:
+        if r["metric"] == metric:
+            fact = r.get("_fact")
+            break
+    fact = fact or fd.get(metric) or rt.get(metric)
+    if fact:
+        with st.expander("Module-3 record", expanded=False):
+            st.json(fact)
+
+
+def _render_memo_generator(document_summaries) -> None:
+    """Generate Memo: same cached pipeline as the classic view, compact."""
+    st.markdown('<div class="fte-rail-title">Generate Memo</div>', unsafe_allow_html=True)
+    memo = st.session_state.get("fte_memo_draft") or ""
+    if not document_summaries:
+        st.caption("Upload a financial document to generate an investment memo.")
+        return
+    if st.button("Generate Memo", key="fte_btn_memo"):
+        with st.spinner("Merging document summaries..."):
+            merge_cache_key = _hash_text(
+                "||".join(f"{d['file_name']}:{d['summary']}" for d in document_summaries)
+            )
+            master_summary, _ = _cached_call(
+                "merge_cache", merge_cache_key,
+                lambda: merge_document_summaries(document_summaries),
+            )
+        if not master_summary or not master_summary.strip() or contains_error_marker(master_summary):
+            st.error("❌ Document summarization failed — no real content to analyze.")
+            st.session_state["fte_memo_draft"] = ""
+        else:
+            with st.spinner("Drafting memo..."):
+                memo_system_prompt = (
+                    "You are an elite institutional investment research analyst. "
+                    "Write the investment memo strictly and exclusively from the "
+                    "facts, figures, dates, and events contained in the Document "
+                    "Summary provided below. Do not produce generic, templated, or "
+                    "boilerplate analysis -- every claim must be traceable to a "
+                    "specific fact stated in the Document Summary. If the Document "
+                    "Summary lacks information for a requested section, explicitly "
+                    "state that the source documents did not provide it rather than "
+                    "inventing generic filler."
+                )
+                prompt = f"""Analyze the Document Summary below carefully. Extract key event milestones, timelines, and potential controversy flags SPECIFIC to this Document Summary. Write a comprehensive multi-paragraph investment memo that identifies, using only facts from the Document Summary:
+1. Key financial events and dates
+2. Market movements and impacts
+3. Risk factors and opportunities
+4. Strategic implications
+
+Document Summary:
+{master_summary}
+
+Generate a professional investment memo grounded strictly in the Document Summary above. Do not generate generic industry commentary that is not tied to a specific fact in the Document Summary."""
+                memo_cache_key = _hash_text(master_summary)
+                memo, _ = _cached_call(
+                    "memo_cache", memo_cache_key,
+                    lambda: call_ai_with_fallback(prompt, system_prompt=memo_system_prompt, temperature=0.3),
+                )
+                st.session_state["fte_memo_draft"] = memo
+    if memo:
+        st.markdown("### 📝 Investment Memo")
+        st.write(memo)
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "📥 Download as Word Document",
+                data=generate_docx_download(memo),
+                file_name="FT_E_Investment_Memo.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+        with dl2:
+            st.download_button(
+                "📄 Download PDF",
+                data=generate_pdf_download(memo),
+                file_name="FT_E_Investment_Memo.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
 
 # =============================================================================
@@ -2231,14 +2659,22 @@ def main():
     _inject_terminal_css()
     _init_terminal_state()
 
-    # Header chrome: brand + compact gateway pill (shared by both views).
-    header_l, header_r = st.columns([4, 1], gap="medium")
-    with header_l:
-        st.title("📈 Financial Timeline Engine")
-    with header_r:
-        render_gateway_pill()
+    # FT-E entrance flow (UI only — no real auth/storage in this phase).
+    route = st.session_state.get("fte_route", "entrance")
+    if route == "entrance":
+        _render_entrance()
+        return
+    if route == "signin":
+        _render_signin()
+        return
+    if route == "signup":
+        _render_signup()
+        return
+    if route == "select":
+        _render_workspace_select()
+        return
 
-    # Workspace selector + shared ingestion (sidebar).
+    # Workspace shell: shared sidebar (legacy view switch + ingestion).
     fte_view = st.sidebar.radio(
         "Workspace",
         ["Institutional Terminal", "Classic Dashboard"],
@@ -2254,7 +2690,7 @@ def main():
     if fte_view == "Classic Dashboard":
         _render_classic_dashboard(uploaded_files)
     else:
-        _render_terminal(uploaded_files)
+        _render_workspace_shell(uploaded_files)
 
 
 def _render_classic_dashboard(uploaded_files):
@@ -2576,25 +3012,5 @@ Generate a professional investment memo grounded strictly in the Document Summar
 # =============================================================================
 # SECTION 12: Auth
 # =============================================================================
-def check_login():
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-    if not st.session_state["authenticated"]:
-        st.markdown("🔐 Institutional Terminal Access")
-        col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
-        with col_l2:
-            input_user = st.text_input("Username")
-            input_pass = st.text_input("Password", type="password")
-            if st.button("🚀 Log In", use_container_width=True):
-                if input_user == "admin" and input_pass == "financial_terminal_2026":
-                    st.session_state["authenticated"] = True
-                    st.rerun()
-                else:
-                    st.error("❌ Invalid Credentials")
-        return False
-    return True
-
-
 if __name__ == "__main__":
-    if check_login():
-        main()
+    main()
