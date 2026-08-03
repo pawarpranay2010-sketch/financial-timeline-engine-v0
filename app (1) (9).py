@@ -1136,6 +1136,16 @@ CHAT_SUGGESTED_PROMPTS = [
     "Summarize this company's financial position.",
 ]
 
+# Sprint 3: Intelligence-page suggestion set. The classic dashboard keeps
+# CHAT_SUGGESTED_PROMPTS above; these route into the same verified
+# Co-Pilot pipeline. Small and focused, and answerable from evidence.
+FTE_CHAT_SUGGESTED_PROMPTS = [
+    "What are the major financial risks?",
+    "Explain the selected metric.",
+    "What should I investigate next?",
+    "Summarize the strongest verified evidence.",
+]
+
 
 @st.cache_resource(show_spinner=False)
 def _build_chat_assistant():
@@ -1528,6 +1538,22 @@ _FTE_CSS = """
   outline: 2px solid var(--fte-conflict); outline-offset: 1px;
 }
 
+/* Sprint 3: compact Intelligence cards + focused memo document view. */
+.fte-intel-card {
+  border: 1px solid var(--fte-border); border-radius: 10px;
+  padding: .95rem 1.05rem; background: rgba(127,127,127,.04);
+  transition: border-color var(--hover) ease, background var(--hover) ease;
+}
+.fte-intel-card:hover { border-color: rgba(127,127,127,.28); }
+.fte-memo-doc {
+  max-width: 860px; margin: .25rem auto 0; padding: 1.6rem 2rem;
+  border: 1px solid var(--fte-border); border-radius: 10px;
+  background: rgba(127,127,127,.04); color: var(--fte-text);
+}
+.fte-memo-title { font-size: 1.35rem; font-weight: 700; letter-spacing: .01em; }
+.fte-memo-context { font-size: .8rem; color: var(--fte-muted); margin-top: .4rem; }
+.fte-memo-body { font-size: .92rem; line-height: 1.75; }
+
 /* Sprint 2.1: native st.dialog size refinement for the metric detail card.
    The built-in dialog component provides the backdrop, × close button,
    rounded corners, shadow and centering — we just constrain its width
@@ -1578,6 +1604,8 @@ def _init_terminal_state() -> None:
         ("fte_user_email", ""),
         ("fte_forgot_hint", False),
         ("fte_memo_draft", ""),
+        ("fte_memo_view_open", False),
+        ("fte_memo_status", "idle"),
         ("fte_overlay_open", False),
         ("fte_prev_selection_rows", ()),
     ]:
@@ -2457,7 +2485,7 @@ def _render_co_pilot(extraction_results, provider_health) -> None:
     """Compact Co-Pilot: capability line, bounded conversation, structured
     sections, and an honest blocked/empty state (no duplicated messages)."""
     st.markdown("---")
-    st.markdown('<div class="fte-rail-title">💬 Co-Pilot</div>', unsafe_allow_html=True)
+    st.markdown('<div class="fte-rail-title">💬 Ask Co-Pilot</div>', unsafe_allow_html=True)
 
     rows = st.session_state.get("fte_grid_rows") or []
 
@@ -2509,11 +2537,12 @@ def _render_co_pilot(extraction_results, provider_health) -> None:
             unsafe_allow_html=True,
         )
 
-    # Empty state: suggested prompts lead into the same verified flow.
-    if not messages and not extraction_results:
-        st.caption("Upload a document, then ask about its verified evidence — or start with one of these:")
+    # Suggested follow-ups: a small set the verified pipeline can actually
+    # answer; the chips lead into the same Co-Pilot flow.
+    if not messages:
+        st.caption("Suggested:")
         cols = st.columns(2)
-        for i, prompt in enumerate(CHAT_SUGGESTED_PROMPTS[:4]):
+        for i, prompt in enumerate(FTE_CHAT_SUGGESTED_PROMPTS[:4]):
             with cols[i % 2]:
                 if st.button(prompt, key=f"fte_suggest_{i}", use_container_width=True):
                     _submit_chat_question(prompt, extraction_results, provider_health)
@@ -2759,48 +2788,88 @@ def _render_workspace_shell(uploaded_files) -> None:
             _render_financial_grid(module3_result)
         _render_provenance_tray(module3_result)
     elif page == "Intelligence":
-        _render_co_pilot(extraction_results, provider_health)
-        st.markdown("---")
-        _render_selected_metric_analysis(module3_result)
-        st.markdown("---")
-        _render_memo_generator(document_summaries)
+        if st.session_state.get("fte_memo_view_open"):
+            _render_memo_focused_view(document_summaries)
+        else:
+            _render_co_pilot(extraction_results, provider_health)
+            st.markdown("---")
+            _render_selected_metric_analysis(module3_result)
+            st.markdown("---")
+            _render_memo_generator(document_summaries)
     else:
         _render_system_tab()
 
 
+def _selected_metric_card_html(fields, explainer) -> str:
+    """Compact Intelligence 'Selected Metric' card — name + status, value,
+    a short verified explanation, and an evidence line. No big panels, no
+    grid duplication, no fabricated provenance ('—' for missing fields)."""
+    parts = [
+        f'<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">'
+        f'<span style="font-weight:650;font-size:1.05rem;color:var(--fte-text)">{html.escape(str(fields["label"]))}</span>'
+        f'<span style="font-size:.85rem;white-space:nowrap">{html.escape(str(fields["status"]))}</span>'
+        f'</div>',
+        f'<div style="font-size:1.5rem;font-weight:700;color:var(--fte-text);margin:.5rem 0 .35rem;letter-spacing:.01em">{html.escape(str(fields["value"]))}</div>',
+    ]
+    if explainer:
+        parts.append(
+            f'<div style="margin-top:.4rem;font-size:.86rem;color:var(--fte-text);line-height:1.5">'
+            f'<span style="color:var(--fte-muted)">What this tells you — </span>{html.escape(explainer)}</div>'
+        )
+    ev = []
+    for label, v in (("Origin", fields["origin"]), ("Source", fields["source"]),
+                     ("Period", fields["period"]), ("Evidence", fields["evidence"])):
+        if v not in (None, "", "—"):
+            ev.append(f"{label}: {v}")
+    if ev:
+        parts.append(
+            f'<div style="margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--fte-border);font-size:.8rem;color:var(--fte-muted);line-height:1.55">'
+            + " · ".join(html.escape(e) for e in ev[:3]) + "</div>"
+        )
+    if fields.get("note"):
+        parts.append(
+            f'<div style="margin-top:.6rem;padding:.4rem .55rem;font-size:.78rem;color:var(--fte-blocked);border-left:2px solid var(--fte-blocked);background:rgba(224,82,82,.06);border-radius:4px">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
+        )
+    return "".join(parts)
+
+
 def _render_selected_metric_analysis(module3_result) -> None:
-    """Selected Metric Analysis: the module-3 record for the grid selection."""
-    st.markdown('<div class="fte-rail-title">Selected Metric Analysis</div>', unsafe_allow_html=True)
-    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
+    """Selected Metric Analysis: a compact card for the grid selection only.
+    No metric selected → a clean empty state (never a large analysis panel)."""
+    st.markdown('<div class="fte-rail-title">🔬 Selected Metric Analysis</div>', unsafe_allow_html=True)
     metric = st.session_state.get("fte_selected_metric")
-    if not metric:
-        st.caption("Select a metric in the Financial Grid to analyze it here.")
+    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
+    if not metric or not any(r["metric"] == metric for r in rows):
+        st.markdown(
+            '<div class="fte-intel-card"><div style="font-size:.86rem;color:var(--fte-muted);line-height:1.55">'
+            'Select a metric in <span style="color:var(--fte-text)">Financial Grid</span> to analyze it here.</div></div>',
+            unsafe_allow_html=True,
+        )
         return
-    if not any(r["metric"] == metric for r in rows):
-        st.caption("The selected metric is no longer in the grid — select another in the Financial Grid.")
-        return
-    st.markdown(_provenance_tray_html(rows, module3_result, metric), unsafe_allow_html=True)
-    fd = (module3_result or {}).get("financial_data") or {}
-    rt = (module3_result or {}).get("ratios") or {}
-    fact = None
-    for r in rows:
-        if r["metric"] == metric:
-            fact = r.get("_fact")
-            break
-    fact = fact or fd.get(metric) or rt.get(metric)
-    if fact:
-        with st.expander("Module-3 record", expanded=False):
-            st.json(fact)
+    fields = _metric_overlay_fields(rows, module3_result, metric)
+    explainer = _metric_explainer(metric)
+    st.markdown(
+        '<div class="fte-intel-card">' + _selected_metric_card_html(fields, explainer) + '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("View metric detail", key="fte_intel_view_detail", use_container_width=True):
+        _metric_detail_dialog(module3_result)
 
 
 def _render_memo_generator(document_summaries) -> None:
-    """Generate Memo: same cached pipeline as the classic view, compact."""
-    st.markdown('<div class="fte-rail-title">Generate Memo</div>', unsafe_allow_html=True)
+    """Generate Memo: ONE primary action; compact status; the completed
+    memo opens in the focused document view (never inline on this page)."""
+    st.markdown('<div class="fte-rail-title">📝 Generate Memo</div>', unsafe_allow_html=True)
     memo = st.session_state.get("fte_memo_draft") or ""
     if not document_summaries:
-        st.caption("Upload a financial document to generate an investment memo.")
+        st.markdown(
+            '<div class="fte-intel-card"><div style="font-size:.86rem;color:var(--fte-muted);line-height:1.55">'
+            'Upload a financial document to generate an investment memo.</div></div>',
+            unsafe_allow_html=True,
+        )
         return
-    if st.button("Generate Memo", key="fte_btn_memo"):
+    if st.button("Generate Memo", key="fte_btn_memo", use_container_width=True):
+        st.session_state["fte_memo_status"] = "generating"
         with st.spinner("Merging document summaries..."):
             merge_cache_key = _hash_text(
                 "||".join(f"{d['file_name']}:{d['summary']}" for d in document_summaries)
@@ -2812,6 +2881,7 @@ def _render_memo_generator(document_summaries) -> None:
         if not master_summary or not master_summary.strip() or contains_error_marker(master_summary):
             st.error("❌ Document summarization failed — no real content to analyze.")
             st.session_state["fte_memo_draft"] = ""
+            st.session_state["fte_memo_status"] = "failed"
         else:
             with st.spinner("Drafting memo..."):
                 memo_system_prompt = (
@@ -2841,26 +2911,71 @@ Generate a professional investment memo grounded strictly in the Document Summar
                     lambda: call_ai_with_fallback(prompt, system_prompt=memo_system_prompt, temperature=0.3),
                 )
                 st.session_state["fte_memo_draft"] = memo
-    if memo:
-        st.markdown("### 📝 Investment Memo")
-        st.write(memo)
-        dl1, dl2 = st.columns(2)
-        with dl1:
-            st.download_button(
-                "📥 Download as Word Document",
-                data=generate_docx_download(memo),
-                file_name="FT_E_Investment_Memo.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
-        with dl2:
-            st.download_button(
-                "📄 Download PDF",
-                data=generate_pdf_download(memo),
-                file_name="FT_E_Investment_Memo.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+                st.session_state["fte_memo_status"] = "ready"
+                st.session_state["fte_memo_view_open"] = True
+                st.rerun()
+    # Compact generation status — honest, one line. The memo itself lives
+    # in the focused document view, not inline on the Intelligence hub.
+    status = st.session_state.get("fte_memo_status", "idle")
+    memo = st.session_state.get("fte_memo_draft") or ""
+    if status == "ready" and memo:
+        st.caption("✅ Memo complete.")
+    elif status == "failed":
+        st.caption("Memo generation did not complete — no content was produced.")
+    elif status == "generating":
+        st.caption("Generating memo — completed material appears as soon as the pipeline produces it.")
+    if memo and not st.session_state.get("fte_memo_view_open"):
+        if st.button("View memo", key="fte_btn_view_memo", use_container_width=True):
+            st.session_state["fte_memo_view_open"] = True
+            st.rerun()
+
+
+def _render_memo_focused_view(document_summaries) -> None:
+    """Focused document-style memo view: back control, memo title, company /
+    document context, the memo body, and export. Keeps the memo out of the
+    Intelligence hub; uses whatever the existing pipeline produced (the
+    sections are whatever the memo text actually contains — never invented)."""
+    if st.button("← Back to Intelligence", key="fte_btn_memo_back"):
+        st.session_state["fte_memo_view_open"] = False
+        st.rerun()
+    memo = st.session_state.get("fte_memo_draft") or ""
+    if not memo:
+        st.markdown(
+            '<div class="fte-memo-doc"><div style="color:var(--fte-muted);font-size:.9rem">'
+            'No memo has been generated yet.</div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+    context = " · ".join(
+        html.escape(str(d.get("file_name", ""))) for d in (document_summaries or []) if d.get("file_name")
+    )[:180]
+    body = html.escape(memo).replace("\n", "<br>")
+    st.markdown(
+        '<div class="fte-memo-doc">'
+        '<div class="fte-memo-title">Investment Memo</div>'
+        f'<div class="fte-memo-context">📄 {context or "No document context"}</div>'
+        '<hr style="border:none;border-top:1px solid var(--fte-border);margin:1.1rem 0">'
+        f'<div class="fte-memo-body">{body}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "📥 Download as Word Document",
+            data=generate_docx_download(memo),
+            file_name="FT_E_Investment_Memo.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
+    with dl2:
+        st.download_button(
+            "📄 Download PDF",
+            data=generate_pdf_download(memo),
+            file_name="FT_E_Investment_Memo.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
 
 # =============================================================================
