@@ -1528,47 +1528,11 @@ _FTE_CSS = """
   outline: 2px solid var(--fte-conflict); outline-offset: 1px;
 }
 
-/* Sprint 2: focused metric-detail overlay (grid stays visible behind it) */
-.fte-modal-wrap {
-  position: fixed; inset: 0; z-index: 999;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(6, 9, 14, 0.62); backdrop-filter: blur(2px);
-  padding: 1.5rem;
-  animation: fteFade var(--fade-provenance) ease-out;
-}
-.fte-modal-card {
-  width: min(440px, 100%); max-height: 88vh; overflow: auto;
-  background: var(--fte-panel); border: 1px solid var(--fte-border);
-  border-radius: 12px; padding: 1.15rem 1.25rem 1.1rem;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, .5);
-}
-.fte-modal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.fte-modal-title { font-weight: 650; font-size: 1.05rem; color: var(--fte-text); }
-.fte-modal-status { font-size: .85rem; white-space: nowrap; }
-.fte-modal-value {
-  font-size: 1.55rem; font-weight: 700; color: var(--fte-text);
-  margin: .55rem 0 .9rem; letter-spacing: .01em;
-}
-.fte-modal-sec { border-top: 1px solid var(--fte-border); margin-top: .7rem; padding-top: .6rem; }
-.fte-modal-sec-t {
-  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--fte-muted); font-weight: 600; margin-bottom: .35rem;
-}
-.fte-modal-sec-b { font-size: .86rem; color: var(--fte-text); line-height: 1.5; }
-.fte-modal-pv { display: grid; grid-template-columns: 96px 1fr; gap: 5px; font-size: .82rem; padding: 2px 0; }
-.fte-modal-pv .k { color: var(--fte-muted); }
-.fte-modal-pv .v { color: var(--fte-text); overflow-wrap: anywhere; }
-.fte-modal-pv.missing .v { color: var(--fte-muted); font-style: italic; opacity: .75; }
-.fte-modal-note {
-  margin-top: .65rem; padding: .45rem .6rem; font-size: .78rem; color: var(--fte-blocked);
-  border-left: 2px solid var(--fte-blocked); background: rgba(224,82,82,.06); border-radius: 4px;
-}
-.fte-modal-frag {
-  font-size: .8rem; color: var(--fte-text); background: rgba(127,127,127,.06);
-  border-left: 2px solid var(--fte-border); padding: .5rem .6rem; border-radius: 4px;
-  margin-top: .35rem; max-height: 130px; overflow: auto; line-height: 1.45;
-}
-.fte-modal-frag.empty { color: var(--fte-muted); font-style: italic; }
+/* Sprint 2.1: native st.dialog size refinement for the metric detail card.
+   The built-in dialog component provides the backdrop, × close button,
+   rounded corners, shadow and centering — we just constrain its width
+   inside the FTE dark theme. */
+[data-testid="stDialog"] { width: min(440px, 92vw); }
 """
 
 _TERMINAL_METRICS = [
@@ -1615,7 +1579,6 @@ def _init_terminal_state() -> None:
         ("fte_forgot_hint", False),
         ("fte_memo_draft", ""),
         ("fte_overlay_open", False),
-        ("fte_overlay_show_source", False),
         ("fte_prev_selection_rows", ()),
     ]:
         if key not in st.session_state:
@@ -2060,7 +2023,6 @@ def _render_financial_grid(module3_result) -> None:
         else:
             st.caption("Upload a financial document and run the intelligence pipeline to populate the grid.")
         st.session_state["fte_overlay_open"] = False
-        st.session_state["fte_overlay_show_source"] = False
         return
 
     st.dataframe(
@@ -2115,7 +2077,6 @@ def _render_financial_grid(module3_result) -> None:
     # stays open only while its metric remains selected and visible.
     if fresh_click and resolved is not None:
         st.session_state["fte_overlay_open"] = True
-        st.session_state["fte_overlay_show_source"] = False
     elif st.session_state.get("fte_overlay_open"):
         metric_now = st.session_state.get("fte_selected_metric")
         visible = metric_now is not None and any(
@@ -2123,9 +2084,9 @@ def _render_financial_grid(module3_result) -> None:
         )
         if not visible or resolved != was_selected:
             st.session_state["fte_overlay_open"] = False
-            st.session_state["fte_overlay_show_source"] = False
 
-    _render_metric_overlay(module3_result)
+    if st.session_state.get("fte_overlay_open") and st.session_state.get("fte_selected_metric"):
+        _metric_detail_dialog(module3_result)
 
 
 def _provenance_tray_html(rows, module3_result, metric) -> str:
@@ -2327,99 +2288,70 @@ def _metric_overlay_fields(rows, module3_result, metric) -> dict:
     return out
 
 
-def _metric_overlay_html(fields: dict, explainer: str, show_source: bool) -> str:
-    """Compact overlay card body (HTML). Only real fields render; '—' otherwise."""
+def _metric_detail_html(fields: dict, explainer: str) -> str:
+    """Compact card body HTML for the st.dialog — no source-fragment
+    section (the card stays concise). Only real fields render; '—' otherwise."""
     parts = [
-        '<div class="fte-modal-head">'
-        f'<span class="fte-modal-title">{html.escape(str(fields["label"]))}</span>'
-        f'<span class="fte-modal-status">{html.escape(str(fields["status"]))}</span>'
-        "</div>",
-        f'<div class="fte-modal-value">{html.escape(str(fields["value"]))}</div>',
+        f'<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">'
+        f'<span style="font-weight:650;font-size:1.05rem;color:var(--fte-text)">{html.escape(str(fields["label"]))}</span>'
+        f'<span style="font-size:.85rem;white-space:nowrap">{html.escape(str(fields["status"]))}</span>'
+        f'</div>',
+        f'<div style="font-size:1.55rem;font-weight:700;color:var(--fte-text);margin:.55rem 0 .9rem;letter-spacing:.01em">{html.escape(str(fields["value"]))}</div>',
     ]
     if explainer:
         parts.append(
-            '<div class="fte-modal-sec"><div class="fte-modal-sec-t">What it means</div>'
-            f'<div class="fte-modal-sec-b">{html.escape(explainer)}</div></div>'
+            f'<div style="border-top:1px solid var(--fte-border);margin-top:.7rem;padding-top:.6rem">'
+            f'<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fte-muted);font-weight:600;margin-bottom:.35rem">What it means</div>'
+            f'<div style="font-size:.86rem;color:var(--fte-text);line-height:1.5">{html.escape(explainer)}</div></div>'
         )
     pv_rows = [
         ("Origin", fields["origin"]),
         ("Period", fields["period"]),
         ("Source", fields["source"]),
-        ("Location", fields["location"]),
-        ("Currency", fields["currency"]),
-        ("Scale", fields["scale"]),
         ("Evidence", fields["evidence"]),
     ]
     body = ""
     for k, v in pv_rows:
         vtxt = "—" if v in (None, "") else str(v)
-        cls = "fte-modal-pv missing" if vtxt == "—" else "fte-modal-pv"
+        mk = "missing" if vtxt == "—" else ""
         body += (
-            f'<div class="{cls}"><div class="k">{html.escape(str(k))}</div>'
-            f'<div class="v">{html.escape(vtxt)}</div></div>'
+            f'<div class="{mk}" style="display:grid;grid-template-columns:96px 1fr;gap:5px;font-size:.82rem;padding:2px 0">'
+            f'<div style="color:var(--fte-muted)">{html.escape(str(k))}</div>'
+            f'<div style="color:var(--fte-text);overflow-wrap:anywhere">{html.escape(vtxt)}</div></div>'
         )
-    parts.append(f'<div class="fte-modal-sec"><div class="fte-modal-sec-t">Provenance</div>{body}</div>')
+    parts.append(
+        f'<div style="border-top:1px solid var(--fte-border);margin-top:.7rem;padding-top:.6rem">'
+        f'<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fte-muted);font-weight:600;margin-bottom:.35rem">Provenance</div>{body}</div>'
+    )
     if fields.get("note"):
         parts.append(
-            f'<div class="fte-modal-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
+            f'<div style="margin-top:.65rem;padding:.45rem .6rem;font-size:.78rem;color:var(--fte-blocked);border-left:2px solid var(--fte-blocked);background:rgba(224,82,82,.06);border-radius:4px">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
         )
-    if show_source:
-        frag = fields.get("fragment")
-        if frag:
-            parts.append(
-                '<div class="fte-modal-sec"><div class="fte-modal-sec-t">Source fragment</div>'
-                f'<div class="fte-modal-frag">{html.escape(str(frag))}</div></div>'
-            )
-        else:
-            parts.append(
-                '<div class="fte-modal-sec"><div class="fte-modal-sec-t">Source fragment</div>'
-                '<div class="fte-modal-frag empty">No source fragment is available from the current pipeline.</div></div>'
-            )
     return "".join(parts)
-
-
-def _fte_toggle_overlay_source() -> None:
-    """Toggle the 'View source fragment' section inside the overlay."""
-    st.session_state["fte_overlay_show_source"] = not st.session_state.get("fte_overlay_show_source", False)
 
 
 def _fte_close_overlay() -> None:
     """Close the metric-detail overlay (selection itself is kept)."""
     st.session_state["fte_overlay_open"] = False
-    st.session_state["fte_overlay_show_source"] = False
 
 
-def _render_metric_overlay(module3_result) -> None:
-    """Small focused overlay for the selected metric — the Financial Grid
-    stays visible behind it. Uses real Streamlit buttons for actions."""
+@st.dialog("Metric Detail", width="small", dismissible=True, on_dismiss="rerun")
+def _metric_detail_dialog(module3_result) -> None:
+    """Native Streamlit dialog for the selected metric detail.
+    Small centered floating card; built-in × close; grid stays visible.
+    Closes automatically when the user dismisses or selects another metric."""
     metric = st.session_state.get("fte_selected_metric")
-    if not metric or not st.session_state.get("fte_overlay_open"):
+    if not metric:
+        st.caption("No metric selected.")
         return
     rows = st.session_state.get("fte_grid_rows") or []
     if not any(r["metric"] == metric for r in rows):
-        st.session_state["fte_overlay_open"] = False
+        st.caption("The selected metric is no longer visible.")
         return
     fields = _metric_overlay_fields(rows, module3_result, metric)
     explainer = _metric_explainer(metric)
-    show_source = bool(st.session_state.get("fte_overlay_show_source"))
-
-    st.markdown('<div class="fte-modal-wrap">', unsafe_allow_html=True)
-    st.markdown('<div class="fte-modal-card">', unsafe_allow_html=True)
-    st.markdown(_metric_overlay_html(fields, explainer, show_source), unsafe_allow_html=True)
-    src_lbl = "Hide source fragment" if show_source else "View source fragment"
-    b1, b2 = st.columns([3, 1], gap="small")
-    with b1:
-        st.button(
-            src_lbl, key="fte_modal_source", use_container_width=True,
-            on_click=_fte_toggle_overlay_source,
-        )
-    with b2:
-        st.button(
-            "Close", key="fte_modal_close", use_container_width=True,
-            type="primary", on_click=_fte_close_overlay,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown(_metric_detail_html(fields, explainer), unsafe_allow_html=True)
+    st.button("Close", key="fte_dlg_close", on_click=_fte_close_overlay)
 
 
 def _render_intelligence_tab(module3_result, intelligence_outputs) -> None:
