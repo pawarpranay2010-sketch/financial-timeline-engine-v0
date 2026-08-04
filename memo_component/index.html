@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Memo Metrics</title>
+  <!-- Vendored local copy of streamlit-component-lib (no CDN dependency). -->
+  <script src="./streamlit-component-lib.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    #memo {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   "Helvetica Neue", Arial, sans-serif;
+      font-size: .92rem;
+      line-height: 1.75;
+      color: #e6e9ef;
+    }
+    .fte-memo-para { margin-bottom: .9rem; }
+    .fte-memo-para:last-child { margin-bottom: 0; }
+    /* The metric is plain inline text with only a subtle affordance —
+       no button chrome, no boxes, no pills. */
+    span[data-metric] {
+      color: #4f8ef7;
+      font-weight: 600;
+      text-decoration: underline dotted rgba(79, 142, 247, .65);
+      text-underline-offset: 3px;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: color 180ms ease, background 180ms ease;
+    }
+    span[data-metric]:hover { color: #7aa6f9; background: rgba(79, 142, 247, .08); }
+    span[data-metric]:focus-visible {
+      outline: 2px solid #4f8ef7;
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div id="memo"></div>
+  <script>
+    (function () {
+      var memoEl = document.getElementById("memo");
+      var metrics = [];
+
+      function render(html) {
+        memoEl.innerHTML = html || "";
+        metrics = Array.prototype.slice.call(memoEl.querySelectorAll("span[data-metric]"));
+        metrics.forEach(function (el) {
+          el.tabIndex = 0;
+          el.setAttribute("role", "button");
+          el.setAttribute("aria-label", "Inspect metric " + (el.getAttribute("data-metric") || ""));
+        });
+      }
+
+      function fire(el) {
+        if (!window.Streamlit) return;
+        var nonce = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+        window.Streamlit.setComponentValue({
+          metric: el.getAttribute("data-metric"),
+          nonce: String(nonce)
+        });
+      }
+
+      function attach() {
+        if (!window.Streamlit) return;
+        metrics.forEach(function (el) {
+          if (el.getAttribute("data-bound")) return;
+          el.setAttribute("data-bound", "1");
+          el.addEventListener("click", function () { fire(el); });
+          el.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              fire(el);
+            }
+          });
+        });
+      }
+
+      function onRender(event) {
+        var args = (event && event.detail && event.detail.args) || {};
+        render(args.memo_html || "");
+        attach();
+        if (window.Streamlit && window.Streamlit.setFrameHeight) {
+          window.Streamlit.setFrameHeight();
+        }
+      }
+
+      if (window.Streamlit) {
+        window.Streamlit.events.addEventListener(
+          window.Streamlit.RENDER_EVENT,
+          onRender
+        );
+        window.Streamlit.setComponentReady();
+        attach();
+      }
+      // The vendored lib loads synchronously above, but keep a small retry
+      // guard in case of any load-order edge case.
+      window.setInterval(attach, 500);
+    })();
+  </script>
+</body>
+</html>

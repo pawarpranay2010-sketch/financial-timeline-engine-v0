@@ -21,6 +21,7 @@ import requests
 import io
 import html
 import json
+import os
 import re
 from datetime import datetime, timezone
 import pandas as pd
@@ -1539,37 +1540,15 @@ _FTE_CSS = """
   outline: 2px solid var(--fte-conflict); outline-offset: 1px;
 }
 
-/* Sprint 3.2: metrics inside the memo ARE the clickable elements — the
-   metric name/value renders as an inline text-like button; the floating
-   evidence card (native st.dialog) is the only inspection UI. The
-   st-key-* classes come from real st.container(key=...) blocks, so the
-   selectors always nest correctly in the DOM. */
+/* Sprint 3.2.1: the memo body renders inside a bidirectional custom
+   component as ONE continuous HTML document — metric tokens are inline
+   spans (never boxed buttons), so sentences stay intact. The doc card
+   rule below styles the wrapper; the component styles itself. */
 [class*="st-key-fte_memo_doc"] {
   max-width: 860px; margin: .25rem auto 0;
   background: rgba(127,127,127,.04);
 }
-[class*="st-key-fte_memo_para"] { margin-bottom: .9rem; }
-[class*="st-key-fte_memo_para"] [data-testid="stMarkdownContainer"] {
-  display: inline; margin: 0;
-}
-[class*="st-key-fte_memo_para"] [data-testid="stMarkdownContainer"] div { display: inline; }
-[class*="st-key-fte_memo_para"] [data-testid="stButton"],
-[class*="st-key-fte_memo_para"] [data-testid="stBaseButton-secondary"] {
-  display: inline-block; width: auto; margin: 0;
-}
-[class*="st-key-fte_memo_para"] [data-testid="stButton"] button {
-  background: none; border: none; box-shadow: none; padding: 0 .12em;
-  color: var(--fte-conflict); font-weight: 600; font-size: .92rem;
-  line-height: inherit; min-height: 0; border-radius: 0;
-  text-decoration: underline dotted rgba(79,142,247,.65);
-  text-underline-offset: 3px; cursor: pointer;
-  transition: color var(--hover) ease;
-}
-[class*="st-key-fte_memo_para"] [data-testid="stButton"] button:hover { color: #7aa6f9; }
-[class*="st-key-fte_memo_para"] [data-testid="stButton"] button:focus-visible {
-  outline: 2px solid var(--fte-conflict); outline-offset: 2px;
-}
-.fte-memo-seg { color: var(--fte-text); }
+.fte-memo-para { margin-bottom: .9rem; }
 
 /* Sprint 3: compact Intelligence cards + focused memo document view. */
 .fte-intel-card {
@@ -1639,6 +1618,7 @@ def _init_terminal_state() -> None:
         ("fte_memo_view_open", False),
         ("fte_memo_status", "idle"),
         ("fte_memo_metric_click", None),
+        ("fte_last_memo_nonce", None),
         ("fte_overlay_open", False),
         ("fte_prev_selection_rows", ()),
     ]:
@@ -2963,6 +2943,20 @@ Generate a professional investment memo grounded strictly in the Document Summar
             st.rerun()
 
 
+# Sprint 3.2.1: bidirectional memo-metric component — the memo body
+# renders as ONE continuous HTML document inside the component (true
+# inline text flow, no boxed buttons); metric tokens are inline spans
+# that report clicks back to Python. Falls back to a plain document if
+# the component cannot be declared.
+try:
+    _MEMO_COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memo_component")
+    _memo_metric_component = st.components.v1.declare_component(
+        "fte_memo_metric", path=_MEMO_COMPONENT_DIR
+    )
+except Exception:
+    _memo_metric_component = None
+
+
 def _memo_clickable_spans(rows, para) -> list:
     """(start, end, label, metric) spans in a memo paragraph that directly
     represent a pipeline metric: its canonical name, or its exact stored
@@ -3001,39 +2995,31 @@ def _memo_clickable_spans(rows, para) -> list:
     return out
 
 
-def _open_memo_metric(metric) -> None:
-    """Clicking a metric inside the memo opens the floating evidence card."""
-    st.session_state["fte_memo_metric_click"] = metric
-
-
-def _render_memo_paragraph(para, rows, para_idx) -> None:
-    """Render one memo paragraph with metric names/values as INLINE
-    clickable text (real Streamlit buttons styled like the prose). The
-    metric itself is the only control — no chips, no detail buttons."""
-    with st.container(key=f"fte_memo_para_{para_idx}"):
+def _memo_metric_html(rows, memo) -> str:
+    """Memo body as ONE continuous HTML document. Pipeline metric names
+    and unambiguous exact stored values become inline spans carrying
+    data-metric; ordinary prose is never wrapped, so sentences stay
+    intact. The component renders this HTML and reports clicks back."""
+    paragraphs = [p.strip() for p in memo.replace("\r\n", "\n").split("\n\n") if p.strip()]
+    out = []
+    for para in paragraphs:
         spans = _memo_clickable_spans(rows, para)
         if not spans:
-            st.markdown(html.escape(para).replace("\n", "<br>"), unsafe_allow_html=True)
-            return
-        pos = 0
-        for i, (s, e, label, metric) in enumerate(spans):
+            out.append(f'<div class="fte-memo-para">{html.escape(para).replace(chr(10), "<br>")}</div>')
+            continue
+        body, pos = [], 0
+        for s, e, label, metric in spans:
             if s > pos:
-                st.markdown(
-                    '<span class="fte-memo-seg">' + html.escape(para[pos:s]).replace("\n", "<br>") + '</span>',
-                    unsafe_allow_html=True,
-                )
-            st.button(
-                label,
-                key=f"fte_memo_inline_{para_idx}_{i}_{metric}",
-                on_click=_open_memo_metric,
-                args=(metric,),
+                body.append(html.escape(para[pos:s]).replace(chr(10), "<br>"))
+            body.append(
+                f'<span data-metric="{html.escape(metric, quote=True)}" tabindex="0" role="button">'
+                f'{html.escape(label)}</span>'
             )
             pos = e
         if pos < len(para):
-            st.markdown(
-                '<span class="fte-memo-seg">' + html.escape(para[pos:]).replace("\n", "<br>") + '</span>',
-                unsafe_allow_html=True,
-            )
+            body.append(html.escape(para[pos:]).replace(chr(10), "<br>"))
+        out.append(f'<div class="fte-memo-para">{"".join(body)}</div>')
+    return "".join(out)
 
 
 def _clear_memo_metric_click() -> None:
@@ -3082,16 +3068,29 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
         html.escape(str(d.get("file_name", ""))) for d in (document_summaries or []) if d.get("file_name")
     )[:180]
     rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
-    paragraphs = [p.strip() for p in memo.replace("\r\n", "\n").split("\n\n") if p.strip()]
+    memo_html = _memo_metric_html(rows, memo)
     with st.container(key="fte_memo_doc", border=True):
         st.markdown('<div class="fte-memo-title">Investment Memo</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="fte-memo-context">📄 {context or "No document context"}</div>', unsafe_allow_html=True)
         st.markdown('<hr style="border:none;border-top:1px solid var(--fte-border);margin:1.1rem 0">', unsafe_allow_html=True)
-        # Metric names/values inside the memo ARE the clickable elements —
-        # the floating evidence card is the only inspection UI (no chips,
-        # no detail buttons). Clicking another metric replaces the same card.
-        for pidx, p in enumerate(paragraphs):
-            _render_memo_paragraph(p, rows, pidx)
+        # The memo body is ONE continuous HTML document (true inline
+        # flow). Metric tokens are inline spans the component turns into
+        # clicks — no reload, no layout break, scroll preserved. If the
+        # component is unavailable, render a plain (non-interactive) memo.
+        if _memo_metric_component is not None:
+            evt = None
+            try:
+                evt = _memo_metric_component(memo_html=memo_html, key="fte_memo_metric")
+            except Exception:
+                evt = None
+            if evt and isinstance(evt, dict):
+                metric = evt.get("metric")
+                nonce = evt.get("nonce")
+                if metric and str(nonce) != str(st.session_state.get("fte_last_memo_nonce")):
+                    st.session_state["fte_memo_metric_click"] = metric
+                    st.session_state["fte_last_memo_nonce"] = str(nonce)
+        else:
+            st.markdown(memo_html, unsafe_allow_html=True)
     if st.session_state.get("fte_memo_metric_click"):
         _memo_metric_dialog(module3_result)
     dl1, dl2 = st.columns(2)
