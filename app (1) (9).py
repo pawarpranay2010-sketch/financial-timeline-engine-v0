@@ -2948,11 +2948,31 @@ Generate a professional investment memo grounded strictly in the Document Summar
 # inline text flow, no boxed buttons); metric tokens are inline spans
 # that report clicks back to Python. Falls back to a plain document if
 # the component cannot be declared.
+#
+# Deployment note (Sprint 3.2.3): the component frontend is served from a
+# local directory, so the path MUST be resolved relative to this file
+# (__file__) — never relative to the process working directory — because a
+# hosted deployment may run Streamlit from a different CWD than the repo
+# root. We additionally VERIFY that index.html actually exists at the
+# resolved path before registering; if it is missing we degrade gracefully
+# to a plain (non-interactive) memo instead of rendering a broken
+# component iframe.
 try:
-    _MEMO_COMPONENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memo_component")
-    _memo_metric_component = st.components.v1.declare_component(
-        "fte_memo_metric", path=_MEMO_COMPONENT_DIR
-    )
+    _MEMO_COMPONENT_DIR = None
+    _APP_DIR = os.path.dirname(os.path.realpath(__file__))
+    for _cand in (
+        os.path.join(_APP_DIR, "memo_component"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "memo_component"),
+    ):
+        if os.path.isfile(os.path.join(_cand, "index.html")):
+            _MEMO_COMPONENT_DIR = _cand
+            break
+    if _MEMO_COMPONENT_DIR is not None:
+        _memo_metric_component = st.components.v1.declare_component(
+            "fte_memo_metric", path=_MEMO_COMPONENT_DIR
+        )
+    else:
+        _memo_metric_component = None
 except Exception:
     _memo_metric_component = None
 

@@ -3,8 +3,17 @@
 <head>
   <meta charset="utf-8">
   <title>Memo Metrics</title>
-  <!-- Vendored local copy of streamlit-component-lib (no CDN dependency). -->
-  <script src="./streamlit-component-lib.js"></script>
+  <!--
+    Fully self-contained component entry point (Sprint 3.2.3):
+
+    The Streamlit component protocol shim (streamlit-component-lib.js) is
+    INLINED below, and the page loads no external file, CDN, import, or
+    module. The deployed Streamlit environment only needs to serve this
+    single index.html — there is no second file that can 404 and leave the
+    component silent. memo_component/streamlit-component-lib.js remains in
+    the repository as the documented vendored source; keep it in sync with
+    the inlined copy below.
+  -->
   <style>
     :root { color-scheme: dark; }
     html, body { margin: 0; padding: 0; background: transparent; }
@@ -38,9 +47,114 @@
 <body>
   <div id="memo"></div>
   <script>
+    /* ================================================================
+     * streamlit-component-lib.js — minimal self-contained classic-script
+     * build (vendored; INLINED so the page has zero external deps).
+     *
+     * Implements exactly the message contract of Streamlit's official
+     * streamlit-component-lib (Apache-2.0, (c) Streamlit Inc., 2018-2021).
+     * It is classic <script> JavaScript — no import/export, no modules.
+     *
+     * Component -> Streamlit messages (posted to window.parent):
+     *   { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }
+     *   { isStreamlitMessage: true, type: "streamlit:setFrameHeight",  height }
+     *   { isStreamlitMessage: true, type: "streamlit:setComponentValue", value, dataType }
+     *
+     * Streamlit -> Component messages (window "message" events):
+     *   { isStreamlitMessage: true, type: "streamlit:render", args, disabled, theme }
+     *   redispatched as a CustomEvent("streamlit:render", { detail: { args, disabled, theme } })
+     * ================================================================ */
+    (function (global) {
+      "use strict";
+
+      // ---- tiny EventTarget shim (classic script, Safari-safe) ----
+      function EventTarget() {
+        this._listeners = {};
+      }
+      EventTarget.prototype.addEventListener = function (type, cb) {
+        var list = this._listeners[type] || (this._listeners[type] = []);
+        if (list.indexOf(cb) === -1) list.push(cb);
+      };
+      EventTarget.prototype.removeEventListener = function (type, cb) {
+        var list = this._listeners[type];
+        if (!list) return;
+        var i = list.indexOf(cb);
+        if (i !== -1) list.splice(i, 1);
+      };
+      EventTarget.prototype.dispatchEvent = function (event) {
+        var list = (this._listeners[event.type] || []).slice();
+        for (var i = 0; i < list.length; i++) {
+          try { list[i](event); } catch (e) { /* keep going */ }
+        }
+      };
+
+      var RENDER_EVENT = "streamlit:render";
+      var COMPONENT_READY = "streamlit:componentReady";
+      var SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
+      var SET_COMPONENT_VALUE = "streamlit:setComponentValue";
+
+      var Streamlit = {
+        API_VERSION: 1,
+        RENDER_EVENT: RENDER_EVENT,
+        events: new EventTarget(),
+        _registered: false,
+        _lastFrameHeight: null,
+
+        /** Tell Streamlit the component is ready to receive render events. */
+        setComponentReady: function () {
+          if (!Streamlit._registered) {
+            global.addEventListener("message", Streamlit.onMessageEvent);
+            Streamlit._registered = true;
+          }
+          Streamlit._send(COMPONENT_READY, { apiVersion: Streamlit.API_VERSION });
+        },
+
+        /** Report the iframe content height (defaults to scrollHeight). */
+        setFrameHeight: function (height) {
+          if (height === undefined) height = global.document.body.scrollHeight;
+          if (height === Streamlit._lastFrameHeight) return;
+          Streamlit._lastFrameHeight = height;
+          Streamlit._send(SET_FRAME_HEIGHT, { height: height });
+        },
+
+        /** Send a widget value back to Python (JSON-serializable). */
+        setComponentValue: function (value) {
+          Streamlit._send(SET_COMPONENT_VALUE, { value: value, dataType: "json" });
+        },
+
+        /** Forward streamlit:render messages as render events. */
+        onMessageEvent: function (event) {
+          var data = event.data;
+          if (!data || !data.isStreamlitMessage || data.type !== RENDER_EVENT) return;
+          var detail = {
+            disabled: Boolean(data.disabled),
+            args: data.args || {},
+            theme: data.theme
+          };
+          Streamlit.events.dispatchEvent(
+            new global.CustomEvent(RENDER_EVENT, { detail: detail })
+          );
+        },
+
+        _send: function (type, data) {
+          var payload = { isStreamlitMessage: true, type: type };
+          for (var key in data) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) payload[key] = data[key];
+          }
+          global.parent.postMessage(payload, "*");
+        }
+      };
+
+      global.Streamlit = Streamlit;
+    })(window);
+
+    /* ================================================================
+     * App logic — memo document with inline clickable metric spans.
+     * ================================================================ */
     (function () {
       var memoEl = document.getElementById("memo");
       var metrics = [];
+      var ready = false;
 
       function render(html) {
         memoEl.innerHTML = html || "";
@@ -85,7 +199,13 @@
         }
       }
 
-      if (window.Streamlit) {
+      // Idempotent readiness: becomes ready as soon as the protocol shim
+      // exists (it is inlined above, so normally on the first tick). The
+      // retry loop also self-heals any future load-order edge case and
+      // guarantees setComponentReady() is sent exactly once.
+      function init() {
+        if (ready || !window.Streamlit) return;
+        ready = true;
         window.Streamlit.events.addEventListener(
           window.Streamlit.RENDER_EVENT,
           onRender
@@ -93,9 +213,9 @@
         window.Streamlit.setComponentReady();
         attach();
       }
-      // The vendored lib loads synchronously above, but keep a small retry
-      // guard in case of any load-order edge case.
-      window.setInterval(attach, 500);
+
+      init();
+      window.setInterval(init, 250);
     })();
   </script>
 </body>
