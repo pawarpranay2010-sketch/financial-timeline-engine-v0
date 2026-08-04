@@ -67,7 +67,12 @@ from ingestion import (
 # assumed path per your latest instructions (flat backend/ package, no
 # module3/ subfolder) and that it exports a top-level `run_module3`.
 from backend.module3_controller import run_module3
-from backend.evidence_resolver import recover_missing_metrics
+from backend.evidence_resolver import recover_missing_metrics, PROVENANCE_TIER
+from backend.formula_engine import (
+    FORMULA_REGISTRY,
+    SUPPORTED_FORMULAS,
+    calculate_metric,
+)
 
 # =============================================================================
 # SECTION 1: Config & Session State
@@ -1859,6 +1864,14 @@ def _build_terminal_rows(module3_result):
                     "Period": period, "Source": source or "—", "Status": "🔵 Conflict",
                     "_kind": "conflict", "_fact": fact,
                 })
+            elif isinstance(fact, dict) and fact.get("provenance_tier") == PROVENANCE_TIER.EXTERNAL_DERIVED:
+                # Sprint 7 - externally derived: calculated from one or more
+                # inputs recovered via the approved external hierarchy.
+                rows.append({
+                    "metric": key, "Metric": label, "Value": _fmt_num(value),
+                    "Period": period, "Source": source or "External + Derived",
+                    "Status": "🟣 External + Derived", "_kind": "derived", "_fact": fact,
+                })
             elif source == "Calculated":
                 rows.append({
                     "metric": key, "Metric": label, "Value": _fmt_num(value),
@@ -2411,6 +2424,7 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
         "source": "—", "location": "—", "currency": "—", "scale": "—",
         "evidence": "—", "note": None, "fragment": None, "fact": None,
         "document": "—", "source_ref": "—", "calc_basis": "—", "source_metrics": "—",
+        "calc_inputs": None,
         "tier": "—", "provider": "—", "provenance_tier": None,
     }
     if not metric:
@@ -2499,6 +2513,40 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
         inputs_raw = fact.get("inputs") if isinstance(fact, dict) else None
         if isinstance(inputs_raw, list) and inputs_raw:
             out["source_metrics"] = ", ".join(str(i) for i in inputs_raw if str(i).strip())
+        # Sprint 7 - per-input provenance rows. Only populated when the fact
+        # itself carries explicit input provenance (Sprint 6.5 external-derived
+        # facts via input_provenance, or Formula-Engine facts via
+        # inputs_detail). Demo facts carry neither, so demo cards render
+        # exactly as before - nothing is invented here.
+        iprov = fact.get("input_provenance") if isinstance(fact, dict) else None
+        idet = fact.get("inputs_detail") if isinstance(fact, dict) else None
+        if (isinstance(iprov, dict) or isinstance(idet, list)) and isinstance(inputs_raw, list):
+            ci = []
+            for _ik in inputs_raw:
+                if not str(_ik).strip():
+                    continue
+                _if = fd.get(_ik) or rt.get(_ik)
+                _tier = None
+                if isinstance(idet, list):
+                    for _it in idet:
+                        if isinstance(_it, dict) and _it.get("metric") == _ik:
+                            _tier = _it.get("provenance_tier")
+                            break
+                if _tier is None and isinstance(iprov, dict):
+                    _tier = iprov.get(_ik)
+                if _tier is None and isinstance(_if, dict):
+                    _tier = _if.get("provenance_tier")
+                _iv = _if.get("value") if isinstance(_if, dict) else None
+                _page = _if.get("page") if isinstance(_if, dict) else None
+                ci.append({
+                    "metric": str(_ik),
+                    "display_value": _fmt_num(_iv) if _iv is not None else "—",
+                    "tier": _PROVENANCE_TIER_LABEL.get(_tier, "—") if _tier else "—",
+                    "page": str(_page) if _page not in (None, "") else None,
+                    "evidence": _if.get("evidence") if isinstance(_if, dict) else None,
+                })
+            if ci:
+                out["calc_inputs"] = ci
     return out
 
 
@@ -2553,6 +2601,15 @@ def _metric_detail_html(fields: dict, explainer: str) -> str:
         if str(fields.get("source_metrics") or "—") != "—":
             calc_parts.append(
                 f'<div style="font-size:.78rem;color:var(--fte-muted);margin-top:.2rem">Inputs: {html.escape(str(fields["source_metrics"]))}</div>'
+            )
+        # Sprint 7 - per-input provenance rows (values + tiers), shown only
+        # when the fact carried explicit input provenance (never fabricated).
+        for _it in fields.get("calc_inputs") or []:
+            _line = f"{_it.get('metric', '—')} — {_it.get('display_value') or '—'}"
+            if str(_it.get("tier") or "—") != "—":
+                _line += f" — {_it['tier']}"
+            calc_parts.append(
+                f'<div style="font-size:.78rem;color:var(--fte-muted);margin-top:.15rem">· {html.escape(_line)}</div>'
             )
         parts.append(
             f'<div style="border-top:1px solid var(--fte-border);margin-top:.7rem;padding-top:.6rem">'
@@ -3315,6 +3372,15 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
             calc_lines.append(
                 f'<div style="font-size:.75rem;color:var(--fte-muted);margin-top:.15rem">Inputs: {html.escape(str(fields["source_metrics"]))}</div>'
             )
+        # Sprint 7 - per-input provenance rows (values + tiers), shown only
+        # when the fact carried explicit input provenance (never fabricated).
+        for _it in fields.get("calc_inputs") or []:
+            _line = f"{_it.get('metric', '—')} — {_it.get('display_value') or '—'}"
+            if str(_it.get("tier") or "—") != "—":
+                _line += f" — {_it['tier']}"
+            calc_lines.append(
+                f'<div style="font-size:.73rem;color:var(--fte-muted);margin-top:.12rem">· {html.escape(_line)}</div>'
+            )
         parts.append(
             f'<div class="fte-card-section"><div class="fte-card-label">Calculation</div>' + "".join(calc_lines) + '</div>'
         )
@@ -3678,13 +3744,56 @@ def _reconstruct_demo_from_query() -> None:
             del st.query_params[_p]
 
 
+def _demo_formula_target(q: str):
+    """Match a supported formula key from a Co-Pilot request using
+    word-boundary alias matching (never substring collisions)."""
+    for _k in SUPPORTED_FORMULAS:
+        _aliases = [str(_k).lower()] + [
+            str(a).lower() for a in (FORMULA_REGISTRY[_k].aliases or [])
+        ]
+        for _a in _aliases:
+            if _a and re.search(r"(?<![a-z0-9])" + re.escape(_a) + r"(?![a-z0-9])", q):
+                return _k
+    return None
+
+
 def _demo_copilot_answer(question, rows):
     """Deterministic Demo-Mode Co-Pilot: predefined, evidence-backed answers
-    built ONLY from the static demo dataset. Never calls an AI provider."""
+    built ONLY from the static demo dataset. Never calls an AI provider.
+    'Calculate <metric>' queries delegate to the Formula Engine - the
+    language model never performs arithmetic."""
     q = (question or "").lower()
     has = lambda *ks: any(k in q for k in ks)
 
-    if has("strongest verified", "strongest evidence", "best evidence", "what is verified"):
+    if has("calculate", "compute", "calc"):
+        _target = _demo_formula_target(q)
+        if _target:
+            res = calculate_metric(_target, _demo_module3_result()["financial_data"], context={})
+            if res["status"] in ("derived", "external_derived"):
+                _ins = "; ".join(
+                    f"{it['metric']} = {_fmt_num(it['value']) if it.get('value') is not None else it['display_value']}"
+                    for it in (res.get("inputs") or [])
+                )
+                content = (
+                    f"{res['display_name']} was derived deterministically by the Formula Engine "
+                    f"- no AI arithmetic. {res['display_name']} = {res['display_value']}. "
+                    f"Formula: {res['formula']}. Inputs: {_ins}."
+                )
+                intent = "formula_engine"
+            else:
+                content = (
+                    f"I cannot calculate {res['display_name']}: "
+                    f"{res.get('reason') or res.get('error') or 'unsupported'}."
+                )
+                intent = "formula_engine_blocked"
+        else:
+            content = (
+                "I can calculate only supported ratios deterministically: ROE, ROA, Profit Margin, "
+                "Operating Margin, Current Ratio, Debt to Equity, Revenue Growth, EPS Growth, CAGR. "
+                "Try 'Calculate ROE'."
+            )
+            intent = "formula_unsupported"
+    elif has("strongest verified", "strongest evidence", "best evidence", "what is verified"):
         content = (
             "The strongest verified evidence in the demo sample is the income statement: "
             "Revenue of $281.70B, Net Profit of $98.30B and diluted EPS of $13.05, each "
