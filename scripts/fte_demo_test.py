@@ -199,15 +199,27 @@ def main():
     assert 'for="ftemetric-revenue"' in joined, "demo memo lost its Revenue metric toggle"
     assert 'id="ftemetric-revenue"' in joined, "Revenue radio not embedded"
     assert 'name="fte-memo-card"' in joined, "exclusive radio group missing"
-    assert 'id="ftemetric-none" class="fte-memo-radio" checked' in joined, "default-hidden radio missing"
+    assert 'id="ftemetric-none" class="fte-memo-radio"' in joined, "none-radio missing"
+    # Sprint 4.3.1: radios must be UNCONTROLLED (no checked attr) so React
+    # does not treat them as read-only controlled fields, and the memo must
+    # separate structural HTML blocks with blank lines so CommonMark parses
+    # the cards block as HTML instead of swallowing it as raw text.
+    assert 'class="fte-memo-radio" checked' not in joined, "radio must not be pre-checked (React controlled-input bug)"
+    assert '\n\n<div class="fte-memo-para"' in memo_html, "memo paragraphs must be blank-line separated (CommonMark)"
+    assert '</style>\n<div class="fte-memo-cards"' in memo_html, "cards div must start on its own line after </style>"
     assert 'data-card="ftemetric-revenue"' in joined, "Revenue evidence card not embedded"
     assert "281.70B" in joined, "Revenue card lacks its static demo value"
     assert "What it means" in joined, "card lacks the explainer section"
     assert "Consolidated Statements of Income" in joined, "card lacks demo provenance"
     assert "?fte_metric=" not in joined, "demo memo still emits query-param links (would rerun)"
     assert 'href="#ftemetric-' not in joined, "demo memo still uses URL-fragment anchors"
-    assert ".fte-memo-card {" in css_joined and "position: fixed;" in css_joined, "floating overlay CSS missing"
-    assert "min(360px" in css_joined and "100vw" in css_joined, "responsive card sizing missing"
+    # Sprint 4.3 regression guard: the base overlay CSS must live in the
+    # memo's OWN inline <style> (self-contained), not only in the global
+    # terminal stylesheet — otherwise cards render as in-flow divs below
+    # the memo whenever the app-level CSS is not applied (deployment).
+    assert ".fte-memo-card {" in memo_html and "position: fixed;" in memo_html, "floating overlay CSS missing from memo's own style (Sprint 4.3)"
+    assert "min(360px" in memo_html and "100vw" in memo_html, "responsive card sizing missing from memo's own style"
+    assert "display: none;" in memo_html, "cards not hidden by default in the memo's own style"
     radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-none")
     assert visible == set(), f"default state must show NO card, got {visible}"
     radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-revenue")
@@ -244,7 +256,7 @@ def main():
     assert "fte-card-close" not in memo_html, "redundant in-card Close button still present"
     assert joined.count('for="ftemetric-none"') >= 2, "× / backdrop close labels missing"
     assert "fte-card-backdrop" in joined, "backdrop element missing"
-    assert "display: none;" in css_joined, "cards not hidden by default"
+    assert "display: none;" in memo_html, "cards not hidden by default in the memo's own style"
     radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-none")
     assert visible == set(), "after ×/backdrop no card may remain visible"
     print("R3. × / BACKDROP → SAME DEMO MEMO OK (no in-card Close; labels toggle #ftemetric-none)")

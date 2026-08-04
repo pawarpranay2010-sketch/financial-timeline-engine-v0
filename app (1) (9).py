@@ -3284,6 +3284,11 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
     )
 
 
+_MEMO_CARD_BASE_CSS = '\n.fte-memo-radio { display: none; }\n.fte-memo-card {\n  display: none;\n  position: fixed;\n  inset: 0;\n  z-index: 9999;\n  color: var(--fte-text);\n  font-size: .875rem;\n  line-height: 1.45;\n}\n.fte-card-backdrop {\n  position: absolute;\n  inset: 0;\n  background: rgba(6, 8, 12, .55);\n  cursor: pointer;\n}\n.fte-memo-card-inner {\n  position: absolute;\n  left: 50%; top: 50%;\n  transform: translate(-50%, -50%);\n  width: min(360px, calc(100vw - 2.5rem));\n  max-width: 100vw;\n  max-height: min(70vh, 520px);\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  box-sizing: border-box;\n  background: var(--fte-panel);\n  border: 1px solid rgba(127, 127, 127, .28);\n  border-radius: 12px;\n  box-shadow: 0 16px 48px rgba(0, 0, 0, .5);\n  padding: .85rem .95rem .9rem;\n  text-align: left;\n}\n.fte-card-head {\n  display: flex; align-items: baseline; gap: 8px;\n  margin-bottom: .45rem;\n}\n.fte-card-title { font-weight: 700; font-size: 1rem; flex: 1; }\n.fte-card-status {\n  font-size: .72rem; white-space: nowrap;\n  letter-spacing: .04em; text-transform: uppercase;\n}\n.fte-card-x {\n  font-size: 1.05rem; line-height: 1; color: var(--fte-muted);\n  text-decoration: none; padding: 0 2px; border-radius: 4px;\n  cursor: pointer;\n  transition: color 120ms ease;\n}\n.fte-card-x:hover { color: var(--fte-text); }\n.fte-card-value {\n  font-size: 1.45rem; font-weight: 700;\n  letter-spacing: .01em; margin: .15rem 0 .7rem;\n}\n.fte-card-section {\n  border-top: 1px solid var(--fte-border);\n  margin-top: .6rem; padding-top: .55rem;\n}\n.fte-card-label {\n  font-size: 10px; letter-spacing: .13em; text-transform: uppercase;\n  color: var(--fte-muted); font-weight: 600; margin-bottom: .3rem;\n}\n.fte-card-row {\n  display: grid; grid-template-columns: 84px 1fr; gap: 6px;\n  font-size: .8rem; padding: 2px 0;\n}\n.fte-card-row .k { color: var(--fte-muted); }\n.fte-card-row .v { color: var(--fte-text); overflow-wrap: anywhere; }\n.fte-card-note {\n  margin-top: .6rem; padding: .4rem .55rem; font-size: .76rem;\n  color: var(--fte-blocked);\n  border-left: 2px solid var(--fte-blocked);\n  background: rgba(224, 82, 82, .07); border-radius: 4px;\n}\n.fte-st-verified { color: var(--fte-ok); }\n.fte-st-derived { color: var(--fte-derived); }\n.fte-st-blocked { color: var(--fte-blocked); }\n.fte-st-conflict { color: var(--fte-conflict); }\n.fte-st-unanalyzed { color: var(--fte-unanalyzed); }\n'
+
+_MEMO_LINK_BASE_CSS = '\n.fte-memo-para .fte-metric-link {\n  color: var(--fte-conflict);\n  font-weight: 600;\n  text-decoration: underline dotted rgba(79, 142, 247, .65);\n  text-underline-offset: 3px;\n  cursor: pointer;\n  border-radius: 2px;\n  transition: color 180ms ease, background 180ms ease;\n}\n.fte-memo-para .fte-metric-link:hover {\n  color: #7aa6f9;\n  background: rgba(79, 142, 247, .08);\n}\n.fte-memo-para .fte-metric-link:focus-visible {\n  outline: 2px solid var(--fte-conflict);\n  outline-offset: 2px;\n}\n'
+
+
 def _demo_memo_cards_html(rows, module3_result, metrics) -> str:
     """Hidden radio group + floating cards + the per-metric :checked CSS.
     ONE exclusive radio group (name=fte-memo-card): the default-checked
@@ -3291,7 +3296,12 @@ def _demo_memo_cards_html(rows, module3_result, metrics) -> str:
     that card. Radios precede the cards so the general-sibling combinator
     applies. The <style> is emitted with the memo and applied by the
     browser like any other stylesheet."""
-    radios = ['<input type="radio" name="fte-memo-card" id="ftemetric-none" class="fte-memo-radio" checked>']
+    # Sprint 4.3.1: NO radio is pre-checked. The base .fte-memo-card{
+    # display:none} rule already hides every card by default, so a default-
+    # checked radio is unnecessary — and React treats <input checked> as a
+    # CONTROLLED (read-only) field that fights native label activation.
+    # Uncontrolled radios toggle cleanly via label clicks.
+    radios = ['<input type="radio" name="fte-memo-card" id="ftemetric-none" class="fte-memo-radio">']
     cards = []
     rules = []
     for metric in metrics:
@@ -3300,8 +3310,16 @@ def _demo_memo_cards_html(rows, module3_result, metrics) -> str:
         fields = _metric_overlay_fields(rows, module3_result, metric)
         cards.append(_demo_memo_card_html(fields, _metric_explainer(metric)))
         rules.append(f'#ftemetric-{slug}:checked ~ .fte-memo-card[data-card="ftemetric-{slug}"] {{ display: block; }}')
-    style = f'<style>{"".join(rules)}</style>'
-    return style + f'<div class="fte-memo-cards">{"".join(radios)}{"".join(cards)}</div>'
+    # Sprint 4.3: the memo's own <style> must be SELF-CONTAINED — base
+    # card CSS + inline link styling + the per-metric :checked rules —
+    # so the overlay is hidden by default and fixed-position even if
+    # the app-level terminal stylesheet is not applied in a given
+    # deployment. Without the base rules the cards would render as
+    # ordinary in-flow divs below the memo.
+    style = f'<style>{_MEMO_CARD_BASE_CSS}{_MEMO_LINK_BASE_CSS}{"".join(rules)}</style>'
+    # The cards div must start on its OWN line (after </style>) so CommonMark
+    # parses it as a separate HTML block — see _memo_metric_html.
+    return style + "\n" + f'<div class="fte-memo-cards">{"".join(radios)}{"".join(cards)}</div>'
 
 
 def _memo_metric_html(rows, memo, module3_result=None) -> str:
@@ -3350,9 +3368,17 @@ def _memo_metric_html(rows, memo, module3_result=None) -> str:
         if pos < len(para):
             body.append(html.escape(para[pos:]).replace(chr(10), "<br>"))
         out.append(f'<div class="fte-memo-para">{"".join(body)}</div>')
-    html_body = "".join(out)
+    # Sprint 4.3.1: join structural blocks with BLANK LINES (not "").
+    # react-markdown/remark-parse parses raw HTML with CommonMark rules: a
+    # block starting with <div ends at a blank line, and a <style> block ends
+    # at its </style> only when it starts on its own line. Emitting the memo
+    # as one jammed string made the parser swallow everything after <style>
+    # as raw text, so the radios/cards never became elements and the evidence
+    # card could never appear. Blank-line separation guarantees each block is
+    # parsed as HTML.
+    html_body = "\n\n".join(out)
     if demo and demo_metrics:
-        html_body += _demo_memo_cards_html(rows, module3_result, demo_metrics)
+        html_body += "\n\n" + _demo_memo_cards_html(rows, module3_result, demo_metrics)
     return html_body
 
 
