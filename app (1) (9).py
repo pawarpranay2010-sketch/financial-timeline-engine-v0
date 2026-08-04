@@ -1565,10 +1565,11 @@ _FTE_CSS = """
 }
 .fte-memo-title { font-size: 1.35rem; font-weight: 700; letter-spacing: .01em; }
 .fte-memo-context { font-size: .8rem; color: var(--fte-muted); margin-top: .4rem; }
-/* Sprint 3.2.4: inline metric links are plain inline text - subtle
-   color + dotted underline, no box/pill/button chrome. Clicking one
-   opens the same native floating metric dialog (query-param driven). */
-.fte-memo-para a.fte-metric-link {
+/* Sprint 3.2.4 + 4.2.1: inline metric tokens are plain inline text —
+   subtle color + dotted underline, no box/pill/button chrome. In the demo
+   memo they are <label> elements that toggle a hidden radio; in the real
+   memo they remain <a> query-param links to the native dialog. */
+.fte-memo-para .fte-metric-link {
   color: var(--fte-conflict);
   font-weight: 600;
   text-decoration: underline dotted rgba(79, 142, 247, .65);
@@ -1577,19 +1578,29 @@ _FTE_CSS = """
   border-radius: 2px;
   transition: color 180ms ease, background 180ms ease;
 }
-.fte-memo-para a.fte-metric-link:hover {
+.fte-memo-para .fte-metric-link:hover {
   color: #7aa6f9;
   background: rgba(79, 142, 247, .08);
 }
+.fte-memo-para .fte-metric-link:focus-visible {
+  outline: 2px solid var(--fte-conflict);
+  outline-offset: 2px;
+}
 
-/* Sprint 4.2: demo-memo floating evidence card — pure CSS :target
-   mechanism (hash links only). Zero JS, zero rerun, zero iframe, zero
-   /component/* dependency: works on any Streamlit hosting. The card is
-   position:fixed, so opening/closing never moves, resizes or scrolls the
-   memo. Only one card can be :target at a time, so clicking another
-   metric instantly replaces the content. Close/×/backdrop all navigate to
-   the sentinel fragment #fte-card-close, which matches no element, so the
-   card returns to display:none. */
+/* Sprint 4.2.1: demo-memo floating evidence card. Mechanism: each
+   clickable metric in the demo memo is a <label for="ftemetric-<slug>">
+   that toggles a hidden radio of ONE exclusive group; a per-metric rule
+   (#ftemetric-<slug>:checked ~ .fte-memo-card[data-card=...]) shows only
+   that card. Pure native HTML + CSS — NO URL navigation, NO hash, NO
+   :target dependence, NO JS, NO rerun, NO iframe, NO /component/*. The
+   overlay cannot be affected by proxy/URL handling and works on any
+   Streamlit hosting. The group is exclusive, so clicking another metric
+   instantly replaces the content. The default-checked #ftemetric-none
+   radio keeps every card hidden until a metric is picked; Close/×/backdrop
+   are labels for #ftemetric-none, restoring the unchanged memo. The card
+   is position:fixed, so opening/closing never moves, resizes or scrolls
+   the memo. */
+.fte-memo-radio { display: none; }
 .fte-memo-card {
   display: none;
   position: fixed;
@@ -1599,11 +1610,11 @@ _FTE_CSS = """
   font-size: .875rem;
   line-height: 1.45;
 }
-.fte-memo-card:target { display: block; }
 .fte-card-backdrop {
   position: absolute;
   inset: 0;
   background: rgba(6, 8, 12, .55);
+  cursor: pointer;
 }
 .fte-memo-card-inner {
   position: absolute;
@@ -1634,6 +1645,7 @@ _FTE_CSS = """
 .fte-card-x {
   font-size: 1.05rem; line-height: 1; color: var(--fte-muted);
   text-decoration: none; padding: 0 2px; border-radius: 4px;
+  cursor: pointer;
   transition: color 120ms ease;
 }
 .fte-card-x:hover { color: var(--fte-text); }
@@ -1660,18 +1672,6 @@ _FTE_CSS = """
   color: var(--fte-blocked);
   border-left: 2px solid var(--fte-blocked);
   background: rgba(224, 82, 82, .07); border-radius: 4px;
-}
-.fte-card-close {
-  display: inline-block; margin-top: .75rem;
-  padding: .32rem .9rem; font-size: .8rem;
-  border: 1px solid var(--fte-border); border-radius: 7px;
-  color: var(--fte-text); background: rgba(127, 127, 127, .08);
-  text-decoration: none;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-.fte-card-close:hover {
-  border-color: rgba(127, 127, 127, .4);
-  background: rgba(127, 127, 127, .14);
 }
 .fte-st-verified { color: var(--fte-ok); }
 .fte-st-derived { color: var(--fte-derived); }
@@ -3174,15 +3174,15 @@ def _memo_clickable_spans(rows, para) -> list:
 
 
 def _memo_metric_slug(metric: str) -> str:
-    """Stable URL-fragment id for a metric in the demo memo (CSS :target)."""
+    """Stable html id for a metric in the demo memo (radio/label CSS)."""
     return re.sub(r"[^a-z0-9]+", "-", str(metric).lower()).strip("-") or "metric"
 
 
 def _demo_memo_card_html(fields: dict, explainer: str) -> str:
     """Compact floating evidence card for a demo memo metric. Pre-rendered
-    from the static demo dataset ONLY and shown/hidden purely with CSS
-    (:target on the card id) — no JS, no rerun, no server round-trip.
-    Fields the dataset does not provide render as '—'."""
+    from the static demo dataset ONLY; shown/hidden purely with CSS
+    (:checked radio group) — no JS, no rerun, no URL change, no server
+    round-trip. Fields the dataset does not provide render as '—'."""
     kind = str(fields.get("kind") or "unanalyzed")
     status = str(fields.get("status") or "—")
     slug = _memo_metric_slug(fields.get("metric"))
@@ -3190,7 +3190,7 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
         f'<div class="fte-card-head">'
         f'<span class="fte-card-title">{html.escape(str(fields.get("label") or fields.get("metric") or "—"))}</span>'
         f'<span class="fte-card-status fte-st-{kind}">{html.escape(status)}</span>'
-        f'<a class="fte-card-x" href="#fte-card-close" aria-label="Close evidence card">×</a>'
+        f'<label class="fte-card-x" for="ftemetric-none" role="button" aria-label="Close evidence card">×</label>'
         f'</div>'
     )
     parts = [head, f'<div class="fte-card-value">{html.escape(str(fields.get("value") or "—"))}</div>']
@@ -3213,22 +3213,32 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
         parts.append(
             f'<div class="fte-card-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
         )
-    parts.append('<a class="fte-card-close" href="#fte-card-close">Close</a>')
     return (
-        f'<div id="ftemetric-{slug}" class="fte-memo-card" role="dialog" '
+        f'<div class="fte-memo-card" role="dialog" data-card="ftemetric-{slug}" '
         f'aria-modal="true" aria-label="{html.escape(str(fields.get("metric") or ""), quote=True)}">'
-        f'<a class="fte-card-backdrop" href="#fte-card-close" tabindex="-1" aria-hidden="true"></a>'
+        f'<label class="fte-card-backdrop" for="ftemetric-none" tabindex="-1" aria-hidden="true"></label>'
         f'<div class="fte-memo-card-inner">{"".join(parts)}</div></div>'
     )
 
 
 def _demo_memo_cards_html(rows, module3_result, metrics) -> str:
-    """All floating cards for the demo memo, wrapped in one hidden block."""
+    """Hidden radio group + floating cards + the per-metric :checked CSS.
+    ONE exclusive radio group (name=fte-memo-card): the default-checked
+    #ftemetric-none hides everything; checking #ftemetric-<slug> shows only
+    that card. Radios precede the cards so the general-sibling combinator
+    applies. The <style> is emitted with the memo and applied by the
+    browser like any other stylesheet."""
+    radios = ['<input type="radio" name="fte-memo-card" id="ftemetric-none" class="fte-memo-radio" checked>']
     cards = []
+    rules = []
     for metric in metrics:
+        slug = _memo_metric_slug(metric)
+        radios.append(f'<input type="radio" name="fte-memo-card" id="ftemetric-{slug}" class="fte-memo-radio">')
         fields = _metric_overlay_fields(rows, module3_result, metric)
         cards.append(_demo_memo_card_html(fields, _metric_explainer(metric)))
-    return f'<div class="fte-memo-cards">{"".join(cards)}</div>'
+        rules.append(f'#ftemetric-{slug}:checked ~ .fte-memo-card[data-card="ftemetric-{slug}"] {{ display: block; }}')
+    style = f'<style>{"".join(rules)}</style>'
+    return style + f'<div class="fte-memo-cards">{"".join(radios)}{"".join(cards)}</div>'
 
 
 def _memo_metric_html(rows, memo, module3_result=None) -> str:
@@ -3238,11 +3248,12 @@ def _memo_metric_html(rows, memo, module3_result=None) -> str:
 
     Real (non-demo) memos keep the query-param links (?fte_metric=<name>)
     that open the existing native metric dialog on the next rerun — the
-    deployed behavior is unchanged. Demo Mode instead emits pure hash
-    links (#ftemetric-<slug>) plus pre-rendered floating evidence cards
-    shown entirely client-side with CSS :target: clicking a metric opens
-    the card instantly with no rerun, no reload, no layout or scroll
-    change. No custom component is required."""
+    deployed behavior is unchanged. Demo Mode instead emits <label
+    for="ftemetric-<slug>"> toggles plus pre-rendered floating evidence
+    cards shown entirely client-side with an exclusive CSS :checked radio
+    group: clicking a metric opens the card instantly with no rerun, no
+    reload, no URL change, no layout or scroll change. No custom
+    component is required."""
     demo = bool(st.session_state.get("fte_demo_mode"))
     paragraphs = [p.strip() for p in memo.replace("\r\n", "\n").split("\n\n") if p.strip()]
     out = []
@@ -3260,8 +3271,8 @@ def _memo_metric_html(rows, memo, module3_result=None) -> str:
             if demo:
                 slug = _memo_metric_slug(metric)
                 body.append(
-                    f'<a class="fte-metric-link" href="#ftemetric-{slug}" '
-                    f'title="Inspect {esc_metric}">{html.escape(label)}</a>'
+                    f'<label class="fte-metric-link" for="ftemetric-{slug}" role="button" tabindex="0" '
+                    f'title="Inspect {esc_metric}">{html.escape(label)}</label>'
                 )
                 if metric not in demo_metrics:
                     demo_metrics.append(metric)

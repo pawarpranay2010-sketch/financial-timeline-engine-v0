@@ -17,6 +17,7 @@ Confirms:
 """
 import ast
 import os
+import re as _re
 import sys
 
 sys.path.insert(0, os.getcwd())
@@ -24,6 +25,36 @@ sys.path.insert(0, os.getcwd())
 from streamlit.testing.v1 import AppTest
 
 APP = "app (1) (9).py"
+
+
+def simulate_card_visibility(memo_html, checked_id):
+    """Faithful browser-free simulation of the demo memo's radio+label CSS
+    mechanism. Given the generated memo HTML and the id of the (single)
+    checked radio, return (radio_ids, card_ids, visible_card_ids):
+
+    - radios: ids of the hidden <input type="radio" name="fte-memo-card">
+    - cards:   data-card ids of the pre-rendered .fte-memo-card overlays
+    - visible: exactly the card whose per-metric rule matches the checked
+      radio: '#id:checked ~ .fte-memo-card[data-card="id"] { display:
+      block; }'. Every other card stays display:none (base rule).
+
+    Because the radios form ONE exclusive group, only one can be checked
+    at a time, which is what makes "click another metric → content
+    replaces" and "Close/×/backdrop → card disappears" work."""
+    rules = {}
+    style_m = _re.search(r"<style>(.*?)</style>", memo_html, _re.S)
+    if style_m:
+        for m in _re.finditer(
+            r'#(ftemetric-[a-z0-9-]+):checked\s*~\s*\.fte-memo-card\[data-card="(ftemetric-[a-z0-9-]+)"\]\s*\{\s*display:\s*block;\s*\}',
+            style_m.group(1),
+        ):
+            rules[m.group(1)] = m.group(2)
+    radios = set(_re.findall(r'<input type="radio"[^>]*id="(ftemetric-[a-z0-9-]+)"[^>]*>', memo_html))
+    cards = set(_re.findall(r'class="fte-memo-card" role="dialog" data-card="(ftemetric-[a-z0-9-]+)"', memo_html))
+    visible = set()
+    if checked_id in rules:
+        visible.add(rules[checked_id])
+    return radios, cards, visible
 
 
 def ss(at, key, default=None):
@@ -156,39 +187,67 @@ def main():
     assert any("Demo memo · Pre-analyzed sample · No AI generation used" in str(b) for b in bodies)
     print("2. DEMO GENERATE MEMO STATIC + NO AI OK (byte-identical memo, inline links present)")
 
-    # --- Sprint 4.2: demo memo metric interaction is fully client-side.
-    # Metric links are pure hash anchors (#ftemetric-<slug>); the floating
-    # evidence cards are pre-rendered into the memo HTML and shown/hidden
-    # with CSS :target. Clicking never touches the server, so the route,
-    # the memo and the scroll position can never reset and no rerun is
-    # visible — the evidence card appears instantly.
+    # --- Sprint 4.2.1: demo memo metric interaction is fully client-side
+    # AND URL-independent. Each metric is a <label for="ftemetric-<slug>">
+    # toggling a hidden radio of ONE exclusive group; a per-metric CSS rule
+    # (#ftemetric-<slug>:checked ~ .fte-memo-card[data-card=...]) makes the
+    # pre-rendered floating card visible. No URL navigation, no hash, no
+    # :target, no JS, no rerun — the route, memo and scroll can never
+    # reset, and the overlay is immune to proxy/URL handling.
+    memo_html = next(str(m.value) for m in at.markdown if "fte-memo-para" in str(m.value))
     joined = " ".join(str(m.value) for m in at.markdown)
-    assert 'href="#ftemetric-revenue"' in joined, "demo memo lost its hash metric link"
-    assert 'id="ftemetric-revenue"' in joined, "Revenue evidence card not embedded"
+    assert 'for="ftemetric-revenue"' in joined, "demo memo lost its Revenue metric toggle"
+    assert 'id="ftemetric-revenue"' in joined, "Revenue radio not embedded"
+    assert 'name="fte-memo-card"' in joined, "exclusive radio group missing"
+    assert 'id="ftemetric-none" class="fte-memo-radio" checked' in joined, "default-hidden radio missing"
+    assert 'data-card="ftemetric-revenue"' in joined, "Revenue evidence card not embedded"
     assert "281.70B" in joined, "Revenue card lacks its static demo value"
     assert "What it means" in joined, "card lacks the explainer section"
     assert "Consolidated Statements of Income" in joined, "card lacks demo provenance"
     assert "?fte_metric=" not in joined, "demo memo still emits query-param links (would rerun)"
-    assert ".fte-memo-card:target" in css_joined, "CSS :target rule missing"
+    assert 'href="#ftemetric-' not in joined, "demo memo still uses URL-fragment anchors"
+    assert ".fte-memo-card {" in css_joined and "position: fixed;" in css_joined, "floating overlay CSS missing"
     assert "min(360px" in css_joined and "100vw" in css_joined, "responsive card sizing missing"
-    print("R1. METRIC CLICK → INSTANT CLIENT-SIDE CARD OK (hash anchor + pre-rendered demo evidence, zero rerun)")
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-none")
+    assert visible == set(), f"default state must show NO card, got {visible}"
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-revenue")
+    assert visible == {"ftemetric-revenue"}, f"clicking Revenue must show only the Revenue card, got {visible}"
+    print("R1. CLICK REVENUE → VISIBLE FLOATING CARD OVER MEMO OK (radio+label :checked, zero URL/navigation)")
 
-    # R2 — clicking another metric swaps the card content (distinct target).
+    # R2 — clicking another metric (ROE, exactly as in the UX flow)
+    # replaces the SAME overlay's content; the exclusive group guarantees
+    # only one card is ever visible.
     joined2 = " ".join(str(m.value) for m in at.markdown)
-    assert 'href="#ftemetric-eps"' in joined2, "EPS hash link missing"
-    assert 'id="ftemetric-eps"' in joined2, "EPS card not embedded"
-    assert "Diluted earnings per share" in joined2, "EPS card evidence missing"
-    assert 'id="ftemetric-revenue"' in joined2, "Revenue card vanished"
-    print("R2. CLICK ANOTHER METRIC → SAME MEMO, CARD CONTENT SWAPS OK (only one :target at a time)")
+    assert 'for="ftemetric-roe"' in joined2, "ROE toggle missing"
+    assert 'id="ftemetric-roe"' in joined2, "ROE radio missing"
+    assert 'data-card="ftemetric-roe"' in joined2, "ROE card missing"
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-roe")
+    assert visible == {"ftemetric-roe"}, f"clicking ROE must swap to the ROE card, got {visible}"
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-revenue")
+    assert visible == {"ftemetric-revenue"}, "Revenue card must reappear when reselected"
+    assert "0.37" in joined2 or "0.366" in joined2, "ROE card lacks its static demo value"
+    assert "Return on equity" in joined2 or "return on equity" in joined2, "ROE explainer missing"
+    # Coherence: every card has a radio + show rule; the none radio never shows.
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-none")
+    assert cards <= radios, f"cards without radios: {cards - radios}"
+    rule_slugs = set(
+        _re.findall(r'#(ftemetric-[a-z0-9-]+):checked ~ .fte-memo-card\[data-card="ftemetric-[a-z0-9-]+"\] \{ display: block; \}', memo_html)
+    )
+    assert "ftemetric-none" not in rule_slugs, "none radio must never show a card"
+    assert rule_slugs == cards, f"missing show rule: {cards - rule_slugs}"
+    print("R2. CLICK ROE → SAME MEMO, SAME CARD REPLACED OK (exclusive radio group, one card max)")
 
-    # R3 — dismiss affordances: ×, Close and backdrop all navigate to the
-    # sentinel fragment #fte-card-close (matches no element), returning the
-    # card to display:none. The memo is untouched — no route change, no
-    # rerun, scroll preserved.
-    assert joined2.count('href="#fte-card-close"') >= 3, "× / Close / backdrop close links missing"
-    assert "fte-card-backdrop" in joined2, "backdrop element missing"
+    # R3 — dismiss: × and backdrop are labels for #ftemetric-none, which
+    # restores the all-hidden default; the redundant in-card Close button
+    # is gone; the memo itself is untouched (no route change, no rerun,
+    # scroll preserved).
+    assert "fte-card-close" not in memo_html, "redundant in-card Close button still present"
+    assert joined.count('for="ftemetric-none"') >= 2, "× / backdrop close labels missing"
+    assert "fte-card-backdrop" in joined, "backdrop element missing"
     assert "display: none;" in css_joined, "cards not hidden by default"
-    print("R3. CLOSE / × / BACKDROP → SAME DEMO MEMO OK (all dismiss via #fte-card-close)")
+    radios, cards, visible = simulate_card_visibility(memo_html, "ftemetric-none")
+    assert visible == set(), "after ×/backdrop no card may remain visible"
+    print("R3. × / BACKDROP → SAME DEMO MEMO OK (no in-card Close; labels toggle #ftemetric-none)")
 
     # R4 — the demo memo no longer depends on the server dialog at all:
     # no metric-click state is set server-side and no dialog button exists.
@@ -229,11 +288,11 @@ def main():
     print("R6. REOPEN DEMO MEMO OK")
 
     # R7 — the real (non-demo) memo path is untouched: its links still use
-    # the query-param dialog navigation; demo hash cards are demo-only.
+    # the query-param dialog navigation; demo radio toggles are demo-only.
     src_guard = open(APP, encoding="utf-8").read()
     assert 'href="?fte_metric={urllib.parse.quote(metric)}"' in src_guard, "real memo link path changed"
-    assert 'href="#ftemetric-{slug}"' in src_guard, "demo hash path missing"
-    print("R7. REAL MEMO PATH UNTOUCHED OK (query-param links preserved; hash cards demo-only)")
+    assert 'for="ftemetric-{slug}"' in src_guard, "demo radio toggle missing"
+    print("R7. REAL MEMO PATH UNTOUCHED OK (query-param links preserved; demo toggles demo-only)")
 
     # --- 8/9) Real workspace nav + real memo generator intact ---
     at2 = AppTest.from_file(APP, default_timeout=120)
