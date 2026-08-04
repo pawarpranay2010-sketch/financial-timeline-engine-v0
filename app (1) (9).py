@@ -1587,6 +1587,13 @@ _FTE_CSS = """
    rounded corners, shadow and centering — we just constrain its width
    inside the FTE dark theme. */
 [data-testid="stDialog"] { width: min(440px, 92vw); }
+.fte-demo-note {
+  margin: .4rem 0 .9rem; padding: .5rem .8rem; font-size: .8rem;
+  color: var(--fte-muted); border: 1px dashed var(--fte-border); border-radius: 6px;
+  background: rgba(217,161,59,.05); line-height: 1.55;
+}
+.fte-demo-note a { color: var(--fte-conflict); text-decoration: none; }
+.fte-demo-note a:hover { text-decoration: underline; }
 """
 
 _TERMINAL_METRICS = [
@@ -1638,6 +1645,8 @@ def _init_terminal_state() -> None:
         ("fte_last_memo_nonce", None),
         ("fte_overlay_open", False),
         ("fte_prev_selection_rows", ()),
+        ("fte_demo_mode", False),
+        ("fte_demo_chat_messages", []),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -2664,6 +2673,16 @@ def _render_entrance() -> None:
                 "Create account", key="fte_btn_create", use_container_width=True,
                 on_click=_fte_goto, args=("signup",),
             )
+        st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+        st.button(
+            "Try FT-E Demo →", key="fte_btn_demo", use_container_width=True,
+            type="secondary", on_click=_fte_goto_demo,
+        )
+        st.markdown(
+            '<div style="text-align:center;font-size:.78rem;color:var(--fte-muted);margin-top:.35rem">'
+            "No account, no API key — explore the full workflow on a pre-analyzed sample.</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _render_signin() -> None:
@@ -2752,6 +2771,16 @@ def _render_workspace_select() -> None:
                     "Select", key=f"fte_ws_{key}", use_container_width=True,
                     on_click=_fte_set_workspace, args=(key,),
                 )
+    st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="text-align:center;font-size:.8rem;color:var(--fte-muted)">'
+        "…or explore the product first.</div>",
+        unsafe_allow_html=True,
+    )
+    st.button(
+        "Try FT-E Demo →", key="fte_btn_demo_ws", use_container_width=True,
+        type="secondary", on_click=_fte_goto_demo,
+    )
 
 
 def _render_account_popover() -> None:
@@ -3162,6 +3191,315 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
 
 
 # =============================================================================
+# SECTION 10e: Static Demo Mode (Sprint 4)
+# =============================================================================
+# Deployment-safe demo: ONE pre-analyzed sample (Microsoft FY2025 10-K) is
+# fed through the EXISTING Financial Grid / Intelligence / memo components.
+# Zero AI calls, zero ingestion, zero computation, zero uploads, zero user
+# storage — deterministic and effectively zero-cost per visitor. Every value
+# is explicitly labelled "Demo / Pre-analyzed sample" and is never presented
+# as live financial information. The real pipeline is completely untouched.
+_FTE_DEMO_LABEL = "Demo / Pre-analyzed sample"
+_FTE_DEMO_COMPANY = "Microsoft Corporation"
+_FTE_DEMO_TICKER = "MSFT"
+_FTE_DEMO_DOC_NAME = "Microsoft Corp — Form 10-K, FY2025 (Demo / Pre-analyzed sample)"
+_FTE_DEMO_SUMMARY = (
+    "Microsoft Corporation (NASDAQ: MSFT) reported fiscal-year 2025 revenue of $281.70B, "
+    "operating income of $125.50B and net income of $98.30B (diluted EPS $13.05). Operating "
+    "cash flow was $127.80B. The balance sheet closed with $512.20B of assets, $96.60B of "
+    "total debt and $268.50B of shareholders' equity. Cloud and AI services continued to "
+    "anchor growth, with Azure driving a meaningful share of the revenue increase."
+)
+
+
+def _demo_fact(value, source, period="FY2025", **extra):
+    """One static demo fact, shaped exactly like a module3 pipeline fact so
+    every existing presentation component consumes it unchanged."""
+    fact = {"value": value, "source": source, "reporting_period": period, "unit": "USD"}
+    fact.update(extra)
+    return fact
+
+
+def _demo_module3_result() -> dict:
+    """The complete static demo sample as a module3-shaped result dict.
+    Pure function — no computation, no I/O, no AI. Values are internally
+    consistent (ratios derive from the stated figures)."""
+    fd = {
+        "Revenue": _demo_fact(281700000000, "10-K FY2025 · Income Statement",
+                              evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
+        "Net Profit": _demo_fact(98300000000, "10-K FY2025 · Income Statement",
+                                 evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
+        "Operating Profit": _demo_fact(125500000000, "10-K FY2025 · Income Statement",
+                                       evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
+        "EPS": _demo_fact(13.05, "10-K FY2025 · Income Statement",
+                          evidence="Diluted earnings per share, Consolidated Statements of Income, p. 26", page="26"),
+        "Debt": _demo_fact(96600000000, "10-K FY2025 · Balance Sheet",
+                           evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
+        "Assets": _demo_fact(512200000000, "10-K FY2025 · Balance Sheet",
+                             evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
+        "Liabilities": _demo_fact(243700000000, "10-K FY2025 · Balance Sheet",
+                                  evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
+        "Equity": _demo_fact(268500000000, "10-K FY2025 · Balance Sheet",
+                             evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
+        "Cash Flow": _demo_fact(127800000000, "10-K FY2025 · Cash Flow Statement",
+                                evidence="Consolidated Statements of Cash Flows, p. 28", page="28", scale="B"),
+    }
+    rt = {
+        "EBITDA": _demo_fact(161000000000, "Calculated",
+                             evidence="Operating income + depreciation & amortisation (10-K FY2025)", scale="B"),
+        "Profit Margin": _demo_fact(0.349, "Calculated",
+                                    evidence="Net income ÷ revenue (10-K FY2025)"),
+        "ROE": _demo_fact(0.366, "Calculated",
+                          evidence="Net income ÷ shareholders' equity (10-K FY2025)"),
+        "ROA": _demo_fact(0.192, "Calculated",
+                          evidence="Net income ÷ total assets (10-K FY2025)"),
+        "Debt to Equity": _demo_fact(0.36, "Calculated",
+                                     evidence="Total debt ÷ shareholders' equity (10-K FY2025)"),
+        "Current Ratio": _demo_fact(1.40, "Calculated",
+                                    evidence="Current assets ÷ current liabilities (10-K FY2025)"),
+    }
+    return {
+        "financial_data": fd,
+        "ratios": rt,
+        "missing_data": {"financial_data": ["Segment Gross Margin"], "ratios": []},
+        "demo": True,
+    }
+
+
+def _demo_extraction_results() -> list:
+    """Demo source rail entry (presentation only — no file is processed)."""
+    return [{"file_name": _FTE_DEMO_DOC_NAME, "cached": True}]
+
+
+def _demo_document_summaries() -> list:
+    """Demo document summaries — static text only; memo context line."""
+    return [{"file_name": _FTE_DEMO_DOC_NAME, "summary": _FTE_DEMO_SUMMARY}]
+
+
+class _DemoFileStub:
+    """Minimal stand-in so the source rail renders the demo source name."""
+    name = _FTE_DEMO_DOC_NAME
+
+
+_FTE_DEMO_MEMO = """EXECUTIVE SUMMARY
+Microsoft Corporation closed fiscal 2025 with Revenue of $281.70B, lifted by continued cloud and AI demand. Net Profit reached $98.30B (diluted EPS of $13.05), and Operating Cash Flow of $127.80B continued to fund buybacks, dividends and data-centre investment. The balance sheet stays conservative: Debt of $96.60B against Equity of $268.50B keeps Debt to Equity at 0.36.
+
+KEY FINANCIAL EVENTS
+Revenue growth was led by cloud and AI services. Operating Profit of $125.50B supported EBITDA of $161.00B. The company added substantial capital-spending capacity while preserving a Current Ratio of 1.40 and ROA of 0.19.
+
+FINANCIAL PERFORMANCE
+Profitability remained strong: ROE of 0.37 and Profit Margin of 0.35 reflect efficient conversion of $281.70B of revenue into $98.30B of net income. Assets of $512.20B are balanced by Liabilities of $243.70B, leaving Equity of $268.50B. Cash generation is the standout: Operating Cash Flow of $127.80B comfortably exceeds Net Profit.
+
+RISKS & OPPORTUNITIES
+Concentration in AI-infrastructure spending is the primary watch item: capital intensity is rising even as Revenue growth accelerates. Segment Gross Margin is not captured in the demo sample, so margin mix across cloud, PC and productivity segments is unanalyzed. The opportunity: continued monetisation of AI services through the installed enterprise base.
+
+STRATEGIC IMPLICATIONS
+The model is shifting toward AI-linked recurring revenue, with cloud economics improving as scale grows. The strong balance sheet (Debt to Equity of 0.36, Current Ratio of 1.40) gives management financial flexibility for organic capex and selective M&A.
+
+RECOMMENDATIONS
+Monitor quarterly operating leverage and Azure growth. Track capital intensity against Operating Cash Flow of $127.80B. Confirm segment margin disclosures before extrapolating the profit mix beyond the verified company-level figures.
+
+— Demo memo · Pre-analyzed sample · No AI generation used —"""
+
+
+def _fte_goto_demo() -> None:
+    """Enter Static Demo Mode (frontend routing state only)."""
+    st.session_state["fte_route"] = "demo"
+    st.session_state["fte_demo_mode"] = True
+    st.session_state["fte_page"] = "Financial Grid"
+    st.session_state["fte_memo_view_open"] = False
+    st.session_state["fte_memo_metric_click"] = None
+
+
+def _demo_copilot_answer(question, rows):
+    """Deterministic Demo-Mode Co-Pilot: predefined, evidence-backed answers
+    built ONLY from the static demo dataset. Never calls an AI provider."""
+    q = (question or "").lower()
+    has = lambda *ks: any(k in q for k in ks)
+
+    if has("strongest verified", "strongest evidence", "best evidence", "what is verified"):
+        content = (
+            "The strongest verified evidence in the demo sample is the income statement: "
+            "Revenue of $281.70B, Net Profit of $98.30B and diluted EPS of $13.05, each "
+            "drawn from the FY2025 10-K (Consolidated Statements of Income, p. 26). The three "
+            "figures are mutually consistent — $98.30B of net income on $281.70B of revenue "
+            "implies a Profit Margin of 0.35. Operating Cash Flow of $127.80B adds a cash "
+            "quality check on those earnings."
+        )
+        intent = "verified_evidence"
+    elif has("risk", "threat", "concern", "downside"):
+        content = (
+            "Key risks in the demo sample: (1) AI-infrastructure capital intensity — spending "
+            "is rising even as Revenue of $281.70B accelerates; (2) segment mix is unanalyzed — "
+            "Segment Gross Margin is blocked because segment disclosures sit outside the "
+            "extracted sample; (3) Debt of $96.60B against Equity of $268.50B (Debt to Equity "
+            "0.36) is manageable today, but leverage deserves watching if buyback-funded."
+        )
+        intent = "risks"
+    elif has("investigate", "what next", "next step", "watch", "monitor"):
+        content = (
+            "What to investigate next: (1) segment-level revenue and gross margin — the sample "
+            "lacks segment disclosures (Segment Gross Margin is blocked); (2) cash conversion — "
+            "compare Operating Cash Flow of $127.80B with Net Profit of $98.30B across quarters; "
+            "(3) whether the Current Ratio of 1.40 and ROA of 0.19 hold as capital intensity rises."
+        )
+        intent = "investigate_next"
+    else:
+        metric = st.session_state.get("fte_selected_metric")
+        if metric and any(r.get("metric") == metric for r in (rows or [])):
+            fields = _metric_overlay_fields(rows, {}, metric)
+            expl = _metric_explainer(metric)
+            content = (
+                f"Selected metric — {fields['label']}: {fields['value']} "
+                f"(status {fields['status']}). {expl or 'See the evidence card for context.'} "
+                f"Evidence: {fields['evidence']}."
+            )
+            intent = "selected_metric"
+        else:
+            content = (
+                "I can answer a limited set of questions in Demo Mode. Try asking about the "
+                "selected metric, strongest verified evidence, key risks, or what to "
+                "investigate next."
+            )
+            intent = "demo_limited"
+    return content, {"intent": intent, "demo": True, "demo_label": _FTE_DEMO_LABEL}
+
+
+def _demo_submit_question(question) -> None:
+    """One demo Co-Pilot turn — deterministic, no AI provider."""
+    question = (question or "").strip()
+    if not question:
+        return
+    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(_demo_module3_result())
+    content, metadata = _demo_copilot_answer(question, rows)
+    st.session_state.setdefault("fte_demo_chat_messages", []).append(
+        {"role": "user", "content": question}
+    )
+    st.session_state.setdefault("fte_demo_chat_messages", []).append(
+        {"role": "assistant", "content": content, "metadata": metadata}
+    )
+
+
+def _render_demo_co_pilot() -> None:
+    """Demo Ask Co-Pilot — deterministic predefined answers only."""
+    st.markdown("---")
+    st.markdown('<div class="fte-rail-title">💬 Ask Co-Pilot</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-cap">📄 Active context: {html.escape(_FTE_DEMO_DOC_NAME)}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="fte-cap">🎯 Demo Mode · deterministic answers · no AI provider · '
+        f'{html.escape(_FTE_DEMO_LABEL)}</div>',
+        unsafe_allow_html=True,
+    )
+    messages = st.session_state.get("fte_demo_chat_messages") or []
+    for msg in messages[-4:]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+    if not messages:
+        st.caption("Suggested (Demo):")
+        cols = st.columns(2)
+        prompts = [
+            "Summarize the strongest verified evidence.",
+            "What are the key risks?",
+            "What should I investigate next?",
+            "Explain the selected metric.",
+        ]
+        for i, prompt in enumerate(prompts):
+            with cols[i % 2]:
+                if st.button(prompt, key=f"fte_demo_suggest_{i}", use_container_width=True):
+                    _demo_submit_question(prompt)
+                    st.rerun()
+    user_input = st.chat_input("Ask about the demo evidence…")
+    if user_input:
+        _demo_submit_question(user_input)
+        st.rerun()
+
+
+def _render_demo_memo_generator() -> None:
+    """Demo Generate Memo — opens the SAME focused memo view with the static
+    pre-analyzed memo. No AI pipeline, no document processing, no cost."""
+    st.markdown('<div class="fte-rail-title">📝 Generate Memo</div>', unsafe_allow_html=True)
+    if st.button("Generate Demo Memo", key="fte_btn_demo_memo", use_container_width=True):
+        st.session_state["fte_memo_draft"] = _FTE_DEMO_MEMO
+        st.session_state["fte_memo_status"] = "ready"
+        st.session_state["fte_memo_view_open"] = True
+        st.rerun()
+    st.caption("Demo Memo · Pre-analyzed sample · No AI generation used")
+    if st.session_state.get("fte_memo_status") == "ready" and st.session_state.get("fte_memo_view_open"):
+        st.caption("✓ Demo memo ready")
+
+
+def _render_demo_workspace() -> None:
+    """Demo workspace: the same shell and pages as the real workspace, fed
+    ONLY the static pre-analyzed sample. No uploads, no ingestion, no AI,
+    no user storage — every presentation component is the existing one."""
+    st.session_state["fte_demo_mode"] = True
+    if st.query_params.get("fte_exit_demo"):
+        st.session_state["fte_demo_mode"] = False
+        st.session_state["fte_route"] = "entrance"
+        st.session_state["fte_workspace"] = None
+        del st.query_params["fte_exit_demo"]
+        st.rerun()
+        return
+
+    module3_result = _demo_module3_result()
+    extraction_results = _demo_extraction_results()
+    document_summaries = _demo_document_summaries()
+
+    h_l, h_r = st.columns([3, 2], gap="medium", vertical_alignment="center")
+    with h_l:
+        st.markdown(
+            '<div class="fte-ws-header-brand">FT-E<span>Financial Timeline Engine</span></div>',
+            unsafe_allow_html=True,
+        )
+    with h_r:
+        g_c, a_c = st.columns([2, 1], gap="small", vertical_alignment="center")
+        with g_c:
+            st.markdown(
+                '<span class="fte-pill"><span class="fte-dot warn"></span>DEMO MODE</span>',
+                unsafe_allow_html=True,
+            )
+        with a_c:
+            _render_account_popover()
+
+    st.markdown(
+        f'<div class="fte-demo-note">Demo / Pre-analyzed sample — static illustrative data, '
+        f"not live financial information. "
+        f'<a href="?fte_exit_demo=1">Create account / Sign in to analyze your own documents →</a></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.segmented_control(
+        "Workspace",
+        options=["Financial Grid", "Intelligence", "System"],
+        key="fte_page",
+        label_visibility="collapsed",
+    )
+    page = st.session_state["fte_page"]
+
+    if page == "Financial Grid":
+        rail_col, center_col = st.columns([1, 3.2], gap="medium")
+        with rail_col:
+            _render_source_rail([_DemoFileStub()], extraction_results, module3_result)
+        with center_col:
+            _render_financial_grid(module3_result)
+        _render_provenance_tray(module3_result)
+    elif page == "Intelligence":
+        if st.session_state.get("fte_memo_view_open"):
+            _render_memo_focused_view(document_summaries, module3_result)
+        else:
+            _render_demo_co_pilot()
+            st.markdown("---")
+            _render_selected_metric_analysis(module3_result)
+            st.markdown("---")
+            _render_demo_memo_generator()
+    else:
+        _render_system_tab()
+
+
+# =============================================================================
 # SECTION 11: Main App / UI
 # =============================================================================
 def main():
@@ -3181,6 +3519,9 @@ def main():
         return
     if route == "select":
         _render_workspace_select()
+        return
+    if route == "demo":
+        _render_demo_workspace()
         return
 
     # Workspace shell: shared sidebar (legacy view switch + ingestion).
