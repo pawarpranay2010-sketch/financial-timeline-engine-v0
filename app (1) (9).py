@@ -67,6 +67,7 @@ from ingestion import (
 # assumed path per your latest instructions (flat backend/ package, no
 # module3/ subfolder) and that it exports a top-level `run_module3`.
 from backend.module3_controller import run_module3
+from backend.evidence_resolver import recover_missing_metrics
 
 # =============================================================================
 # SECTION 1: Config & Session State
@@ -1713,6 +1714,17 @@ _TERMINAL_METRICS = [
 ]
 
 
+_PROVENANCE_TIER_LABEL = {
+    "DOCUMENT": "Document",
+    "APPENDIX": "Appendix",
+    "REGULATORY_API": "Regulatory API",
+    "DERIVED": "Derived",
+    "EXTERNAL_DERIVED": "External + Derived",
+    "BLOCKED": "Blocked",
+    "UNANALYZED": "Unanalyzed",
+}
+
+
 def _inject_terminal_css() -> None:
     """Inject the terminal stylesheet once per session."""
     if st.session_state.get("fte_css_injected"):
@@ -2399,6 +2411,7 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
         "source": "—", "location": "—", "currency": "—", "scale": "—",
         "evidence": "—", "note": None, "fragment": None, "fact": None,
         "document": "—", "source_ref": "—", "calc_basis": "—", "source_metrics": "—",
+        "tier": "—", "provider": "—", "provenance_tier": None,
     }
     if not metric:
         return out
@@ -2426,7 +2439,12 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
     out["value"] = selected.get("Value") or "—"
     if kind == "blocked":
         out["origin"] = "Pipeline missing-data report"
-        out["note"] = selected.get("_reason") or "Required evidence is not available from the current pipeline."
+        _ext_ev = (module3_result or {}).get("external_evidence") or {}
+        _b_reason = (_ext_ev.get("blocked") or {}).get(metric)
+        out["note"] = _b_reason or selected.get("_reason") or "Required evidence is not available from the current pipeline."
+        if _b_reason:
+            out["tier"] = "Blocked"
+            out["provenance_tier"] = "BLOCKED"
     elif kind == "conflict":
         out["origin"] = "Cross-document verification"
         conflicts = _conflict_metrics(module3_result)
@@ -2452,6 +2470,12 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
             out["fragment"] = out["evidence"]
     out["currency"] = g("unit", "currency", "currency_code")
     out["scale"] = g("scale")
+    # Sprint 6.5 - provenance tier surfaced from the fact record.
+    _ptier = fact.get("provenance_tier") if isinstance(fact, dict) else None
+    out["provenance_tier"] = _ptier
+    if out["tier"] == "—":
+        out["tier"] = _PROVENANCE_TIER_LABEL.get(_ptier, "—")
+    out["provider"] = g("provider")
 
     # ---- Sprint 5 — Evidence-Proof Layer: provenance record assembly.
     # Only fields the pipeline (or demo dataset) genuinely provides; every
@@ -2462,7 +2486,7 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
         if len(names) == 1:
             out["document"] = names[0]
     ref_parts = []
-    base = out["document"] if out["document"] != "—" else out["source"]
+    base = out["document"] if out["document"] != "—" else (out["provider"] if out["provider"] != "—" else out["source"])
     if base != "—":
         ref_parts.append(base)
     if out["location"] not in ("—", ""):
@@ -2501,6 +2525,8 @@ def _metric_detail_html(fields: dict, explainer: str) -> str:
         ("Source", fields["source"]),
         ("Evidence", fields["evidence"]),
     ]
+    if str(fields.get("tier") or "—") != "—":
+        pv_rows.insert(1, ("Tier", fields["tier"]))
     body = ""
     for k, v in pv_rows:
         vtxt = "—" if v in (None, "") else str(v)
@@ -2952,6 +2978,23 @@ def _render_workspace_shell(uploaded_files) -> None:
     module3_result = {}
     try:
         module3_result = _terminal_module3(combined_raw_text, extraction_results)
+        if module3_result:
+            # Sprint 6.5 - Deterministic External Evidence Recovery: Tier 1
+            # (uploaded document) -> Tier 2 (workspace appendices) -> Tier 3
+            # (approved regulatory/structured providers) -> BLOCKED. Runs only
+            # for metrics the pipeline reports as missing and never consults
+            # random web/search/blog/scraped sources.
+            _ws_documents = [
+                {
+                    "document_name": d.get("file_name") or d.get("document_name") or "Unknown Document",
+                    "text": (d.get("parsed_document") or {}).get("text") or d.get("text") or "",
+                }
+                for d in (extraction_results or [])
+            ]
+            module3_result = recover_missing_metrics(
+                module3_result,
+                workspace_documents=_ws_documents,
+            )
     except Exception as e:
         st.warning("⚠️ Financial intelligence temporarily unavailable — verified data tools remain below.")
         st.session_state["pipeline_debug_log"] = [{"stage": "module3", "length": 0, "error_marker_detected": True, "preview": str(e)[:300]}]
@@ -3248,7 +3291,10 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
             f'</div>'
         )
     rows_html = ""
-    for k, v in (("Reference", fields.get("source_ref")), ("Source", fields.get("source")), ("Period", fields.get("period")), ("Evidence", fields.get("evidence"))):
+    _card_rows = [("Reference", fields.get("source_ref")), ("Source", fields.get("source")), ("Period", fields.get("period")), ("Evidence", fields.get("evidence"))]
+    if str(fields.get("tier") or "—") != "—":
+        _card_rows.insert(1, ("Tier", fields.get("tier")))
+    for k, v in _card_rows:
         vtxt = "—" if v in (None, "") else str(v)
         rows_html += (
             f'<div class="fte-card-row"><div class="k">{html.escape(k)}</div>'
