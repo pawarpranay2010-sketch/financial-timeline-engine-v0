@@ -48,6 +48,17 @@ class FinancialExtractor:
 
         }
 
+        # Sprint 6 - Page-Aware Evidence Anchoring. parse_pdf() embeds
+        # "========== PAGE N ==========" markers in the extracted text and
+        # merge_document_text() wraps each file with
+        # "--- Start of File: <name> ---". These markers are the ONLY source
+        # of page / document provenance: a fact is attributed to a page (or
+        # a file) only when the corresponding marker is provably present in
+        # the text before the matched value. No marker -> no key -> the UI
+        # renders '-'. Nothing is ever invented.
+        self._PAGE_MARKER_RE = re.compile(r"========== PAGE (\d+) ==========")
+        self._FILE_MARKER_RE = re.compile(r"--- Start of File: (.+?) ---")
+
     # -------------------------------------------------------
 
     def extract(self, text: str) -> Dict[str, Any]:
@@ -80,7 +91,12 @@ class FinancialExtractor:
                 # when the extractor actually matched text.
                 evidence = self._evidence_fragment(text, match)
 
-                result[field] = {
+                # Sprint 6 - page / document anchoring from the ingestion
+                # markers (only when reliably present; see __init__).
+                page = self._page_of(text, match)
+                document_name = self._document_of(text, match)
+
+                fact = {
 
                     "value": value,
 
@@ -89,6 +105,16 @@ class FinancialExtractor:
                     "evidence": evidence
 
                 }
+
+                if page is not None:
+
+                    fact["page"] = page
+
+                if document_name:
+
+                    fact["document_name"] = document_name
+
+                result[field] = fact
 
         return result
 
@@ -131,6 +157,44 @@ class FinancialExtractor:
                 mid = start - s
                 frag = frag[max(0, mid - limit // 3): min(len(frag), mid + 2 * limit // 3)].strip()
             return frag or None
+        except Exception:
+            return None
+
+    # -------------------------------------------------------
+    # Sprint 6 - page / document locators (marker-backed only)
+    # -------------------------------------------------------
+
+    def _page_of(self, text, match):
+        """The page number whose '========== PAGE N ==========' marker
+        immediately precedes the match, or None when no marker is present
+        (plain text / non-PDF input). Never inferred - only read from the
+        actual marker text."""
+        try:
+            if not isinstance(text, str) or match is None:
+                return None
+            prefix = text[:match.start()]
+            found = list(self._PAGE_MARKER_RE.finditer(prefix))
+            if not found:
+                return None
+            return int(found[-1].group(1))
+        except Exception:
+            return None
+
+    def _document_of(self, text, match):
+        """The file name whose '--- Start of File: <name> ---' header
+        immediately precedes the match, or None when no header is present.
+        Single-document corpora therefore carry the real file name; a
+        multi-document fact is attributed only to the file whose header
+        provably precedes it. Never inferred."""
+        try:
+            if not isinstance(text, str) or match is None:
+                return None
+            prefix = text[:match.start()]
+            found = list(self._FILE_MARKER_RE.finditer(prefix))
+            if not found:
+                return None
+            name = found[-1].group(1).strip()
+            return name or None
         except Exception:
             return None
 
