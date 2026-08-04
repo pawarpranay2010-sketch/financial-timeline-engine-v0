@@ -2388,14 +2388,17 @@ def _metric_explainer(metric: str) -> str:
     return _METRIC_EXPLAINER.get(norm, "")
 
 
-def _metric_overlay_fields(rows, module3_result, metric) -> dict:
+def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict:
     """Detail fields for the overlay — only what the pipeline provides;
-    every missing field is '—'. Never fabricates provenance."""
+    every missing field is '—'. Never fabricates provenance. `documents`
+    is an optional list of source-document names, used ONLY for honest
+    single-document attribution; multi-document corpora stay '—'."""
     out = {
         "metric": metric, "label": metric or "—", "kind": "unanalyzed",
         "value": "—", "status": "—", "origin": "—", "period": "—",
         "source": "—", "location": "—", "currency": "—", "scale": "—",
         "evidence": "—", "note": None, "fragment": None, "fact": None,
+        "document": "—", "source_ref": "—", "calc_basis": "—", "source_metrics": "—",
     }
     if not metric:
         return out
@@ -2449,6 +2452,29 @@ def _metric_overlay_fields(rows, module3_result, metric) -> dict:
             out["fragment"] = out["evidence"]
     out["currency"] = g("unit", "currency", "currency_code")
     out["scale"] = g("scale")
+
+    # ---- Sprint 5 — Evidence-Proof Layer: provenance record assembly.
+    # Only fields the pipeline (or demo dataset) genuinely provides; every
+    # missing value stays '—'. Nothing is invented.
+    out["document"] = g("document_name", "document")
+    if out["document"] == "—" and documents:
+        names = [str(d) for d in documents if str(d).strip()]
+        if len(names) == 1:
+            out["document"] = names[0]
+    ref_parts = []
+    base = out["document"] if out["document"] != "—" else out["source"]
+    if base != "—":
+        ref_parts.append(base)
+    if out["location"] not in ("—", ""):
+        loc = str(out["location"])
+        if loc.isdigit() or loc.lower().startswith("p."):
+            ref_parts.append(f"p. {loc}")
+    out["source_ref"] = " · ".join(ref_parts) if ref_parts else "—"
+    if kind == "derived":
+        out["calc_basis"] = g("formula")
+        inputs_raw = fact.get("inputs") if isinstance(fact, dict) else None
+        if isinstance(inputs_raw, list) and inputs_raw:
+            out["source_metrics"] = ", ".join(str(i) for i in inputs_raw if str(i).strip())
     return out
 
 
@@ -2469,6 +2495,7 @@ def _metric_detail_html(fields: dict, explainer: str) -> str:
             f'<div style="font-size:.86rem;color:var(--fte-text);line-height:1.5">{html.escape(explainer)}</div></div>'
         )
     pv_rows = [
+        ("Reference", fields["source_ref"]),
         ("Origin", fields["origin"]),
         ("Period", fields["period"]),
         ("Source", fields["source"]),
@@ -2487,6 +2514,25 @@ def _metric_detail_html(fields: dict, explainer: str) -> str:
         f'<div style="border-top:1px solid var(--fte-border);margin-top:.7rem;padding-top:.6rem">'
         f'<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fte-muted);font-weight:600;margin-bottom:.35rem">Provenance</div>{body}</div>'
     )
+    # Sprint 5 — calculation basis + source inputs for derived metrics.
+    if fields.get("kind") == "derived" and (
+        str(fields.get("calc_basis") or "—") != "—"
+        or str(fields.get("source_metrics") or "—") != "—"
+    ):
+        calc_parts = []
+        if str(fields.get("calc_basis") or "—") != "—":
+            calc_parts.append(
+                f'<div style="font-size:.82rem;color:var(--fte-text);overflow-wrap:anywhere">{html.escape(str(fields["calc_basis"]))}</div>'
+            )
+        if str(fields.get("source_metrics") or "—") != "—":
+            calc_parts.append(
+                f'<div style="font-size:.78rem;color:var(--fte-muted);margin-top:.2rem">Inputs: {html.escape(str(fields["source_metrics"]))}</div>'
+            )
+        parts.append(
+            f'<div style="border-top:1px solid var(--fte-border);margin-top:.7rem;padding-top:.6rem">'
+            f'<div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--fte-muted);font-weight:600;margin-bottom:.3rem">Calculation</div>'
+            + "".join(calc_parts) + '</div>'
+        )
     if fields.get("note"):
         parts.append(
             f'<div style="margin-top:.65rem;padding:.45rem .6rem;font-size:.78rem;color:var(--fte-blocked);border-left:2px solid var(--fte-blocked);background:rgba(224,82,82,.06);border-radius:4px">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
@@ -3202,13 +3248,30 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
             f'</div>'
         )
     rows_html = ""
-    for k, v in (("Source", fields.get("source")), ("Period", fields.get("period")), ("Evidence", fields.get("evidence"))):
+    for k, v in (("Reference", fields.get("source_ref")), ("Source", fields.get("source")), ("Period", fields.get("period")), ("Evidence", fields.get("evidence"))):
         vtxt = "—" if v in (None, "") else str(v)
         rows_html += (
             f'<div class="fte-card-row"><div class="k">{html.escape(k)}</div>'
             f'<div class="v">{html.escape(vtxt)}</div></div>'
         )
     parts.append(f'<div class="fte-card-section"><div class="fte-card-label">Provenance</div>{rows_html}</div>')
+    # Sprint 5 — calculation basis + source inputs for derived metrics.
+    if fields.get("kind") == "derived" and (
+        str(fields.get("calc_basis") or "—") != "—"
+        or str(fields.get("source_metrics") or "—") != "—"
+    ):
+        calc_lines = []
+        if str(fields.get("calc_basis") or "—") != "—":
+            calc_lines.append(
+                f'<div style="font-size:.8rem;color:var(--fte-text);overflow-wrap:anywhere">{html.escape(str(fields["calc_basis"]))}</div>'
+            )
+        if str(fields.get("source_metrics") or "—") != "—":
+            calc_lines.append(
+                f'<div style="font-size:.75rem;color:var(--fte-muted);margin-top:.15rem">Inputs: {html.escape(str(fields["source_metrics"]))}</div>'
+            )
+        parts.append(
+            f'<div class="fte-card-section"><div class="fte-card-label">Calculation</div>' + "".join(calc_lines) + '</div>'
+        )
     if fields.get("note"):
         parts.append(
             f'<div class="fte-card-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
@@ -3299,7 +3362,7 @@ def _clear_memo_metric_click() -> None:
 
 
 @st.dialog("Metric Detail", width="small", dismissible=True, on_dismiss=_clear_memo_metric_click)
-def _memo_metric_dialog(module3_result) -> None:
+def _memo_metric_dialog(module3_result, documents=None) -> None:
     """Floating evidence card for a metric clicked inside the memo. Same
     compact card as the grid overlay; pipeline records only — no AI, no
     API key required. Blocked metrics show the honest limitation."""
@@ -3311,7 +3374,7 @@ def _memo_metric_dialog(module3_result) -> None:
     if not any(r["metric"] == metric for r in rows):
         st.caption("This metric is not available from the current pipeline.")
         return
-    fields = _metric_overlay_fields(rows, module3_result, metric)
+    fields = _metric_overlay_fields(rows, module3_result, metric, documents)
     explainer = _metric_explainer(metric)
     st.markdown(_metric_detail_html(fields, explainer), unsafe_allow_html=True)
     st.button("Close", key="fte_memo_metric_close", on_click=_clear_memo_metric_click)
@@ -3359,7 +3422,10 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
         st.session_state["fte_memo_metric_click"] = str(qmetric)
         del st.query_params["fte_metric"]
     if st.session_state.get("fte_memo_metric_click"):
-        _memo_metric_dialog(module3_result)
+        _memo_metric_dialog(
+            module3_result,
+            [d.get("file_name") for d in (document_summaries or []) if d.get("file_name")],
+        )
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
@@ -3435,17 +3501,28 @@ def _demo_module3_result() -> dict:
     }
     rt = {
         "EBITDA": _demo_fact(161000000000, "Calculated",
-                             evidence="Operating income + depreciation & amortisation (10-K FY2025)", scale="B"),
+                             evidence="Operating income + depreciation & amortisation (10-K FY2025)",
+                             formula="Operating income + depreciation & amortisation",
+                             inputs=["Operating Profit"], scale="B"),
         "Profit Margin": _demo_fact(0.349, "Calculated",
-                                    evidence="Net income ÷ revenue (10-K FY2025)"),
+                                    evidence="Net income ÷ revenue (10-K FY2025)",
+                                    formula="Net income ÷ revenue",
+                                    inputs=["Net Profit", "Revenue"]),
         "ROE": _demo_fact(0.366, "Calculated",
-                          evidence="Net income ÷ shareholders' equity (10-K FY2025)"),
+                          evidence="Net income ÷ shareholders' equity (10-K FY2025)",
+                          formula="Net income ÷ shareholders' equity",
+                          inputs=["Net Profit", "Equity"]),
         "ROA": _demo_fact(0.192, "Calculated",
-                          evidence="Net income ÷ total assets (10-K FY2025)"),
+                          evidence="Net income ÷ total assets (10-K FY2025)",
+                          formula="Net income ÷ total assets",
+                          inputs=["Net Profit", "Assets"]),
         "Debt to Equity": _demo_fact(0.36, "Calculated",
-                                     evidence="Total debt ÷ shareholders' equity (10-K FY2025)"),
+                                     evidence="Total debt ÷ shareholders' equity (10-K FY2025)",
+                                     formula="Total debt ÷ shareholders' equity",
+                                     inputs=["Debt", "Equity"]),
         "Current Ratio": _demo_fact(1.40, "Calculated",
-                                    evidence="Current assets ÷ current liabilities (10-K FY2025)"),
+                                    evidence="Current assets ÷ current liabilities (10-K FY2025)",
+                                    formula="Current assets ÷ current liabilities"),
     }
     return {
         "financial_data": fd,

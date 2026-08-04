@@ -65,7 +65,15 @@ class FinancialCalculator:
 
                 "value": round((net_profit / revenue) * 100, 2),
 
-                "source": "Calculated"
+                "source": "Calculated",
+
+                # Sprint 5 — Evidence-Proof Layer: the actual input
+                # metrics and formula this branch used (deterministic,
+                # from this code path — never invented).
+
+                "inputs": ["Net Profit", "Revenue"],
+
+                "formula": "Net Profit ÷ Revenue × 100"
 
             }
 
@@ -79,7 +87,11 @@ class FinancialCalculator:
 
                 "value": round((net_profit / equity) * 100, 2),
 
-                "source": "Calculated"
+                "source": "Calculated",
+
+                "inputs": ["Net Profit", "Equity"],
+
+                "formula": "Net Profit ÷ Equity × 100"
 
             }
 
@@ -93,7 +105,11 @@ class FinancialCalculator:
 
                 "value": round((net_profit / assets) * 100, 2),
 
-                "source": "Calculated"
+                "source": "Calculated",
+
+                "inputs": ["Net Profit", "Assets"],
+
+                "formula": "Net Profit ÷ Assets × 100"
 
             }
 
@@ -107,7 +123,11 @@ class FinancialCalculator:
 
                 "value": round(debt / equity, 2),
 
-                "source": "Calculated"
+                "source": "Calculated",
+
+                "inputs": ["Debt", "Equity"],
+
+                "formula": "Debt ÷ Equity"
 
             }
 
@@ -128,7 +148,11 @@ class FinancialCalculator:
 
                 "value": round(current_assets / current_liabilities, 2),
 
-                "source": "Calculated"
+                "source": "Calculated",
+
+                "inputs": ["Current Assets", "Current Liabilities"],
+
+                "formula": "Current Assets ÷ Current Liabilities"
 
             }
 
@@ -233,6 +257,9 @@ class FinancialCalculator:
                 "years": n,
                 "beginning_period": begin.get("reporting_period", ""),
                 "ending_period": end.get("reporting_period", ""),
+                # Sprint 5 — Evidence-Proof Layer: source inputs + basis.
+                "inputs": [CAGR_BEGIN_KEY, CAGR_END_KEY],
+                "formula": "Ending ÷ Beginning ^ (1 / n) − 1",
             }
         }
 
@@ -362,6 +389,9 @@ class FinancialCalculator:
                     "beginning_period": begin.get("reporting_period", ""),
                     "ending_period": end.get("reporting_period", ""),
                     "scale": bs,
+                    # Sprint 5 — Evidence-Proof Layer: source inputs + basis.
+                    "inputs": [CAGR_BEGIN_KEY, CAGR_END_KEY],
+                    "formula": "Ending ÷ Beginning ^ (1 / n) − 1",
                 }
             },
         }
