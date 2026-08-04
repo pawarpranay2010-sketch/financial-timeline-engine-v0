@@ -23,6 +23,7 @@ import html
 import json
 import os
 import re
+import urllib.parse
 from datetime import datetime, timezone
 import pandas as pd
 from docx import Document
@@ -1564,6 +1565,22 @@ _FTE_CSS = """
 }
 .fte-memo-title { font-size: 1.35rem; font-weight: 700; letter-spacing: .01em; }
 .fte-memo-context { font-size: .8rem; color: var(--fte-muted); margin-top: .4rem; }
+/* Sprint 3.2.4: inline metric links are plain inline text - subtle
+   color + dotted underline, no box/pill/button chrome. Clicking one
+   opens the same native floating metric dialog (query-param driven). */
+.fte-memo-para a.fte-metric-link {
+  color: var(--fte-conflict);
+  font-weight: 600;
+  text-decoration: underline dotted rgba(79, 142, 247, .65);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: color 180ms ease, background 180ms ease;
+}
+.fte-memo-para a.fte-metric-link:hover {
+  color: #7aa6f9;
+  background: rgba(79, 142, 247, .08);
+}
 
 /* Sprint 2.1: native st.dialog size refinement for the metric detail card.
    The built-in dialog component provides the backdrop, × close button,
@@ -2957,23 +2974,38 @@ Generate a professional investment memo grounded strictly in the Document Summar
 # resolved path before registering; if it is missing we degrade gracefully
 # to a plain (non-interactive) memo instead of rendering a broken
 # component iframe.
-try:
-    _MEMO_COMPONENT_DIR = None
-    _APP_DIR = os.path.dirname(os.path.realpath(__file__))
-    for _cand in (
-        os.path.join(_APP_DIR, "memo_component"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "memo_component"),
-    ):
-        if os.path.isfile(os.path.join(_cand, "index.html")):
-            _MEMO_COMPONENT_DIR = _cand
-            break
-    if _MEMO_COMPONENT_DIR is not None:
-        _memo_metric_component = st.components.v1.declare_component(
-            "fte_memo_metric", path=_MEMO_COMPONENT_DIR
-        )
-    else:
+#
+# Sprint 3.2.4 — TEMPORARILY DISABLED (deployment reliability): the hosted
+# Streamlit environment does not serve the local custom-component frontend
+# (/component/* static routes), so the memo iframe never became ready and
+# the app showed "trouble loading the ... component" on every rerun of the
+# memo view. The memo is now rendered with Streamlit-native inline links
+# that open the SAME native metric dialog (see _render_memo_focused_view /
+# _memo_metric_html). Set _MEMO_COMPONENT_ENABLED = True only once the
+# hosting serves local custom-component assets reliably; the path
+# resolution below stays relative to this file (__file__), never the
+# process working directory.
+_MEMO_COMPONENT_ENABLED = False
+if _MEMO_COMPONENT_ENABLED:
+    try:
+        _MEMO_COMPONENT_DIR = None
+        _APP_DIR = os.path.dirname(os.path.realpath(__file__))
+        for _cand in (
+            os.path.join(_APP_DIR, "memo_component"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "memo_component"),
+        ):
+            if os.path.isfile(os.path.join(_cand, "index.html")):
+                _MEMO_COMPONENT_DIR = _cand
+                break
+        if _MEMO_COMPONENT_DIR is not None:
+            _memo_metric_component = st.components.v1.declare_component(
+                "fte_memo_metric", path=_MEMO_COMPONENT_DIR
+            )
+        else:
+            _memo_metric_component = None
+    except Exception:
         _memo_metric_component = None
-except Exception:
+else:
     _memo_metric_component = None
 
 
@@ -3017,9 +3049,10 @@ def _memo_clickable_spans(rows, para) -> list:
 
 def _memo_metric_html(rows, memo) -> str:
     """Memo body as ONE continuous HTML document. Pipeline metric names
-    and unambiguous exact stored values become inline spans carrying
-    data-metric; ordinary prose is never wrapped, so sentences stay
-    intact. The component renders this HTML and reports clicks back."""
+    and unambiguous exact stored values become INLINE NATIVE LINKS
+    (?fte_metric=<name> query param); ordinary prose is never wrapped, so
+    sentences stay intact. No custom component is required — clicking a
+    link reruns the app and opens the existing native metric dialog."""
     paragraphs = [p.strip() for p in memo.replace("\r\n", "\n").split("\n\n") if p.strip()]
     out = []
     for para in paragraphs:
@@ -3032,8 +3065,8 @@ def _memo_metric_html(rows, memo) -> str:
             if s > pos:
                 body.append(html.escape(para[pos:s]).replace(chr(10), "<br>"))
             body.append(
-                f'<span data-metric="{html.escape(metric, quote=True)}" tabindex="0" role="button">'
-                f'{html.escape(label)}</span>'
+                f'<a class="fte-metric-link" href="?fte_metric={urllib.parse.quote(metric)}" '
+                f'title="Inspect {html.escape(metric, quote=True)}">{html.escape(label)}</a>'
             )
             pos = e
         if pos < len(para):
@@ -3075,6 +3108,7 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
     hub; uses whatever the existing pipeline produced — never invented."""
     if st.button("← Back to Intelligence", key="fte_btn_memo_back"):
         st.session_state["fte_memo_view_open"] = False
+        st.session_state["fte_memo_metric_click"] = None
         st.rerun()
     memo = st.session_state.get("fte_memo_draft") or ""
     if not memo:
@@ -3094,23 +3128,18 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
         st.markdown(f'<div class="fte-memo-context">📄 {context or "No document context"}</div>', unsafe_allow_html=True)
         st.markdown('<hr style="border:none;border-top:1px solid var(--fte-border);margin:1.1rem 0">', unsafe_allow_html=True)
         # The memo body is ONE continuous HTML document (true inline
-        # flow). Metric tokens are inline spans the component turns into
-        # clicks — no reload, no layout break, scroll preserved. If the
-        # component is unavailable, render a plain (non-interactive) memo.
-        if _memo_metric_component is not None:
-            evt = None
-            try:
-                evt = _memo_metric_component(memo_html=memo_html, key="fte_memo_metric")
-            except Exception:
-                evt = None
-            if evt and isinstance(evt, dict):
-                metric = evt.get("metric")
-                nonce = evt.get("nonce")
-                if metric and str(nonce) != str(st.session_state.get("fte_last_memo_nonce")):
-                    st.session_state["fte_memo_metric_click"] = metric
-                    st.session_state["fte_last_memo_nonce"] = str(nonce)
-        else:
-            st.markdown(memo_html, unsafe_allow_html=True)
+        # flow). Metric tokens are inline NATIVE links (still plain
+        # inline text — subtle color + dotted underline). Clicking one
+        # navigates to ?fte_metric=<name>; the rerun opens the SAME
+        # floating native metric dialog. No custom component, no iframe,
+        # no external frontend — reliable on any Streamlit hosting.
+        st.markdown(memo_html, unsafe_allow_html=True)
+    # Metric clicks arrive via the URL query param (?fte_metric=...)
+    # instead of a custom component; consume it and open the dialog.
+    qmetric = st.query_params.get("fte_metric")
+    if qmetric:
+        st.session_state["fte_memo_metric_click"] = str(qmetric)
+        del st.query_params["fte_metric"]
     if st.session_state.get("fte_memo_metric_click"):
         _memo_metric_dialog(module3_result)
     dl1, dl2 = st.columns(2)
