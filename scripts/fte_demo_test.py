@@ -62,6 +62,11 @@ def main():
     # --- 1) Demo opens without an API key ---
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
+    # The terminal stylesheet is injected ONCE on the first run and then
+    # persists in the DOM (fte_css_injected guard), so capture it now —
+    # later runs do not re-emit the <style> element.
+    css_joined = " ".join(str(m.value) for m in at.markdown)
+    assert "<style>" in css_joined, "terminal CSS not injected on entrance"
     if not check_exceptions(at, "entrance"):
         return 1
     assert any(b.key == "fte_btn_demo" for b in at.button), "entrance demo button missing"
@@ -151,60 +156,65 @@ def main():
     assert any("Demo memo · Pre-analyzed sample · No AI generation used" in str(b) for b in bodies)
     print("2. DEMO GENERATE MEMO STATIC + NO AI OK (byte-identical memo, inline links present)")
 
-    # --- Sprint 4.1 regression: metric click must NEVER reset the route.
-    # Simulate the full page navigation the inline link causes, with session
-    # state lost on reload (the hosted failure mode): URL carries
-    # ?fte_demo=1&fte_metric=Revenue and route/memo state are gone.
+    # --- Sprint 4.2: demo memo metric interaction is fully client-side.
+    # Metric links are pure hash anchors (#ftemetric-<slug>); the floating
+    # evidence cards are pre-rendered into the memo HTML and shown/hidden
+    # with CSS :target. Clicking never touches the server, so the route,
+    # the memo and the scroll position can never reset and no rerun is
+    # visible — the evidence card appears instantly.
+    joined = " ".join(str(m.value) for m in at.markdown)
+    assert 'href="#ftemetric-revenue"' in joined, "demo memo lost its hash metric link"
+    assert 'id="ftemetric-revenue"' in joined, "Revenue evidence card not embedded"
+    assert "281.70B" in joined, "Revenue card lacks its static demo value"
+    assert "What it means" in joined, "card lacks the explainer section"
+    assert "Consolidated Statements of Income" in joined, "card lacks demo provenance"
+    assert "?fte_metric=" not in joined, "demo memo still emits query-param links (would rerun)"
+    assert ".fte-memo-card:target" in css_joined, "CSS :target rule missing"
+    assert "min(360px" in css_joined and "100vw" in css_joined, "responsive card sizing missing"
+    print("R1. METRIC CLICK → INSTANT CLIENT-SIDE CARD OK (hash anchor + pre-rendered demo evidence, zero rerun)")
+
+    # R2 — clicking another metric swaps the card content (distinct target).
+    joined2 = " ".join(str(m.value) for m in at.markdown)
+    assert 'href="#ftemetric-eps"' in joined2, "EPS hash link missing"
+    assert 'id="ftemetric-eps"' in joined2, "EPS card not embedded"
+    assert "Diluted earnings per share" in joined2, "EPS card evidence missing"
+    assert 'id="ftemetric-revenue"' in joined2, "Revenue card vanished"
+    print("R2. CLICK ANOTHER METRIC → SAME MEMO, CARD CONTENT SWAPS OK (only one :target at a time)")
+
+    # R3 — dismiss affordances: ×, Close and backdrop all navigate to the
+    # sentinel fragment #fte-card-close (matches no element), returning the
+    # card to display:none. The memo is untouched — no route change, no
+    # rerun, scroll preserved.
+    assert joined2.count('href="#fte-card-close"') >= 3, "× / Close / backdrop close links missing"
+    assert "fte-card-backdrop" in joined2, "backdrop element missing"
+    assert "display: none;" in css_joined, "cards not hidden by default"
+    print("R3. CLOSE / × / BACKDROP → SAME DEMO MEMO OK (all dismiss via #fte-card-close)")
+
+    # R4 — the demo memo no longer depends on the server dialog at all:
+    # no metric-click state is set server-side and no dialog button exists.
+    # (ESC keyboard dismissal is the one interaction that would require
+    # client-side JS, which Streamlit inline HTML cannot execute; ×, Close
+    # and backdrop-click are the provided dismissals.)
+    assert ss(at, "fte_memo_metric_click") is None, "demo memo opened a server dialog"
+    assert "fte_memo_metric_close" not in [b.key for b in at.button], "dialog button present"
+    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
+    print("R4. NO SERVER DIALOG FOR DEMO MEMO OK — ESC noted as the sole JS-only dismissal")
+
+    # L1 — legacy ?fte_demo=1&fte_metric= bookmarks still reconstruct the
+    # demo session (the earlier committed fix is preserved).
     at.query_params["fte_metric"] = "Revenue"
     at.query_params["fte_demo"] = "1"
     at.session_state["fte_route"] = "entrance"
     at.session_state["fte_memo_view_open"] = False
     at.session_state["fte_memo_draft"] = ""
     at.run()
-    if not check_exceptions(at, "demo memo metric click reload"):
+    if not check_exceptions(at, "legacy demo URL"):
         return 1
-    assert ss(at, "fte_route") == "demo", "metric click reset the route"
-    assert ss(at, "fte_memo_view_open") is True, "memo closed after metric click"
-    assert ss(at, "fte_memo_draft") == expected_memo, "memo lost after metric click"
+    assert ss(at, "fte_route") == "demo", "legacy URL reset the route"
+    assert ss(at, "fte_memo_view_open") is True, "legacy URL closed the memo"
     assert ss(at, "fte_memo_metric_click") == "Revenue"
-    assert "fte_metric" not in at.query_params and "fte_demo" not in at.query_params, \
-        "trigger params not consumed"
-    bodies = " ".join(str(m.value) for m in at.markdown)
-    assert "What it means" in bodies and "Consolidated Statements of Income" in bodies, \
-        "evidence dialog did not open on the memo"
-    print("R1. METRIC CLICK → DEMO MEMO + DIALOG OK (route preserved, params consumed)")
-
-    # Click another metric → same memo, dialog content replaced.
-    at.query_params["fte_metric"] = "EPS"
-    at.query_params["fte_demo"] = "1"
-    at.run()
-    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
-    assert ss(at, "fte_memo_metric_click") == "EPS"
-    bodies = " ".join(str(m.value) for m in at.markdown)
-    assert "Diluted earnings per share" in bodies, "dialog did not switch to EPS"
-    print("R2. CLICK ANOTHER METRIC → SAME MEMO + UPDATED DIALOG OK")
-
-    # In-card Close → same demo memo, dialog gone.
-    at.button(key="fte_memo_metric_close").click().run()
-    if not check_exceptions(at, "demo dialog close"):
-        return 1
-    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
-    assert ss(at, "fte_memo_metric_click") is None
-    bodies = " ".join(str(m.value) for m in at.markdown)
-    assert "What it means" not in bodies, "dialog still open after Close"
-    print("R3. IN-CARD CLOSE → SAME DEMO MEMO OK")
-
-    # Native × / ESC / backdrop path: on_dismiss clears only the trigger.
-    at.session_state["fte_memo_metric_click"] = "Revenue"
-    at.run()
-    assert ss(at, "fte_memo_metric_click") == "Revenue"
-    at.session_state["fte_memo_metric_click"] = None  # simulate on_dismiss rerun
-    at.run()
-    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
-    assert ss(at, "fte_memo_metric_click") is None
-    bodies = " ".join(str(m.value) for m in at.markdown)
-    assert "What it means" not in bodies, "dialog still open after native dismiss"
-    print("R4. NATIVE × / ESC / BACKDROP → SAME DEMO MEMO OK")
+    assert "fte_metric" not in at.query_params and "fte_demo" not in at.query_params
+    print("L1. LEGACY ?fte_demo=1&fte_metric= URL STILL RECONSTRUCTS DEMO OK")
 
     # Back to Intelligence → correct demo Intelligence page.
     at.button(key="fte_btn_memo_back").click().run()
@@ -217,6 +227,13 @@ def main():
     assert ss(at, "fte_memo_view_open") is True
     assert ss(at, "fte_memo_draft") == expected_memo
     print("R6. REOPEN DEMO MEMO OK")
+
+    # R7 — the real (non-demo) memo path is untouched: its links still use
+    # the query-param dialog navigation; demo hash cards are demo-only.
+    src_guard = open(APP, encoding="utf-8").read()
+    assert 'href="?fte_metric={urllib.parse.quote(metric)}"' in src_guard, "real memo link path changed"
+    assert 'href="#ftemetric-{slug}"' in src_guard, "demo hash path missing"
+    print("R7. REAL MEMO PATH UNTOUCHED OK (query-param links preserved; hash cards demo-only)")
 
     # --- 8/9) Real workspace nav + real memo generator intact ---
     at2 = AppTest.from_file(APP, default_timeout=120)

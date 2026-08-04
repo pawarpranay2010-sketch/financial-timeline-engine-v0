@@ -1582,6 +1582,103 @@ _FTE_CSS = """
   background: rgba(79, 142, 247, .08);
 }
 
+/* Sprint 4.2: demo-memo floating evidence card — pure CSS :target
+   mechanism (hash links only). Zero JS, zero rerun, zero iframe, zero
+   /component/* dependency: works on any Streamlit hosting. The card is
+   position:fixed, so opening/closing never moves, resizes or scrolls the
+   memo. Only one card can be :target at a time, so clicking another
+   metric instantly replaces the content. Close/×/backdrop all navigate to
+   the sentinel fragment #fte-card-close, which matches no element, so the
+   card returns to display:none. */
+.fte-memo-card {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  color: var(--fte-text);
+  font-size: .875rem;
+  line-height: 1.45;
+}
+.fte-memo-card:target { display: block; }
+.fte-card-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 12, .55);
+}
+.fte-memo-card-inner {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100vw - 2.5rem));
+  max-width: 100vw;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  background: var(--fte-panel);
+  border: 1px solid rgba(127, 127, 127, .28);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
+  padding: .85rem .95rem .9rem;
+  text-align: left;
+}
+.fte-card-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: .45rem;
+}
+.fte-card-title { font-weight: 700; font-size: 1rem; flex: 1; }
+.fte-card-status {
+  font-size: .72rem; white-space: nowrap;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.fte-card-x {
+  font-size: 1.05rem; line-height: 1; color: var(--fte-muted);
+  text-decoration: none; padding: 0 2px; border-radius: 4px;
+  transition: color 120ms ease;
+}
+.fte-card-x:hover { color: var(--fte-text); }
+.fte-card-value {
+  font-size: 1.45rem; font-weight: 700;
+  letter-spacing: .01em; margin: .15rem 0 .7rem;
+}
+.fte-card-section {
+  border-top: 1px solid var(--fte-border);
+  margin-top: .6rem; padding-top: .55rem;
+}
+.fte-card-label {
+  font-size: 10px; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--fte-muted); font-weight: 600; margin-bottom: .3rem;
+}
+.fte-card-row {
+  display: grid; grid-template-columns: 84px 1fr; gap: 6px;
+  font-size: .8rem; padding: 2px 0;
+}
+.fte-card-row .k { color: var(--fte-muted); }
+.fte-card-row .v { color: var(--fte-text); overflow-wrap: anywhere; }
+.fte-card-note {
+  margin-top: .6rem; padding: .4rem .55rem; font-size: .76rem;
+  color: var(--fte-blocked);
+  border-left: 2px solid var(--fte-blocked);
+  background: rgba(224, 82, 82, .07); border-radius: 4px;
+}
+.fte-card-close {
+  display: inline-block; margin-top: .75rem;
+  padding: .32rem .9rem; font-size: .8rem;
+  border: 1px solid var(--fte-border); border-radius: 7px;
+  color: var(--fte-text); background: rgba(127, 127, 127, .08);
+  text-decoration: none;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.fte-card-close:hover {
+  border-color: rgba(127, 127, 127, .4);
+  background: rgba(127, 127, 127, .14);
+}
+.fte-st-verified { color: var(--fte-ok); }
+.fte-st-derived { color: var(--fte-derived); }
+.fte-st-blocked { color: var(--fte-blocked); }
+.fte-st-conflict { color: var(--fte-conflict); }
+.fte-st-unanalyzed { color: var(--fte-unanalyzed); }
+
 /* Sprint 2.1: native st.dialog size refinement for the metric detail card.
    The built-in dialog component provides the backdrop, × close button,
    rounded corners, shadow and centering — we just constrain its width
@@ -3076,14 +3173,80 @@ def _memo_clickable_spans(rows, para) -> list:
     return out
 
 
-def _memo_metric_html(rows, memo) -> str:
+def _memo_metric_slug(metric: str) -> str:
+    """Stable URL-fragment id for a metric in the demo memo (CSS :target)."""
+    return re.sub(r"[^a-z0-9]+", "-", str(metric).lower()).strip("-") or "metric"
+
+
+def _demo_memo_card_html(fields: dict, explainer: str) -> str:
+    """Compact floating evidence card for a demo memo metric. Pre-rendered
+    from the static demo dataset ONLY and shown/hidden purely with CSS
+    (:target on the card id) — no JS, no rerun, no server round-trip.
+    Fields the dataset does not provide render as '—'."""
+    kind = str(fields.get("kind") or "unanalyzed")
+    status = str(fields.get("status") or "—")
+    slug = _memo_metric_slug(fields.get("metric"))
+    head = (
+        f'<div class="fte-card-head">'
+        f'<span class="fte-card-title">{html.escape(str(fields.get("label") or fields.get("metric") or "—"))}</span>'
+        f'<span class="fte-card-status fte-st-{kind}">{html.escape(status)}</span>'
+        f'<a class="fte-card-x" href="#fte-card-close" aria-label="Close evidence card">×</a>'
+        f'</div>'
+    )
+    parts = [head, f'<div class="fte-card-value">{html.escape(str(fields.get("value") or "—"))}</div>']
+    if explainer:
+        parts.append(
+            f'<div class="fte-card-section">'
+            f'<div class="fte-card-label">What it means</div>'
+            f'<div style="font-size:.84rem;color:var(--fte-text);line-height:1.5">{html.escape(explainer)}</div>'
+            f'</div>'
+        )
+    rows_html = ""
+    for k, v in (("Source", fields.get("source")), ("Period", fields.get("period")), ("Evidence", fields.get("evidence"))):
+        vtxt = "—" if v in (None, "") else str(v)
+        rows_html += (
+            f'<div class="fte-card-row"><div class="k">{html.escape(k)}</div>'
+            f'<div class="v">{html.escape(vtxt)}</div></div>'
+        )
+    parts.append(f'<div class="fte-card-section"><div class="fte-card-label">Provenance</div>{rows_html}</div>')
+    if fields.get("note"):
+        parts.append(
+            f'<div class="fte-card-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
+        )
+    parts.append('<a class="fte-card-close" href="#fte-card-close">Close</a>')
+    return (
+        f'<div id="ftemetric-{slug}" class="fte-memo-card" role="dialog" '
+        f'aria-modal="true" aria-label="{html.escape(str(fields.get("metric") or ""), quote=True)}">'
+        f'<a class="fte-card-backdrop" href="#fte-card-close" tabindex="-1" aria-hidden="true"></a>'
+        f'<div class="fte-memo-card-inner">{"".join(parts)}</div></div>'
+    )
+
+
+def _demo_memo_cards_html(rows, module3_result, metrics) -> str:
+    """All floating cards for the demo memo, wrapped in one hidden block."""
+    cards = []
+    for metric in metrics:
+        fields = _metric_overlay_fields(rows, module3_result, metric)
+        cards.append(_demo_memo_card_html(fields, _metric_explainer(metric)))
+    return f'<div class="fte-memo-cards">{"".join(cards)}</div>'
+
+
+def _memo_metric_html(rows, memo, module3_result=None) -> str:
     """Memo body as ONE continuous HTML document. Pipeline metric names
-    and unambiguous exact stored values become INLINE NATIVE LINKS
-    (?fte_metric=<name> query param); ordinary prose is never wrapped, so
-    sentences stay intact. No custom component is required — clicking a
-    link reruns the app and opens the existing native metric dialog."""
+    and unambiguous exact stored values become INLINE links; ordinary
+    prose is never wrapped, so sentences stay intact.
+
+    Real (non-demo) memos keep the query-param links (?fte_metric=<name>)
+    that open the existing native metric dialog on the next rerun — the
+    deployed behavior is unchanged. Demo Mode instead emits pure hash
+    links (#ftemetric-<slug>) plus pre-rendered floating evidence cards
+    shown entirely client-side with CSS :target: clicking a metric opens
+    the card instantly with no rerun, no reload, no layout or scroll
+    change. No custom component is required."""
+    demo = bool(st.session_state.get("fte_demo_mode"))
     paragraphs = [p.strip() for p in memo.replace("\r\n", "\n").split("\n\n") if p.strip()]
     out = []
+    demo_metrics = []
     for para in paragraphs:
         spans = _memo_clickable_spans(rows, para)
         if not spans:
@@ -3093,20 +3256,30 @@ def _memo_metric_html(rows, memo) -> str:
         for s, e, label, metric in spans:
             if s > pos:
                 body.append(html.escape(para[pos:s]).replace(chr(10), "<br>"))
-            # Demo Mode links carry a demo-only marker so a full page
-            # navigation can be reconstructed as the demo session instead of
-            # falling back to the Entrance default. Real (non-demo) memo
-            # links never include it.
-            demo_suffix = "&fte_demo=1" if st.session_state.get("fte_demo_mode") else ""
-            body.append(
-                f'<a class="fte-metric-link" href="?fte_metric={urllib.parse.quote(metric)}{demo_suffix}" '
-                f'title="Inspect {html.escape(metric, quote=True)}">{html.escape(label)}</a>'
-            )
+            esc_metric = html.escape(metric, quote=True)
+            if demo:
+                slug = _memo_metric_slug(metric)
+                body.append(
+                    f'<a class="fte-metric-link" href="#ftemetric-{slug}" '
+                    f'title="Inspect {esc_metric}">{html.escape(label)}</a>'
+                )
+                if metric not in demo_metrics:
+                    demo_metrics.append(metric)
+            else:
+                # Real memo: query-param link opens the existing native
+                # metric dialog on the next rerun (unchanged behavior).
+                body.append(
+                    f'<a class="fte-metric-link" href="?fte_metric={urllib.parse.quote(metric)}" '
+                    f'title="Inspect {esc_metric}">{html.escape(label)}</a>'
+                )
             pos = e
         if pos < len(para):
             body.append(html.escape(para[pos:]).replace(chr(10), "<br>"))
         out.append(f'<div class="fte-memo-para">{"".join(body)}</div>')
-    return "".join(out)
+    html_body = "".join(out)
+    if demo and demo_metrics:
+        html_body += _demo_memo_cards_html(rows, module3_result, demo_metrics)
+    return html_body
 
 
 def _clear_memo_metric_click() -> None:
@@ -3156,7 +3329,7 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
         html.escape(str(d.get("file_name", ""))) for d in (document_summaries or []) if d.get("file_name")
     )[:180]
     rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
-    memo_html = _memo_metric_html(rows, memo)
+    memo_html = _memo_metric_html(rows, memo, module3_result)
     with st.container(key="fte_memo_doc", border=True):
         st.markdown('<div class="fte-memo-title">Investment Memo</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="fte-memo-context">📄 {context or "No document context"}</div>', unsafe_allow_html=True)
