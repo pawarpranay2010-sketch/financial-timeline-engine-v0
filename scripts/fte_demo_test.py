@@ -151,6 +151,73 @@ def main():
     assert any("Demo memo · Pre-analyzed sample · No AI generation used" in str(b) for b in bodies)
     print("2. DEMO GENERATE MEMO STATIC + NO AI OK (byte-identical memo, inline links present)")
 
+    # --- Sprint 4.1 regression: metric click must NEVER reset the route.
+    # Simulate the full page navigation the inline link causes, with session
+    # state lost on reload (the hosted failure mode): URL carries
+    # ?fte_demo=1&fte_metric=Revenue and route/memo state are gone.
+    at.query_params["fte_metric"] = "Revenue"
+    at.query_params["fte_demo"] = "1"
+    at.session_state["fte_route"] = "entrance"
+    at.session_state["fte_memo_view_open"] = False
+    at.session_state["fte_memo_draft"] = ""
+    at.run()
+    if not check_exceptions(at, "demo memo metric click reload"):
+        return 1
+    assert ss(at, "fte_route") == "demo", "metric click reset the route"
+    assert ss(at, "fte_memo_view_open") is True, "memo closed after metric click"
+    assert ss(at, "fte_memo_draft") == expected_memo, "memo lost after metric click"
+    assert ss(at, "fte_memo_metric_click") == "Revenue"
+    assert "fte_metric" not in at.query_params and "fte_demo" not in at.query_params, \
+        "trigger params not consumed"
+    bodies = " ".join(str(m.value) for m in at.markdown)
+    assert "What it means" in bodies and "Consolidated Statements of Income" in bodies, \
+        "evidence dialog did not open on the memo"
+    print("R1. METRIC CLICK → DEMO MEMO + DIALOG OK (route preserved, params consumed)")
+
+    # Click another metric → same memo, dialog content replaced.
+    at.query_params["fte_metric"] = "EPS"
+    at.query_params["fte_demo"] = "1"
+    at.run()
+    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
+    assert ss(at, "fte_memo_metric_click") == "EPS"
+    bodies = " ".join(str(m.value) for m in at.markdown)
+    assert "Diluted earnings per share" in bodies, "dialog did not switch to EPS"
+    print("R2. CLICK ANOTHER METRIC → SAME MEMO + UPDATED DIALOG OK")
+
+    # In-card Close → same demo memo, dialog gone.
+    at.button(key="fte_memo_metric_close").click().run()
+    if not check_exceptions(at, "demo dialog close"):
+        return 1
+    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
+    assert ss(at, "fte_memo_metric_click") is None
+    bodies = " ".join(str(m.value) for m in at.markdown)
+    assert "What it means" not in bodies, "dialog still open after Close"
+    print("R3. IN-CARD CLOSE → SAME DEMO MEMO OK")
+
+    # Native × / ESC / backdrop path: on_dismiss clears only the trigger.
+    at.session_state["fte_memo_metric_click"] = "Revenue"
+    at.run()
+    assert ss(at, "fte_memo_metric_click") == "Revenue"
+    at.session_state["fte_memo_metric_click"] = None  # simulate on_dismiss rerun
+    at.run()
+    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is True
+    assert ss(at, "fte_memo_metric_click") is None
+    bodies = " ".join(str(m.value) for m in at.markdown)
+    assert "What it means" not in bodies, "dialog still open after native dismiss"
+    print("R4. NATIVE × / ESC / BACKDROP → SAME DEMO MEMO OK")
+
+    # Back to Intelligence → correct demo Intelligence page.
+    at.button(key="fte_btn_memo_back").click().run()
+    assert ss(at, "fte_route") == "demo" and ss(at, "fte_memo_view_open") is False
+    assert ss(at, "fte_page") == "Intelligence"
+    print("R5. BACK TO INTELLIGENCE → DEMO INTELLIGENCE PAGE OK")
+
+    # Reopen Demo Memo → still works.
+    at.button(key="fte_btn_demo_memo").click().run()
+    assert ss(at, "fte_memo_view_open") is True
+    assert ss(at, "fte_memo_draft") == expected_memo
+    print("R6. REOPEN DEMO MEMO OK")
+
     # --- 8/9) Real workspace nav + real memo generator intact ---
     at2 = AppTest.from_file(APP, default_timeout=120)
     at2.run()

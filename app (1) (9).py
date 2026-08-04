@@ -3093,8 +3093,13 @@ def _memo_metric_html(rows, memo) -> str:
         for s, e, label, metric in spans:
             if s > pos:
                 body.append(html.escape(para[pos:s]).replace(chr(10), "<br>"))
+            # Demo Mode links carry a demo-only marker so a full page
+            # navigation can be reconstructed as the demo session instead of
+            # falling back to the Entrance default. Real (non-demo) memo
+            # links never include it.
+            demo_suffix = "&fte_demo=1" if st.session_state.get("fte_demo_mode") else ""
             body.append(
-                f'<a class="fte-metric-link" href="?fte_metric={urllib.parse.quote(metric)}" '
+                f'<a class="fte-metric-link" href="?fte_metric={urllib.parse.quote(metric)}{demo_suffix}" '
                 f'title="Inspect {html.escape(metric, quote=True)}">{html.escape(label)}</a>'
             )
             pos = e
@@ -3311,6 +3316,35 @@ def _fte_goto_demo() -> None:
     st.session_state["fte_memo_metric_click"] = None
 
 
+def _reconstruct_demo_from_query() -> None:
+    """Reconstruct Demo-Mode session state when a demo metric click arrives
+    via the URL (?fte_demo=1&fte_metric=...) after a full page navigation.
+
+    Hosted/preview environments do not always restore session state on a
+    full reload, so fte_route would otherwise fall back to the 'entrance'
+    default before main() routes — sending the user to the start screen.
+    This runs BEFORE any routing: it rebuilds the demo route, memo view and
+    static memo, transfers fte_metric into fte_memo_metric_click (the ONLY
+    role of that param), then consumes both params. It never touches real
+    (non-demo) sessions because their memo links never carry fte_demo=1.
+    """
+    if not st.query_params.get("fte_demo"):
+        return
+    st.session_state["fte_route"] = "demo"
+    st.session_state["fte_demo_mode"] = True
+    st.session_state["fte_page"] = "Intelligence"
+    st.session_state["fte_memo_view_open"] = True
+    st.session_state["fte_memo_draft"] = _FTE_DEMO_MEMO
+    st.session_state["fte_memo_status"] = "ready"
+    qm = st.query_params.get("fte_metric")
+    if qm:
+        st.session_state["fte_memo_metric_click"] = str(qm)
+    # Consume the URL trigger after transferring it — never reset the route.
+    for _p in ("fte_demo", "fte_metric"):
+        if _p in st.query_params:
+            del st.query_params[_p]
+
+
 def _demo_copilot_answer(question, rows):
     """Deterministic Demo-Mode Co-Pilot: predefined, evidence-backed answers
     built ONLY from the static demo dataset. Never calls an AI provider."""
@@ -3503,6 +3537,7 @@ def _render_demo_workspace() -> None:
 # SECTION 11: Main App / UI
 # =============================================================================
 def main():
+    _reconstruct_demo_from_query()
     _inject_terminal_css()
     _init_terminal_state()
 
