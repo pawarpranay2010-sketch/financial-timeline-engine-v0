@@ -17,6 +17,10 @@ Section map (Phase 12 -- modular organization within a single file):
  12. Auth
 """
 import streamlit as st
+try:
+    from backend import memo_presenter as _fte_memo_presenter
+except Exception:
+    _fte_memo_presenter = None
 import requests
 import io
 import html
@@ -3494,6 +3498,116 @@ def _memo_metric_html(rows, memo, module3_result=None) -> str:
     return html_body
 
 
+def _memo_fragment_html(rows, text, demo, demo_metrics):
+    """Convert one text fragment to clickable HTML using the SAME span
+    machinery as _memo_metric_html (metric names + unambiguous exact
+    values). Returns (html, demo_metrics_updated)."""
+    spans = _memo_clickable_spans(rows, text)
+    if not spans:
+        return html.escape(text), demo_metrics
+    body, pos = [], 0
+    for s, e, label, metric in spans:
+        if s > pos:
+            body.append(html.escape(text[pos:s]))
+        esc_metric = html.escape(metric, quote=True)
+        if demo:
+            slug = _memo_metric_slug(metric)
+            body.append(
+                f'<label class="fte-metric-link" for="ftemetric-{slug}" '
+                f'role="button" tabindex="0" title="Inspect {esc_metric}">'
+                f'{html.escape(label)}</label>'
+            )
+            if metric not in demo_metrics:
+                demo_metrics = list(demo_metrics) + [metric]
+        else:
+            body.append(
+                f'<a class="fte-metric-link" href="?fte_metric='
+                f'{urllib.parse.quote(metric)}" title="Inspect {esc_metric}">'
+                f'{html.escape(label)}</a>'
+            )
+        pos = e
+    if pos < len(text):
+        body.append(html.escape(text[pos:]))
+    return "".join(body), demo_metrics
+
+
+def _memo_adaptive_html(rows, memo, module3_result, profile):
+    """Render the memo through the Student/Professional presenter. Blocks
+    (headings / paras / bullets / tables / evidence / notes) become ONE
+    continuous HTML document; every metric token stays clickable with the
+    exact same interaction as the Classic memo. In demo mode the same
+    pre-rendered floating evidence cards + exclusive radio group are
+    appended, so clicking a metric opens the card with zero rerun."""
+    demo = bool(st.session_state.get("fte_demo_mode"))
+    if _fte_memo_presenter is None:
+        # Fallback: never break the memo if the presenter import failed.
+        return _memo_metric_html(rows, memo, module3_result)
+    try:
+        blocks = _fte_memo_presenter.render_memo(memo, rows, profile)
+    except Exception:
+        return _memo_metric_html(rows, memo, module3_result)
+
+    out = []
+    demo_metrics = []
+    for kind, payload in blocks:
+        if kind == "heading":
+            out.append(
+                f'<div class="fte-memo-section">{html.escape(str(payload))}</div>'
+            )
+        elif kind == "para":
+            frag, demo_metrics = _memo_fragment_html(
+                rows, str(payload), demo, demo_metrics
+            )
+            out.append(f'<div class="fte-memo-para">{frag}</div>')
+        elif kind == "bullets":
+            items = []
+            for it in payload:
+                frag, demo_metrics = _memo_fragment_html(
+                    rows, str(it), demo, demo_metrics
+                )
+                items.append(f"<li>{frag}</li>")
+            out.append(f'<ul class="fte-memo-bullets">{"".join(items)}</ul>')
+        elif kind == "table":
+            headers = "".join(
+                f"<th>{html.escape(str(h))}</th>" for h in payload["headers"]
+            )
+            trs = []
+            for row in payload["rows"]:
+                tds = []
+                for cell in row:
+                    frag, demo_metrics = _memo_fragment_html(
+                        rows, str(cell), demo, demo_metrics
+                    )
+                    tds.append(f"<td>{frag}</td>")
+                trs.append(f"<tr>{''.join(tds)}</tr>")
+            out.append(
+                f'<table class="fte-memo-table"><thead><tr>{headers}</tr></thead>'
+                f"<tbody>{''.join(trs)}</tbody></table>"
+            )
+        elif kind == "evidence":
+            items = []
+            for ref in payload:
+                frag, demo_metrics = _memo_fragment_html(
+                    rows, str(ref.get("label")), demo, demo_metrics
+                )
+                items.append(
+                    f"<li>{frag} — {html.escape(str(ref.get('value')))} · "
+                    f"{html.escape(str(ref.get('source')))} · "
+                    f"{html.escape(str(ref.get('page')))} · "
+                    f"{html.escape(str(ref.get('period')))} — "
+                    f"{html.escape(str(ref.get('evidence')))}</li>"
+                )
+            out.append(f'<ul class="fte-memo-evidence">{"".join(items)}</ul>')
+        elif kind == "note":
+            out.append(
+                f'<div class="fte-memo-note">{html.escape(str(payload))}</div>'
+            )
+    html_body = "\n\n".join(out)
+    if demo and demo_metrics:
+        html_body += "\n\n" + _demo_memo_cards_html(rows, module3_result, demo_metrics)
+    return html_body
+
+
 def _clear_memo_metric_click() -> None:
     """Close the memo metric card (also wired to × / ESC / backdrop)."""
     st.session_state["fte_memo_metric_click"] = None
@@ -3541,7 +3655,22 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
         html.escape(str(d.get("file_name", ""))) for d in (document_summaries or []) if d.get("file_name")
     )[:180]
     rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(module3_result)
-    memo_html = _memo_metric_html(rows, memo, module3_result)
+    profile = st.session_state.get("fte_memo_profile") or "Classic"
+    profile = st.radio(
+        "Memo format",
+        ["Classic", "Student", "Professional"],
+        index=["Classic", "Student", "Professional"].index(profile)
+        if profile in ("Classic", "Student", "Professional")
+        else 0,
+        horizontal=True,
+        key="fte_memo_profile_ctl",
+        label_visibility="collapsed",
+    )
+    st.session_state["fte_memo_profile"] = profile
+    if profile in ("Student", "Professional"):
+        memo_html = _memo_adaptive_html(rows, memo, module3_result, profile.lower())
+    else:
+        memo_html = _memo_metric_html(rows, memo, module3_result)
     with st.container(key="fte_memo_doc", border=True):
         st.markdown('<div class="fte-memo-title">Investment Memo</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="fte-memo-context">📄 {context or "No document context"}</div>', unsafe_allow_html=True)

@@ -240,6 +240,19 @@ def run_module3(text: str, extracted_documents: List[Dict[str, Any]]) -> Dict[st
 
     deduplicated_financial_data = filter_duplicate_information(financial_data)
 
+    # --- Sprint 8 Module A: layout-aware evidence enrichment -----------------
+    # Safe, additive pass: enrich facts with page/table/row/column/period/
+    # evidence metadata ONLY when a parsed document provably contains the
+    # matching row (never mis-attributes across documents, never fabricates,
+    # never modifies values). Any failure falls back to the unchanged data.
+    try:
+        from backend.layout_extractor import enrich_financial_data_from_documents
+        deduplicated_financial_data = enrich_financial_data_from_documents(
+            deduplicated_financial_data, extracted_documents or []
+        )
+    except Exception:
+        pass
+
     optimized_context = optimize_context(
         deduplicated_financial_data,
         ratios,
