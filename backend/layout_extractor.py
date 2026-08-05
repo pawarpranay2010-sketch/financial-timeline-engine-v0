@@ -61,6 +61,7 @@ _METRIC_LABELS: Dict[str, List[str]] = {
             "diluted earnings per share", "earnings per equity share"],
     "Debt": ["total debt", "borrowings", "debt"],
     "Assets": ["total assets", "assets"],
+    "Total Assets": ["total assets", "assets"],
     "Liabilities": ["total liabilities", "liabilities"],
     "Equity": ["shareholders' equity", "shareholder's equity", "total equity",
                "total shareholders' equity", "equity", "net worth"],
@@ -346,7 +347,11 @@ def layout_aware_annotate(parsed: Dict[str, Any], document_name: str = "") -> Di
                     continue
                 clean_cells = [_clean_cell(c) for c in cells]
                 # Malformed/ambiguous: ragged row vs header count -> flag.
-                if table.headers and len(clean_cells) != len(table.headers):
+                # The first header is the row-LABEL column, so a valid data
+                # row has exactly (len(headers) - 1) cells. A single-period
+                # table (Particulars | FY2025) with one value per row is
+                # NOT malformed.
+                if table.headers and len(clean_cells) + 1 != len(table.headers):
                     if table.table_id not in out["flagged_tables"]:
                         out["flagged_tables"].append(table.table_id)
                     tdict["flagged"] = True

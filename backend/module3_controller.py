@@ -253,6 +253,27 @@ def run_module3(text: str, extracted_documents: List[Dict[str, Any]]) -> Dict[st
     except Exception:
         pass
 
+    # --- Sprint 9: extraction reliability pass -------------------------------
+    # Fail-safe hardening: structural column-identity verification, separate
+    # confidence dimensions, cross-path conflict detection, and extraction-
+    # state classification. ADDITIVE ONLY - values, evidence and the Sprint
+    # 6.5 / Sprint 7 layers are never touched. Any failure leaves the
+    # enriched data unchanged.
+    extraction_reliability_report: Dict[str, Any] = {}
+    try:
+        from backend.extraction_reliability import build_extraction_reliability_report
+        _reliability = build_extraction_reliability_report(
+            deduplicated_financial_data, extracted_documents or []
+        )
+        deduplicated_financial_data = _reliability.get(
+            "financial_data", deduplicated_financial_data
+        )
+        extraction_reliability_report = {
+            k: v for k, v in _reliability.items() if k != "financial_data"
+        }
+    except Exception:
+        extraction_reliability_report = {}
+
     optimized_context = optimize_context(
         deduplicated_financial_data,
         ratios,
@@ -273,5 +294,10 @@ def run_module3(text: str, extracted_documents: List[Dict[str, Any]]) -> Dict[st
 
     # --- New improvement layer (Module 3.1 - 3.9) ---
     result = _apply_improvement_layer(result, text)
+
+    # Sprint 9 - attach the reliability report AFTER the improvement layer
+    # so no cleaning stage can strip or re-shape it.
+    if extraction_reliability_report:
+        result["extraction_reliability"] = extraction_reliability_report
 
     return result

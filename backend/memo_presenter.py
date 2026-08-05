@@ -315,7 +315,8 @@ def _build_evidence(rows: List[Dict[str, Any]], profile: str = "professional") -
         seen.add(metric)
         fact = _fact_of(r)
         kind = str(r.get("_kind") or "")
-        if kind not in ("verified", "derived", "blocked", "conflict", "unanalyzed"):
+        if kind not in ("verified", "derived", "blocked", "conflict",
+                        "review_required", "unanalyzed"):
             kind = "verified"
         value = _clean_field(r.get("Value") or r.get("value"))
         period = _clean_field(fact.get("reporting_period") or r.get("Period") or r.get("period"))
@@ -365,6 +366,13 @@ def _evidence_lines(ref: Dict[str, Any], profile: str) -> List[str]:
         lines.append("Blocked")
         if ref.get("blocked_reason"):
             lines.append(ref["blocked_reason"])
+        return lines
+    if kind == "review_required":
+        lines.append("Review required")
+        if ref.get("blocked_reason"):
+            lines.append(ref["blocked_reason"])
+        elif ref.get("evidence"):
+            lines.append(ref["evidence"])
         return lines
     if kind == "conflict":
         lines.append("Cross-document verification conflict")

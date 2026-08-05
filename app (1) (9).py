@@ -1913,11 +1913,27 @@ def _build_terminal_rows(module3_result):
                     "_kind": "derived", "_fact": fact,
                 })
             else:
-                rows.append({
-                    "metric": key, "Metric": label, "Value": _fmt_num(value),
-                    "Period": period, "Source": source or "Document", "Status": "🟢 Verified",
-                    "_kind": "verified", "_fact": fact,
-                })
+                # Sprint 9 - a structurally uncertain extraction (ambiguous
+                # column identity, malformed/flagged table, low-confidence
+                # OCR) is surfaced as Review Required, never promoted to
+                # Verified by the reliability layer.
+                ext_state = fact.get("extraction_state") if isinstance(fact, dict) else None
+                if ext_state == "review_required":
+                    rows.append({
+                        "metric": key, "Metric": label, "Value": _fmt_num(value),
+                        "Period": period, "Source": source or "Document",
+                        "Status": "🟠 Review Required", "_kind": "review_required",
+                        "_fact": fact,
+                        "_reason": (fact.get("extraction_state_reason")
+                                     or "Structurally uncertain extraction — review required."),
+                    })
+                else:
+                    rows.append({
+                        "metric": key, "Metric": label, "Value": _fmt_num(value),
+                        "Period": period, "Source": source or "Document",
+                        "Status": "🟢 Verified", "_kind": "verified", "_fact": fact,
+                    })
+
         elif key in blocked:
             rows.append({
                 "metric": key, "Metric": label, "Value": "—", "Period": "—",
@@ -2011,6 +2027,13 @@ def _conflict_metrics(module3_result) -> dict:
         for item in x:
             if isinstance(item, dict) and item.get("match") is False and item.get("metric"):
                 conflicts[str(item["metric"])] = item
+    # Sprint 9 - extraction conflicts (independent extraction paths) are
+    # surfaced exactly like cross-document conflicts: the conflict stays
+    # visible to the grid/evidence card, nothing is silently chosen.
+    reliab = (module3_result or {}).get("extraction_reliability") or {}
+    for c in reliab.get("conflicts") or []:
+        if isinstance(c, dict) and c.get("metric"):
+            conflicts.setdefault(str(c["metric"]), c)
     return conflicts
 
 
@@ -2044,7 +2067,8 @@ def _blocked_metrics(module3_result) -> dict:
 
 def _row_counts(rows) -> dict:
     """Taxonomy counts over grid rows (real rows only, nothing invented)."""
-    counts = {"verified": 0, "derived": 0, "unanalyzed": 0, "conflict": 0, "blocked": 0}
+    counts = {"verified": 0, "derived": 0, "review_required": 0,
+              "unanalyzed": 0, "conflict": 0, "blocked": 0}
     for r in rows or []:
         kind = r.get("_kind", "unanalyzed")
         counts[kind] = counts.get(kind, 0) + 1
@@ -2055,6 +2079,7 @@ _FILTER_LABELS = {
     "all": "All metrics",
     "verified": "🟢 Verified",
     "derived": "🟡 Derived",
+    "review_required": "🟠 Review Required",
     "unanalyzed": "⚪ Unanalyzed",
     "conflict": "🔵 Conflicts",
     "blocked": "🔴 Blocked",
@@ -2065,6 +2090,7 @@ _METRIC_FILTER_PLAIN = {
     "all": "all",
     "verified": "verified",
     "derived": "derived",
+    "review_required": "review-required",
     "unanalyzed": "unanalyzed",
     "conflict": "conflict",
     "blocked": "blocked",
@@ -2142,6 +2168,7 @@ def _render_taxonomy_controls(rows, include_exceptions: bool = False) -> None:
             ("all", "All metrics", 0),
             ("verified", "🟢 Verified", counts["verified"]),
             ("derived", "🟡 Derived", counts["derived"]),
+            ("review_required", "🟠 Review Required", counts["review_required"]),
             ("unanalyzed", "⚪ Unanalyzed", counts["unanalyzed"]),
         ]
     for kind, label, count in options:
@@ -2355,6 +2382,14 @@ def _provenance_tray_html(rows, module3_result, metric) -> str:
             )
         else:
             evidence = "Multiple sources disagree"
+    elif kind == "review_required":
+        origin = "Extraction reliability"
+        location = g("page", "table_id")
+        evidence = g("evidence", "anchor")
+        _rr_reason = selected.get("_reason")
+        if not _rr_reason and isinstance(fact, dict):
+            _rr_reason = fact.get("extraction_state_reason")
+        note = _rr_reason or "Structurally uncertain extraction — review required."
     else:
         origin = "Calculated ratio" if kind == "derived" else ("Document extraction" if kind == "verified" else "—")
         location = g("page", "table_id", "chunk_id", "anchor")
@@ -2507,6 +2542,16 @@ def _metric_overlay_fields(rows, module3_result, metric, documents=None) -> dict
             out["fragment"] = evidence
         else:
             out["evidence"] = "Multiple sources disagree"
+    elif kind == "review_required":
+        out["origin"] = "Extraction reliability"
+        out["location"] = g("page", "table_id")
+        out["evidence"] = g("evidence", "anchor")
+        if out["evidence"] != "—":
+            out["fragment"] = out["evidence"]
+        _rr_reason = selected.get("_reason")
+        if not _rr_reason and isinstance(fact, dict):
+            _rr_reason = fact.get("extraction_state_reason")
+        out["note"] = _rr_reason or "Structurally uncertain extraction — review required."
     else:
         out["origin"] = (
             "Calculated ratio" if kind == "derived"
