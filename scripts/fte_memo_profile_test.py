@@ -12,7 +12,7 @@ Proves:
   6.  missing sections render the allowed qualifier (not AI boilerplate)
   7.  bullets are built from real memo sentences only
   8.  the presenter NEVER calculates (no arithmetic performed)
-  9.  evidence refs carry only real provenance fields
+  9.  evidence refs carry only real provenance fields (Sprint 8.1: no '—' leaks)
  10.  the adaptive HTML keeps metrics clickable (label/link emitted)
  11.  demo-mode adaptive HTML still embeds the radio + floating cards
  12.  Classic path is byte-identical to previous behavior (regression)
@@ -63,19 +63,36 @@ Monitor quarterly operating leverage and Azure growth. Track capital intensity a
 
 ROWS = [
     {"metric": "Revenue", "Value": "281.70B", "Period": "FY2025",
-     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified"},
+     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified",
+     "_fact": {"document_name": "Microsoft 10-K FY2025", "reporting_period": "FY2025",
+               "page": 26, "evidence": "Consolidated Statements of Income, p. 26",
+               "unit": "USD"}},
     {"metric": "Net Profit", "Value": "98.30B", "Period": "FY2025",
-     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified"},
+     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified",
+     "_fact": {"document_name": "Microsoft 10-K FY2025", "reporting_period": "FY2025",
+               "page": 26, "evidence": "Consolidated Statements of Income, p. 26",
+               "unit": "USD"}},
     {"metric": "Operating Profit", "Value": "125.50B", "Period": "FY2025",
-     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified"},
+     "Source": "Microsoft 10-K FY2025", "Status": "🟢 Verified", "_kind": "verified",
+     "_fact": {"document_name": "Microsoft 10-K FY2025", "reporting_period": "FY2025",
+               "page": 26, "evidence": "Consolidated Statements of Income, p. 26",
+               "unit": "USD"}},
     {"metric": "EBITDA", "Value": "161.00B", "Period": "FY2025",
-     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived"},
+     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived",
+     "_fact": {"formula": "Operating income + depreciation & amortisation",
+               "inputs": ["Operating Profit"], "reporting_period": "FY2025", "unit": "USD"}},
     {"metric": "ROE", "Value": "0.37", "Period": "FY2025",
-     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived"},
+     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived",
+     "_fact": {"formula": "Net income \u00f7 shareholders' equity",
+               "inputs": ["Net Profit", "Equity"], "reporting_period": "FY2025", "unit": "USD"}},
     {"metric": "Debt to Equity", "Value": "0.36", "Period": "FY2025",
-     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived"},
+     "Source": "Calculated", "Status": "🔵 Derived", "_kind": "derived",
+     "_fact": {"formula": "Total debt \u00f7 shareholders' equity",
+               "inputs": ["Debt", "Equity"], "reporting_period": "FY2025", "unit": "USD"}},
     {"metric": "Segment Gross Margin", "Value": "—", "Period": "—",
-     "Source": "—", "Status": "🔴 Blocked", "_kind": "blocked"},
+     "Source": "—", "Status": "🔴 Blocked", "_kind": "blocked",
+     "_reason": "Segment-level margin is not disclosed in source filings.",
+     "_fact": {}},
 ]
 
 
@@ -163,15 +180,49 @@ def main():
     except Exception:
         check("8a. presenter source inspectable", True)
 
-    # 9. Evidence refs only real provenance
+    # 9. Evidence refs — Sprint 8.1: only REAL provenance is visible;
+    # missing fields are omitted entirely (never '—') while the full
+    # provenance stays in the ref dict internally.
     refs = next(b[1] for b in prof if b[0] == "evidence")
+    stud_refs = next(b[1] for b in stud if b[0] == "evidence")
     check("9a. evidence refs exist", len(refs) >= 3, f"{len(refs)} refs")
-    check("9b. missing provenance renders —",
-          all(r.get("page") or r.get("evidence") for r in refs))
-    check("9c. no fabricated page numbers",
-          all(str(r.get("page", "")).startswith("p.") or r.get("page") == "—"
-              for r in refs),
-          str({r.get("page") for r in refs}))
+    all_lines = [ln for r_ in refs for ln in (r_.get("lines") or [])]
+    stud_lines = [ln for r_ in stud_refs for ln in (r_.get("lines") or [])]
+    check("9b. no empty '—' in visible evidence lines",
+          all("—" not in ln for ln in all_lines + stud_lines),
+          str(all_lines))
+    check("9c. verified ref keeps source + page + evidence internally",
+          any(r_.get("source") == "Microsoft 10-K FY2025" and r_.get("page") == "p. 26"
+              and r_.get("evidence") for r_ in refs),
+          str({(r_.get("label"), r_.get("source"), r_.get("page")) for r_ in refs}))
+    check("9d. derived refs carry formula + inputs internally",
+          any(r_.get("kind") == "derived" and r_.get("formula") and r_.get("inputs")
+              for r_ in refs),
+          str([(r_.get("label"), r_.get("formula"), r_.get("inputs")) for r_ in refs]))
+    check("9e. blocked ref carries its reason",
+          any(r_.get("kind") == "blocked" and r_.get("blocked_reason")
+              and "Blocked" in " ".join(r_.get("lines") or []) for r_ in refs),
+          str([(r_.get("label"), r_.get("blocked_reason")) for r_ in refs]))
+    check("9f. professional verified renders 'source · period'",
+          any("Microsoft 10-K FY2025 · FY2025" in ln for ln in all_lines),
+          str(all_lines))
+    check("9g. professional derived renders 'Calculated · period' + formula + Inputs",
+          any("Calculated · FY2025" in ln for ln in all_lines)
+          and any("Inputs: Net Profit, Equity" in ln for ln in all_lines),
+          str(all_lines))
+    check("9h. student verified renders labeled Source/Period/Evidence lines",
+          any("Source: Microsoft 10-K FY2025" in ln for ln in stud_lines)
+          and any("Period: FY2025" in ln for ln in stud_lines)
+          and any("Evidence: Consolidated Statements of Income, p. 26" in ln
+                  for ln in stud_lines),
+          str(stud_lines))
+    check("9i. student derived renders 'Calculated from … and …'",
+          any("Calculated from Net Profit and Equity" in ln for ln in stud_lines),
+          str(stud_lines))
+    check("9j. no fabricated page numbers",
+          all(not r_.get("page") or str(r_.get("page")).startswith("p.")
+              for r_ in refs + stud_refs),
+          str({r_.get("page") for r_ in refs + stud_refs}))
 
     # 10-14. App-level adaptive HTML keeps the interaction (simulated here
     # with a tiny renderer clone to prove clickable + demo-cards behavior)
@@ -241,9 +292,18 @@ def _adaptive_html_sim(memo, rows, profile, demo=True):
             items, new_metrics = [], list(demo_metrics)
             for r_ in payload:
                 frag, new_metrics = _frag(rows, r_['label'], demo, new_metrics)
-                items.append(f"<li>{frag}</li>")
+                head = frag
+                if r_.get('value'):
+                    head += f" — {r_['value']}"
+                inner = f'<span class="fte-evidence-head">{head}</span>'
+                lines = [ln for ln in (r_.get("lines") or []) if str(ln).strip()]
+                if lines:
+                    inner += '<span class="fte-evidence-lines">' + "".join(
+                        f'<span class="fte-evidence-line">{ln}</span>' for ln in lines
+                    ) + '</span>'
+                items.append(f'<li class="fte-evidence-item">{inner}</li>')
             demo_metrics = new_metrics
-            out.append(f'<ul class="fte-memo-evidence">{items}</ul>')
+            out.append(f'<ul class="fte-memo-evidence">{"".join(items)}</ul>')
         elif kind == "note":
             out.append(f'<div class="fte-memo-note">{payload}</div>')
     body = "\n\n".join(out)

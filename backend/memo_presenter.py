@@ -209,7 +209,7 @@ def render_memo(
 
         if kind == "evidence":
             if include_evidence:
-                refs = _build_evidence(rows)
+                refs = _build_evidence(rows, profile)
                 blocks.append(("heading", title))
                 if refs:
                     blocks.append(("evidence", refs))
@@ -241,7 +241,9 @@ def _build_table(
     key_rows: List[Dict[str, Any]], profile: str
 ) -> Optional[Dict[str, Any]]:
     """Metric comparison table from the fact graph. Columns:
-    Metric | Value | Period | Source (professional adds Status)."""
+    Metric | Value | Period | Source (professional adds Status).
+    Missing cells render EMPTY (never '—'): unavailable data is omitted
+    from the visible document, exactly like a finished financial table."""
     if not key_rows:
         return None
     use_status = profile == "professional"
@@ -250,13 +252,11 @@ def _build_table(
         headers.insert(1, "Status")
     rows_out = []
     for r in key_rows:
-        metric = str(r.get("metric") or r.get("Metric") or "—")
-        value = str(r.get("Value") or r.get("value") or "—")
-        status = str(r.get("Status") or r.get("status") or "—")
-        period = str(r.get("Period") or r.get("reporting_period") or "—")
-        source = str(r.get("Source") or r.get("source") or "—")
-        if value in ("", "None"):
-            value = "—"
+        metric = str(r.get("metric") or r.get("Metric") or "")
+        value = _clean_field(r.get("Value") or r.get("value"))
+        status = _clean_field(r.get("Status") or r.get("status"))
+        period = _clean_field(r.get("Period") or r.get("reporting_period"))
+        source = _clean_field(r.get("Source") or r.get("source"))
         if use_status:
             rows_out.append([metric, status, value, period, source])
         else:
@@ -269,29 +269,149 @@ def _build_table(
     }
 
 
-def _build_evidence(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Evidence references from the fact graph - only real fields are used;
-    missing provenance fields render as '—'. Never fabricates."""
-    refs: List[Dict[str, str]] = []
+_CURRENCY_SYMBOLS = {
+    "USD": "$", "INR": "₹", "EUR": "€", "GBP": "£", "JPY": "¥",
+    "CAD": "$", "AUD": "$", "SGD": "$", "CNY": "¥", "CHF": "CHF ",
+}
+
+
+def _currency_prefix(unit: str, value: str) -> str:
+    """Presentation-only currency prefix derived from REAL unit metadata.
+    Applied only when the unit is known and the value does not already
+    carry a currency symbol. Never modifies the underlying value."""
+    if not unit or not value:
+        return ""
+    if any(sym in value for sym in ("$", "₹", "€", "£", "¥")):
+        return ""
+    return _CURRENCY_SYMBOLS.get(str(unit).strip().upper(), "")
+
+
+def _fact_of(row: Dict[str, Any]) -> Dict[str, Any]:
+    f = row.get("_fact")
+    return f if isinstance(f, dict) else {}
+
+
+def _clean_field(value) -> str:
+    """Normalize a provenance field: real text passes through, '—'/None/
+    empty become '' so missing provenance is OMITTED from the visible memo
+    (never shown as a placeholder)."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    return "" if s in ("", "—", "None", "none", "N/A", "n/a") else s
+
+
+def _build_evidence(rows: List[Dict[str, Any]], profile: str = "professional") -> List[Dict[str, Any]]:
+    """Evidence references from the fact graph (rows + their `_fact`). Each
+    ref carries the FULL real provenance internally (empty string when the
+    pipeline did not provide it — never '—') plus pre-computed per-profile
+    display `lines` containing ONLY real fields. Never fabricates."""
+    refs: List[Dict[str, Any]] = []
     seen = set()
     for r in rows or []:
         metric = str(r.get("metric") or r.get("Metric") or "")
         if not metric or metric in seen:
             continue
         seen.add(metric)
-        page = r.get("page")
-        page_s = f"p. {page}" if isinstance(page, int) else (str(page or "—"))
-        doc = str(r.get("document_name") or r.get("source_ref") or "—")
-        evidence = str(r.get("evidence") or "—")
-        refs.append({
-            "label": metric,
-            "value": str(r.get("Value") or r.get("value") or "—"),
-            "source": doc,
-            "period": str(r.get("reporting_period") or r.get("Period") or "—"),
-            "page": page_s,
-            "evidence": evidence,
-        })
+        fact = _fact_of(r)
+        kind = str(r.get("_kind") or "")
+        if kind not in ("verified", "derived", "blocked", "conflict", "unanalyzed"):
+            kind = "verified"
+        value = _clean_field(r.get("Value") or r.get("value"))
+        period = _clean_field(fact.get("reporting_period") or r.get("Period") or r.get("period"))
+        source = _clean_field(
+            fact.get("document_name") or fact.get("source_ref")
+            or fact.get("source") or r.get("Source") or r.get("source")
+        )
+        page = fact.get("page") or r.get("page")
+        if isinstance(page, bool):
+            page_s = ""
+        elif isinstance(page, (int, float)):
+            page_s = f"p. {int(page)}"
+        else:
+            page_s = _clean_field(page)
+            if page_s and not page_s.startswith("p."):
+                page_s = f"p. {page_s}"
+        evidence = _clean_field(fact.get("evidence") or r.get("evidence"))
+        formula = _clean_field(fact.get("formula") or r.get("formula"))
+        unit = _clean_field(fact.get("unit") or r.get("unit"))
+        inputs = fact.get("inputs") or r.get("inputs") or []
+        if isinstance(inputs, str):
+            inputs = [i.strip() for i in inputs.split(",") if i.strip()]
+        inputs = [str(i).strip() for i in inputs if str(i).strip()]
+        reason = _clean_field(
+            fact.get("blocked_reason") or fact.get("reason")
+            or r.get("_reason") or r.get("blocked_reason")
+        )
+        ref = {
+            "label": metric, "value": value, "source": source,
+            "period": period, "page": page_s, "evidence": evidence,
+            "formula": formula, "inputs": inputs, "kind": kind,
+            "unit": unit,
+            "status": _clean_field(r.get("Status") or r.get("status")),
+            "blocked_reason": reason,
+        }
+        ref["lines"] = _evidence_lines(ref, profile)
+        refs.append(ref)
     return refs
+
+
+def _evidence_lines(ref: Dict[str, Any], profile: str) -> List[str]:
+    """Per-profile display lines for one evidence ref. ONLY real fields
+    produce lines; missing provenance is omitted entirely (never '—')."""
+    kind = ref.get("kind", "verified")
+    lines: List[str] = []
+    if kind == "blocked":
+        lines.append("Blocked")
+        if ref.get("blocked_reason"):
+            lines.append(ref["blocked_reason"])
+        return lines
+    if kind == "conflict":
+        lines.append("Cross-document verification conflict")
+        if ref.get("evidence"):
+            lines.append(ref["evidence"])
+        return lines
+    if kind == "derived":
+        if profile == "student":
+            inputs = ref.get("inputs") or []
+            if inputs:
+                if len(inputs) == 1:
+                    lines.append(f"Calculated from {inputs[0]}")
+                else:
+                    lines.append(f"Calculated from {', '.join(inputs[:-1])} and {inputs[-1]}")
+            elif ref.get("formula"):
+                lines.append(f"Calculated using: {ref['formula']}")
+            else:
+                lines.append("Calculated")
+        else:  # professional
+            if ref.get("period"):
+                lines.append(f"Calculated · {ref['period']}")
+            else:
+                lines.append("Calculated")
+            if ref.get("formula"):
+                lines.append(ref["formula"])
+            if ref.get("inputs"):
+                lines.append("Inputs: " + ", ".join(ref["inputs"]))
+        return lines
+    # verified / default
+    if profile == "student":
+        if ref.get("source"):
+            lines.append(f"Source: {ref['source']}")
+        if ref.get("period"):
+            lines.append(f"Period: {ref['period']}")
+        if ref.get("evidence"):
+            lines.append(f"Evidence: {ref['evidence']}")
+        elif ref.get("page"):
+            lines.append(f"Evidence: {ref['page']}")
+    else:  # professional
+        src_period = " · ".join(p for p in (ref.get("source"), ref.get("period")) if p)
+        if src_period:
+            lines.append(src_period)
+        if ref.get("evidence"):
+            lines.append(ref["evidence"])
+        elif ref.get("page"):
+            lines.append(ref["page"])
+    return lines
 
 
 # ---------------------------------------------------------------------------

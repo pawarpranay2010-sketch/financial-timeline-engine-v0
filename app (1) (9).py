@@ -1561,6 +1561,36 @@ _FTE_CSS = """
 }
 .fte-memo-para { margin-bottom: .9rem; }
 
+/* Sprint 8.1: adaptive-memo evidence block. Each metric is a compact
+   entry: a clickable header (label — value) plus a muted stack of real
+   provenance lines. Missing fields are omitted — never '—'. */
+.fte-memo-evidence {
+  list-style: none; margin: .25rem 0 .9rem; padding: 0;
+}
+.fte-evidence-item {
+  margin-bottom: .8rem; padding-bottom: .6rem;
+  border-bottom: 1px dashed rgba(127,127,127,.18);
+}
+.fte-evidence-item:last-child { border-bottom: none; margin-bottom: 0; }
+.fte-evidence-head {
+  font-weight: 600; color: var(--fte-text); font-size: .95rem;
+}
+.fte-evidence-lines { display: block; margin-top: .25rem; }
+.fte-evidence-line {
+  display: block; color: var(--fte-muted); font-size: .8rem;
+  line-height: 1.45; margin-top: .12rem;
+}
+.fte-evidence-item .fte-metric-link {
+  color: var(--fte-conflict); font-weight: 600;
+  text-decoration: underline dotted rgba(79, 142, 247, .65);
+  text-underline-offset: 3px; cursor: pointer; border-radius: 2px;
+  transition: color 180ms ease, background 180ms ease;
+}
+.fte-evidence-item .fte-metric-link:hover {
+  color: #7aa6f9; background: rgba(79, 142, 247, .08);
+}
+
+
 /* Sprint 3: compact Intelligence cards + focused memo document view. */
 .fte-intel-card {
   border: 1px solid var(--fte-border); border-radius: 10px;
@@ -3531,6 +3561,15 @@ def _memo_fragment_html(rows, text, demo, demo_metrics):
     return "".join(body), demo_metrics
 
 
+def _fte_currency_prefix(unit):
+    """Presentation-only currency symbol from REAL unit metadata (Sprint
+    8.1). Applied only for known ISO-ish unit codes; never fabricates."""
+    return {
+        "USD": "$", "INR": "\u20b9", "EUR": "\u20ac", "GBP": "\u00a3",
+        "JPY": "\u00a5", "CAD": "$", "AUD": "$", "SGD": "$", "CHF": "CHF ",
+    }.get(str(unit or "").strip().upper(), "")
+
+
 def _memo_adaptive_html(rows, memo, module3_result, profile):
     """Render the memo through the Student/Professional presenter. Blocks
     (headings / paras / bullets / tables / evidence / notes) become ONE
@@ -3585,18 +3624,31 @@ def _memo_adaptive_html(rows, memo, module3_result, profile):
                 f"<tbody>{''.join(trs)}</tbody></table>"
             )
         elif kind == "evidence":
+            # Sprint 8.1: each ref renders as a small block — a clickable
+            # metric header (label — value) plus a stack of display lines
+            # containing ONLY real provenance fields (missing fields are
+            # omitted, never '—'). Full provenance stays in the ref dict.
             items = []
             for ref in payload:
                 frag, demo_metrics = _memo_fragment_html(
-                    rows, str(ref.get("label")), demo, demo_metrics
+                    rows, str(ref.get("label") or ""), demo, demo_metrics
                 )
-                items.append(
-                    f"<li>{frag} — {html.escape(str(ref.get('value')))} · "
-                    f"{html.escape(str(ref.get('source')))} · "
-                    f"{html.escape(str(ref.get('page')))} · "
-                    f"{html.escape(str(ref.get('period')))} — "
-                    f"{html.escape(str(ref.get('evidence')))}</li>"
-                )
+                value = str(ref.get("value") or "")
+                head = frag
+                if value:
+                    head += f" — {_fte_currency_prefix(ref.get('unit'))}{html.escape(value)}"
+                inner = [f'<span class="fte-evidence-head">{head}</span>']
+                lines = [ln for ln in (ref.get("lines") or []) if str(ln).strip()]
+                if lines:
+                    inner.append(
+                        '<span class="fte-evidence-lines">'
+                        + "".join(
+                            f'<span class="fte-evidence-line">{html.escape(str(ln))}</span>'
+                            for ln in lines
+                        )
+                        + "</span>"
+                    )
+                items.append(f'<li class="fte-evidence-item">{"".join(inner)}</li>')
             out.append(f'<ul class="fte-memo-evidence">{"".join(items)}</ul>')
         elif kind == "note":
             out.append(
