@@ -3202,7 +3202,7 @@ _FTE_DEMO_PEER_FACTS = {
 # and cause-not-established (current ratio) cases. Never enters
 # _demo_module3_result() and never touches the real pipeline.
 _FTE_DEMO_QUALITATIVE_DOCS = [{
-    "document_name": "Contoso Analytics FY2025 10-K — MD&A, Notes, Risk Factors (Demo narrative)",
+    "document_name": "Contoso Analytics (Demo) — Synthetic annual report: MD&A, Notes, Risk Factors (Demo narrative)",
     "text": (
         '========== PAGE 40 ==========\n'
         "Management's Discussion and Analysis\n"
@@ -4505,22 +4505,25 @@ def _render_memo_focused_view(document_summaries, module3_result) -> None:
 # =============================================================================
 # SECTION 10e: Static Demo Mode (Sprint 4)
 # =============================================================================
-# Deployment-safe demo: ONE pre-analyzed sample (Microsoft FY2025 10-K) is
+# Deployment-safe demo: ONE pre-analyzed sample (synthetic Contoso annual report) is
 # fed through the EXISTING Financial Grid / Intelligence / memo components.
 # Zero AI calls, zero ingestion, zero computation, zero uploads, zero user
 # storage — deterministic and effectively zero-cost per visitor. Every value
 # is explicitly labelled "Demo / Pre-analyzed sample" and is never presented
 # as live financial information. The real pipeline is completely untouched.
 _FTE_DEMO_LABEL = "Demo / Pre-analyzed sample"
-_FTE_DEMO_COMPANY = "Microsoft Corporation"
-_FTE_DEMO_TICKER = "MSFT"
-_FTE_DEMO_DOC_NAME = "Microsoft Corp — Form 10-K, FY2025 (Demo / Pre-analyzed sample)"
+# Sprint 11.1: Demo provenance is explicitly synthetic — the demo company is
+# the fictional Contoso Analytics, never a real corporation, ticker or filing.
+_FTE_DEMO_COMPANY = "Contoso Analytics (Demo)"
+_FTE_DEMO_TICKER = "CTSO"
+_FTE_DEMO_DOC_NAME = "Contoso Analytics (Demo) — Synthetic annual report, FY2025 (Demo / Pre-analyzed sample)"
 _FTE_DEMO_SUMMARY = (
-    "Microsoft Corporation (NASDAQ: MSFT) reported fiscal-year 2025 revenue of $281.70B, "
-    "operating income of $125.50B and net income of $98.30B (diluted EPS $13.05). Operating "
-    "cash flow was $127.80B. The balance sheet closed with $512.20B of assets, $96.60B of "
-    "total debt and $268.50B of shareholders' equity. Cloud and AI services continued to "
-    "anchor growth, with Azure driving a meaningful share of the revenue increase."
+    "Contoso Analytics (Demo), a synthetic demonstration company, reported fiscal-year "
+    "2025 revenue of $281.70B, operating income of $125.50B and net income of $98.30B "
+    "(diluted EPS $13.05). Operating cash flow was $127.80B. The sample balance sheet "
+    "closed with $512.20B of assets, $96.60B of total debt and $268.50B of shareholders' "
+    "equity. Cloud and AI services anchor growth in the sample narrative. All figures are "
+    "synthetic Demo fixture values — not live financial information."
 )
 
 
@@ -4537,48 +4540,48 @@ def _demo_module3_result() -> dict:
     Pure function — no computation, no I/O, no AI. Values are internally
     consistent (ratios derive from the stated figures)."""
     fd = {
-        "Revenue": _demo_fact(281700000000, "10-K FY2025 · Income Statement",
-                              evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
-        "Net Profit": _demo_fact(98300000000, "10-K FY2025 · Income Statement",
-                                 evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
-        "Operating Profit": _demo_fact(125500000000, "10-K FY2025 · Income Statement",
-                                       evidence="Consolidated Statements of Income, p. 26", page="26", scale="B"),
-        "EPS": _demo_fact(13.05, "10-K FY2025 · Income Statement",
-                          evidence="Diluted earnings per share, Consolidated Statements of Income, p. 26", page="26"),
-        "Debt": _demo_fact(96600000000, "10-K FY2025 · Balance Sheet",
-                           evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
-        "Assets": _demo_fact(512200000000, "10-K FY2025 · Balance Sheet",
-                             evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
-        "Liabilities": _demo_fact(243700000000, "10-K FY2025 · Balance Sheet",
-                                  evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
-        "Equity": _demo_fact(268500000000, "10-K FY2025 · Balance Sheet",
-                             evidence="Consolidated Balance Sheets, p. 27", page="27", scale="B"),
-        "Cash Flow": _demo_fact(127800000000, "10-K FY2025 · Cash Flow Statement",
-                                evidence="Consolidated Statements of Cash Flows, p. 28", page="28", scale="B"),
+        "Revenue": _demo_fact(281700000000, "Demo fixture · Income statement",
+                              evidence="Demo fixture · Consolidated income statement, p. 26", page="26", scale="B"),
+        "Net Profit": _demo_fact(98300000000, "Demo fixture · Income statement",
+                                 evidence="Demo fixture · Consolidated income statement, p. 26", page="26", scale="B"),
+        "Operating Profit": _demo_fact(125500000000, "Demo fixture · Income statement",
+                                       evidence="Demo fixture · Consolidated income statement, p. 26", page="26", scale="B"),
+        "EPS": _demo_fact(13.05, "Demo fixture · Income statement",
+                          evidence="Demo fixture · Diluted EPS, consolidated income statement, p. 26", page="26"),
+        "Debt": _demo_fact(96600000000, "Demo fixture · Balance sheet",
+                           evidence="Demo fixture · Consolidated balance sheet, p. 27", page="27", scale="B"),
+        "Assets": _demo_fact(512200000000, "Demo fixture · Balance sheet",
+                             evidence="Demo fixture · Consolidated balance sheet, p. 27", page="27", scale="B"),
+        "Liabilities": _demo_fact(243700000000, "Demo fixture · Balance sheet",
+                                  evidence="Demo fixture · Consolidated balance sheet, p. 27", page="27", scale="B"),
+        "Equity": _demo_fact(268500000000, "Demo fixture · Balance sheet",
+                             evidence="Demo fixture · Consolidated balance sheet, p. 27", page="27", scale="B"),
+        "Cash Flow": _demo_fact(127800000000, "Demo fixture · Cash flow statement",
+                                evidence="Demo fixture · Consolidated cash flow statement, p. 28", page="28", scale="B"),
     }
     rt = {
         "EBITDA": _demo_fact(161000000000, "Calculated",
-                             evidence="Operating income + depreciation & amortisation (10-K FY2025)",
+                             evidence="Operating income + depreciation & amortisation (Demo fixture FY2025)",
                              formula="Operating income + depreciation & amortisation",
                              inputs=["Operating Profit"], scale="B"),
         "Profit Margin": _demo_fact(0.349, "Calculated",
-                                    evidence="Net income ÷ revenue (10-K FY2025)",
+                                    evidence="Net income ÷ revenue (Demo fixture FY2025)",
                                     formula="Net income ÷ revenue",
                                     inputs=["Net Profit", "Revenue"]),
         "ROE": _demo_fact(0.366, "Calculated",
-                          evidence="Net income ÷ shareholders' equity (10-K FY2025)",
+                          evidence="Net income ÷ shareholders' equity (Demo fixture FY2025)",
                           formula="Net income ÷ shareholders' equity",
                           inputs=["Net Profit", "Equity"]),
         "ROA": _demo_fact(0.192, "Calculated",
-                          evidence="Net income ÷ total assets (10-K FY2025)",
+                          evidence="Net income ÷ total assets (Demo fixture FY2025)",
                           formula="Net income ÷ total assets",
                           inputs=["Net Profit", "Assets"]),
         "Debt to Equity": _demo_fact(0.36, "Calculated",
-                                     evidence="Total debt ÷ shareholders' equity (10-K FY2025)",
+                                     evidence="Total debt ÷ shareholders' equity (Demo fixture FY2025)",
                                      formula="Total debt ÷ shareholders' equity",
                                      inputs=["Debt", "Equity"]),
         "Current Ratio": _demo_fact(1.40, "Calculated",
-                                    evidence="Current assets ÷ current liabilities (10-K FY2025)",
+                                    evidence="Current assets ÷ current liabilities (Demo fixture FY2025)",
                                     formula="Current assets ÷ current liabilities"),
     }
     return {
@@ -4605,7 +4608,7 @@ class _DemoFileStub:
 
 
 _FTE_DEMO_MEMO = """EXECUTIVE SUMMARY
-Microsoft Corporation closed fiscal 2025 with Revenue of $281.70B, lifted by continued cloud and AI demand. Net Profit reached $98.30B (diluted EPS of $13.05), and Operating Cash Flow of $127.80B continued to fund buybacks, dividends and data-centre investment. The balance sheet stays conservative: Debt of $96.60B against Equity of $268.50B keeps Debt to Equity at 0.36.
+Contoso Analytics (Demo), a synthetic demonstration company, closed fiscal 2025 with Revenue of $281.70B, lifted by continued cloud and AI demand. Net Profit reached $98.30B (diluted EPS of $13.05), and Operating Cash Flow of $127.80B continued to fund buybacks, dividends and data-centre investment. The balance sheet stays conservative: Debt of $96.60B against Equity of $268.50B keeps Debt to Equity at 0.36.
 
 KEY FINANCIAL EVENTS
 Revenue growth was led by cloud and AI services. Operating Profit of $125.50B supported EBITDA of $161.00B. The company added substantial capital-spending capacity while preserving a Current Ratio of 1.40 and ROA of 0.19.
@@ -4620,7 +4623,7 @@ STRATEGIC IMPLICATIONS
 The model is shifting toward AI-linked recurring revenue, with cloud economics improving as scale grows. The strong balance sheet (Debt to Equity of 0.36, Current Ratio of 1.40) gives management financial flexibility for organic capex and selective M&A.
 
 RECOMMENDATIONS
-Monitor quarterly operating leverage and Azure growth. Track capital intensity against Operating Cash Flow of $127.80B. Confirm segment margin disclosures before extrapolating the profit mix beyond the verified company-level figures.
+Monitor quarterly operating leverage and cloud growth. Track capital intensity against Operating Cash Flow of $127.80B. Confirm segment margin disclosures before extrapolating the profit mix beyond the verified company-level figures.
 
 — Demo memo · Pre-analyzed sample · No AI generation used —"""
 
@@ -4716,7 +4719,7 @@ def _demo_copilot_answer(question, rows):
         content = (
             "The strongest verified evidence in the demo sample is the income statement: "
             "Revenue of $281.70B, Net Profit of $98.30B and diluted EPS of $13.05, each "
-            "drawn from the FY2025 10-K (Consolidated Statements of Income, p. 26). The three "
+            "drawn from the synthetic FY2025 annual report (Demo fixture · Income statement, p. 26). The three "
             "figures are mutually consistent — $98.30B of net income on $281.70B of revenue "
             "implies a Profit Margin of 0.35. Operating Cash Flow of $127.80B adds a cash "
             "quality check on those earnings."

@@ -107,8 +107,8 @@ def main():
     assert rev_row["_kind"] == "verified"
     fact = rev_row["_fact"]
     assert fact.get("page") == "26", fact
-    assert fact.get("evidence") == "Consolidated Statements of Income, p. 26", fact
-    assert fact.get("source") == "10-K FY2025 · Income Statement", fact
+    assert fact.get("evidence") == "Demo fixture · Consolidated income statement, p. 26", fact
+    assert fact.get("source") == "Demo fixture · Income statement", fact
     roe_row = next(r for r in rows if r["metric"] == "ROE")
     assert roe_row["_kind"] == "derived"
     assert roe_row["_fact"].get("inputs") == ["Net Profit", "Equity"], roe_row["_fact"]
@@ -138,8 +138,8 @@ def main():
         next(str(m.value) for m in at.markdown if "fte-memo-para" in str(m.value))
     )
     # verified card: concise source reference "doc · p. 26" + evidence
-    assert "10-K FY2025 · Income Statement · p. 26" in memo_html, "memo card missing source reference"
-    assert "Consolidated Statements of Income, p. 26" in memo_html, "memo card missing evidence fragment"
+    assert "Demo fixture · Income statement · p. 26" in memo_html, "memo card missing source reference"
+    assert "Demo fixture · Consolidated income statement, p. 26" in memo_html, "memo card missing evidence fragment"
     # derived card: calculation basis + inputs
     assert "Net income ÷ shareholders' equity" in memo_html, "memo card missing calc basis"
     assert "Inputs: Net Profit, Equity" in memo_html, "memo card missing source inputs"

@@ -553,6 +553,64 @@ check("25c · demo qualitative fixture never appears inside the demo module3 res
 check("25d · demo values are unchanged by qualitative analysis",
       demo_after["financial_data"]["Revenue"]["value"] == 281700000000)
 
+# ===========================================================================
+# 26 · Sprint 11.1 — self-referential catalyst regression
+# ===========================================================================
+def _obs11(metric, direction="decrease", change="-10.0%"):
+    return {
+        "metric": metric, "from": "FY2024", "to": "FY2025",
+        "from_value": "200000000000", "to_value": "180000000000",
+        "change_display": change, "direction": direction, "change_pct": -10.0,
+    }
+
+
+def _qual11(text, metric="Revenue"):
+    return build_qualitative_drivers(
+        [_obs11(metric)],
+        facts={"Revenue": {"value": 180000000000, "source": "S", "reporting_period": "FY2025"}},
+        period_facts={"Revenue": {"FY2024": "200000000000", "FY2025": "180000000000"}},
+        qualitative_documents=[{"document_name": "Doc", "text": text}],
+        requirements=[],
+        company="Company A",
+    )["rows"][0]
+
+
+# A · self-reference: "Revenue decreased by 10%." must NOT establish its own cause.
+r_a = _qual11("========== PAGE 40 ==========\nManagement's Discussion and Analysis\n"
+              "Revenue decreased by 10%.\n")
+check("26a · self-referential restatement -> CAUSE_NOT_ESTABLISHED",
+      r_a["relationship"] == REL_CAUSE_NOT_ESTABLISHED and r_a["catalyst"] == "—",
+      r_a["relationship_label"])
+check("26b · no fabricated cause in the self-reference explanation",
+      "demand" not in r_a["student_explanation"].lower()
+      and "Cause not established" in r_a["student_explanation"])
+
+# B · explicit causal statement is still recognized.
+r_b = _qual11("========== PAGE 40 ==========\nManagement's Discussion and Analysis\n"
+              "Revenue decreased by 10% primarily because demand weakened "
+              "in the European market.\n")
+check("26c · explicit causal statement -> EXPLICITLY_DISCLOSED",
+      r_b["relationship"] == REL_EXPLICIT, r_b["relationship_label"])
+
+# C · independent supporting evidence still qualifies.
+r_c = _qual11("========== PAGE 40 ==========\nManagement's Discussion and Analysis\n"
+              "European sales volumes declined significantly during FY2025.\n")
+check("26d · independent driver evidence -> EVIDENCE_SUPPORTED",
+      r_c["relationship"] == REL_SUPPORTED, r_c["relationship_label"])
+
+# D · possible-level factor (demand discussion) -> POSSIBLE, never upgraded.
+r_d = _qual11("========== PAGE 41 ==========\nRisk Factors\n"
+              "Management discussed weaker consumer demand during the year.\n")
+check("26e · possible-level demand discussion -> POSSIBLE_RELATIONSHIP",
+      r_d["relationship"] == REL_POSSIBLE, r_d["relationship_label"])
+
+# E · irrelevant narrative never becomes evidence.
+r_e = _qual11("========== PAGE 41 ==========\nRisk Factors\n"
+              "The company opened a new office in Mumbai.\n")
+check("26f · irrelevant narrative -> CAUSE_NOT_ESTABLISHED",
+      r_e["relationship"] == REL_CAUSE_NOT_ESTABLISHED and r_e["source"] == "—",
+      r_e["relationship_label"])
+
 
 def main():
     failures = [c for c in CHECKS if not c[1]]

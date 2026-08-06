@@ -144,7 +144,8 @@ CANONICAL_METRICS: Dict[str, List[str]] = {
     "Profit Margin": ["profit margin", "net margin", "net profit margin"],
     "Operating Margin": ["operating margin"],
     "Current Ratio": ["current ratio"],
-    "Debt to Equity": ["debt to equity", "debt/equity", "debt / equity", "d/e"],
+    "Debt to Equity": ["debt to equity", "debt/equity", "debt / equity",
+                       "debt-to-equity", "d/e"],
     "Revenue Growth": ["revenue growth", "sales growth", "revenue yoy"],
     "EPS Growth": ["eps growth", "earnings per share growth"],
     "CAGR": ["cagr", "compound annual growth rate"],
@@ -176,11 +177,22 @@ _FORMULA_INPUT_CANONICAL = {
 }
 
 
+# Hyphen-like punctuation that separates compound metric labels (hyphen,
+# non-breaking hyphen, figure dash, en dash, em dash, minus). Normalized to
+# a space so "Debt-to-Equity" / "Debt–to–Equity" resolve identically to
+# "Debt to Equity" (Sprint 11.1). Word boundaries still protect EPSILON,
+# "Debt-like" etc. from partial-word matching.
+_HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2212-]")
+
+
 def _norm_label(label: Any) -> str:
-    """Lower-case, strip and collapse whitespace for matching."""
+    """Lower-case, strip and collapse whitespace for matching. Hyphen-like
+    punctuation is normalized to a space so compound labels match
+    canonically (Sprint 11.1)."""
     if label is None:
         return ""
-    s = re.sub(r"\s+", " ", str(label)).strip().lower()
+    s = _HYPHEN_RE.sub(" ", str(label))
+    s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
 

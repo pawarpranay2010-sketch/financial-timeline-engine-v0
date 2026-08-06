@@ -247,6 +247,21 @@ check("2e · every checklist row carries Requirement/Status/Result",
 check("2f · no invented requirement: unknown metric token is ignored",
       parse_requirements("Calculate the quantum entanglement ratio") == [])
 
+# --- Sprint 11.1: hyphen / en-dash normalization for compound metrics ---
+for _form in ("Debt-to-Equity", "Debt–to–Equity", "Debt to Equity",
+              "Debt / Equity", "Debt/Equity"):
+    _m = [p["metric"] for p in parse_requirements(f"Compute {_form}.")]
+    check(f"2g · '{_form}' resolves to ONE Debt to Equity requirement",
+          _m == ["Debt to Equity"], str(_m))
+check("2h · hyphenated form never leaves Debt/Equity fragments",
+      all(p["metric"] not in ("Debt", "Equity")
+          for p in parse_requirements("Compute ROE and Debt-to-Equity.")),
+      str([p["metric"] for p in parse_requirements("Compute ROE and Debt-to-Equity.")]))
+check("2i · normalization guards: EPSILON / 'Debt-like' never merged",
+      canonicalize_metric("EPSILON")[0] is None
+      and canonicalize_metric("Debt-like")[0] != "Debt"
+      and canonicalize_metric("Revenue Growth")[0] == "Revenue Growth")
+
 # ===========================================================================
 # 3 · Metric normalization
 # ===========================================================================

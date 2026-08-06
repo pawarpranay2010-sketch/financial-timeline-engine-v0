@@ -503,7 +503,7 @@ _CAUSALITY_MARKERS: List[re.Pattern] = [
     re.compile(p, re.IGNORECASE)
     for p in (
         r"due\s+to", r"driven\s+by", r"resulting\s+from", r"as\s+a\s+result\s+of",
-        r"because\s+of", r"attributable\s+to", r"reflecting", r"reflected",
+        r"because\s+of", r"\bbecause\b", r"attributable\s+to", r"reflecting", r"reflected",
         r"contributed\s+to", r"led\s+to", r"was\s+driven", r"primarily\s+due",
         r"impact\s+of", r"result\s+of", r"arising\s+from", r"caused\s+by",
     )
@@ -571,6 +571,31 @@ def _relevant_catalysts(metric: str) -> set:
     return relevant
 
 
+# Catalyst categories that merely restate a metric's OWN direction of change
+# (e.g. "Revenue decreased by 10%"). Such a statement cannot independently
+# qualify as driver evidence — it only re-describes the observation (Sprint
+# 11.1). An independent narrative driver, a possible-level factor, or an
+# explicit causal statement may still qualify.
+_SELF_REFERENTIAL_CATALYSTS: Dict[str, set] = {
+    "Revenue": {"REVENUE_GROWTH", "REVENUE_DECLINE"},
+    "Revenue Growth": {"REVENUE_GROWTH", "REVENUE_DECLINE"},
+    "CAGR": {"REVENUE_GROWTH", "REVENUE_DECLINE"},
+}
+
+# Catalyst categories that may only ever support a POSSIBLE relationship
+# (evidence may be relevant; student judgment required). Demand / market
+# narrative is relevant to revenue-driven metrics but never independently
+# causal, so it is capped at POSSIBLE and never upgraded to a fact.
+_POSSIBLE_CATALYSTS: Dict[str, set] = {
+    "Revenue": {"OTHER"},
+    "Revenue Growth": {"OTHER"},
+    "CAGR": {"OTHER"},
+    "Net Profit": {"OTHER"},
+    "Operating Profit": {"OTHER"},
+    "EPS": {"OTHER"},
+}
+
+
 def _match_evidence(
     metric: str,
     items: List[Dict[str, Any]],
@@ -579,25 +604,39 @@ def _match_evidence(
     classify the relationship. Returns (relationship, catalysts, best_item).
 
     Relevance gate: an item is only a candidate when it mentions the metric
-    (or a numerical-driver component) OR carries at least one catalyst that
-    is plausibly relevant to the metric's domain. This keeps unrelated
-    narrative from being reported as evidence for every metric (fail-closed)."""
+    (or a numerical-driver component), carries at least one catalyst that is
+    plausibly relevant to the metric's domain, or carries a possible-level
+    factor for the metric. This keeps unrelated narrative from being
+    reported as evidence for every metric (fail-closed).
+
+    Self-reference gate (Sprint 11.1): an item that only restates the
+    metric's own change — a self-referential direction catalyst with no
+    independent driver, no possible-level factor and no causal link — is NOT
+    independent evidence and is excluded. "Revenue decreased by 10%." can
+    therefore never independently establish an evidence-supported catalyst."""
     keywords = [re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE) for kw in _metric_keywords(metric)]
     relevant = _relevant_catalysts(metric)
+    self_ref = _SELF_REFERENTIAL_CATALYSTS.get(metric, set())
+    possible_ok = _POSSIBLE_CATALYSTS.get(metric, set())
 
-    scored: List[Tuple[int, Dict[str, Any], List[str], bool, bool]] = []
+    scored: List[Tuple[int, Dict[str, Any], List[str], List[str], List[str], bool, bool]] = []
     for item in items:
         text = item.get("text") or ""
         cats = classify_catalysts(text)
         relevant_cats = [c for c in cats if c in relevant]
+        independent = [c for c in relevant_cats if c not in self_ref]
+        possible = [c for c in cats if c in possible_ok]
         metric_hit = any(p.search(text) for p in keywords)
         causality = any(p.search(text) for p in _CAUSALITY_MARKERS)
         ambiguous = any(p.search(text) for p in _AMBIGUITY_MARKERS)
-        if not metric_hit and not relevant_cats:
+        # Self-referential restatement -> not independent evidence.
+        if self_ref and not independent and not possible and not causality:
+            continue
+        if not metric_hit and not relevant_cats and not possible:
             continue
         # Metric mention dominates; catalysts are secondary evidence weight.
         score = (100 if metric_hit else 0) + (2 * len(relevant_cats)) + (20 if causality else 0) - (5 if ambiguous else 0)
-        scored.append((score, item, relevant_cats, causality, ambiguous))
+        scored.append((score, item, relevant_cats, independent, possible, causality, ambiguous))
 
     if not scored:
         return REL_CAUSE_NOT_ESTABLISHED, [], None
@@ -610,16 +649,21 @@ def _match_evidence(
         s[1].get("section", ""),
         s[1].get("text", ""),
     ), reverse=True)
-    _score, best, relevant_cats, causality, ambiguous = scored[0]
+    _score, best, relevant_cats, independent, possible, causality, ambiguous = scored[0]
 
     metric_hit = any(p.search(best.get("text") or "") for p in keywords)
-    cats = relevant_cats
+    cats = independent
+    has_evidence = bool(cats) or bool(possible)
 
-    if metric_hit and cats and causality and not ambiguous:
+    if metric_hit and has_evidence and causality and not ambiguous:
         rel = REL_EXPLICIT
     elif metric_hit and cats:
         rel = REL_SUPPORTED
     elif cats and not metric_hit:
+        rel = REL_POSSIBLE
+    elif possible:
+        # Possible-level factor only: may be relevant; student judgment
+        # required. Never upgraded to a fact.
         rel = REL_POSSIBLE
     else:
         # The source mentions the metric but discloses no catalyst: relevant
@@ -634,7 +678,7 @@ def _match_evidence(
     elif ambiguous and rel == REL_POSSIBLE:
         rel = REL_INSUFFICIENT
 
-    return rel, cats, best
+    return rel, cats or possible, best
 
 
 # ---------------------------------------------------------------------------

@@ -150,7 +150,9 @@ def main() -> int:
     assert card_m, "Revenue overlay card not found in demo memo"
     card = card_m.group(0)
     assert "Reference" in card, "card missing Reference row"
-    assert "10-K FY2025" in card, "card missing demo document provenance"
+    assert "Demo fixture" in card, "card missing demo document provenance"
+    assert "Microsoft" not in card, "card leaks real-company provenance in Demo mode"
+    assert "10-K FY2025" not in card, "card leaks real-filing provenance in Demo mode"
     print("5. MEMO EVIDENCE CARD RECEIVES IDENTICAL PROVENANCE OK")
 
     # ---- 6) Derived metrics retain formula + source inputs ----

@@ -142,8 +142,11 @@ def main():
     assert ss(at, "fte_overlay_open") is True, "overlay closed unexpectedly"
     dialog_bodies = " ".join(str(m.value) for m in at.markdown)
     assert "Revenue" in dialog_bodies and "What it means" in dialog_bodies, "dialog lacks demo evidence"
-    assert "10-K FY2025" in dialog_bodies, "dialog lacks demo provenance"
-    print("4. DEMO METRIC CLICK OPENS EVIDENCE DIALOG OK (demo provenance shown)")
+    assert "Demo fixture" in dialog_bodies, "dialog lacks demo provenance"
+    # Sprint 11.1: demo provenance must be clearly synthetic, never a real filing.
+    assert "Microsoft" not in dialog_bodies and "10-K FY2025" not in dialog_bodies, \
+        "dialog shows real-company/real-filing provenance in Demo mode"
+    print("4. DEMO METRIC CLICK OPENS EVIDENCE DIALOG OK (synthetic demo provenance shown)")
 
     # --- 3) Demo Co-Pilot is deterministic and AI-free ---
     at.segmented_control(key="fte_page").set_value("Intelligence").run()
@@ -210,7 +213,9 @@ def main():
     assert 'data-card="ftemetric-revenue"' in joined, "Revenue evidence card not embedded"
     assert "281.70B" in joined, "Revenue card lacks its static demo value"
     assert "What it means" in joined, "card lacks the explainer section"
-    assert "Consolidated Statements of Income" in joined, "card lacks demo provenance"
+    assert "Demo fixture" in joined, "card lacks demo provenance"
+    assert "Microsoft" not in joined, "card leaks real-company provenance in Demo mode"
+    assert "10-K FY2025" not in joined, "card leaks real-filing provenance in Demo mode"
     assert "?fte_metric=" not in joined, "demo memo still emits query-param links (would rerun)"
     assert 'href="#ftemetric-' not in joined, "demo memo still uses URL-fragment anchors"
     # Sprint 4.3 regression guard: the base overlay CSS must live in the
