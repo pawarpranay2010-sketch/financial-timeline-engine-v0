@@ -91,6 +91,13 @@ try:
         parse_requirements,
     )
     from backend.excel_working_model import build_excel_working_model
+    # Sprint 12 - deterministic Assignment Agent (progressive guided UX).
+    from backend.assignment_agent import (
+        agent_session,
+        apply_choice as fte_agent_apply_choice,
+        initial_state as fte_agent_initial_state,
+        what_next as fte_agent_what_next,
+    )
 except Exception:
     # Graceful degrade: the Assignment page hides itself if unavailable.
     ASSIGNMENT_TYPES = []
@@ -111,6 +118,24 @@ except Exception:
 
     def parse_requirements(*a, **k):
         return []
+
+    def agent_session(*a, **k):
+        return {
+            "stage": "opening", "message": "Assignment Agent unavailable.",
+            "content": {}, "choices": [], "recommended": None,
+            "alternatives": [], "progress": [], "guidance": {},
+            "explore": False, "conflict_metrics": [],
+            "state": (a[1] if len(a) > 1 and a[1] else {}),
+        }
+
+    def fte_agent_apply_choice(state, choice_id, workspace=None):
+        return state
+
+    def fte_agent_initial_state():
+        return {"stage": "opening", "metric": None, "area": None, "visited": []}
+
+    def fte_agent_what_next(workspace, state=None):
+        return {"recommended": None, "alternatives": [], "stage": "opening"}
 
 # =============================================================================
 # SECTION 1: Config & Session State
@@ -1439,6 +1464,60 @@ def render_terminal_embed() -> None:
 # ever invented: unknown metrics show "—" (Unanalyzed) and provenance shows
 # only fields the pipeline actually provides.
 _TERMINAL_CSS = """
+
+/* Sprint 12: Assignment Agent - progressive guided workspace. */
+.fte-agent-header {
+  display: flex; align-items: center; gap: .8rem;
+  padding: .75rem 1rem; margin-bottom: .55rem;
+  border: 1px solid var(--fte-border); border-radius: 12px;
+  background: linear-gradient(135deg, rgba(47,191,113,.07), rgba(79,142,247,.05) 55%, transparent);
+}
+.fte-agent-avatar {
+  width: 42px; height: 42px; flex: 0 0 42px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.35rem; line-height: 1;
+  border-radius: 50%;
+  background: rgba(47,191,113,.12);
+  border: 1px solid rgba(47,191,113,.35);
+  box-shadow: 0 0 0 4px rgba(47,191,113,.06);
+}
+.fte-agent-name { font-weight: 700; font-size: 1.02rem; color: var(--fte-text); letter-spacing: .01em; }
+.fte-agent-sub { font-size: .76rem; color: var(--fte-muted); margin-top: .1rem; letter-spacing: .02em; }
+.fte-agent-progress { display: flex; flex-wrap: wrap; gap: .4rem; margin: .15rem 0 .7rem; }
+.fte-agent-chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .22rem .6rem; font-size: .72rem; letter-spacing: .04em;
+  border-radius: 999px; border: 1px solid var(--fte-border);
+  color: var(--fte-muted); background: var(--fte-panel);
+  transition: border-color var(--hover) ease, color var(--hover) ease, background var(--hover) ease;
+}
+.fte-agent-chip-done {
+  color: var(--fte-ok); border-color: rgba(47,191,113,.35);
+  background: rgba(47,191,113,.06);
+}
+.fte-agent-chip-current {
+  color: var(--fte-text); border-color: rgba(79,142,247,.5);
+  background: rgba(79,142,247,.08); font-weight: 600;
+}
+.fte-agent-bubble {
+  margin: .5rem 0 .6rem; padding: .85rem 1.05rem;
+  border: 1px solid var(--fte-border); border-radius: 4px 14px 14px 14px;
+  background: rgba(127,127,127,.05); color: var(--fte-text);
+  line-height: 1.55; font-size: .92rem;
+}
+.fte-agent-msg { color: inherit; }
+.fte-agent-metric-card {
+  display: flex; align-items: baseline; gap: .9rem; flex-wrap: wrap;
+  padding: .85rem 1rem; margin: .4rem 0;
+  border: 1px solid var(--fte-border); border-radius: 10px;
+  background: rgba(47,191,113,.05);
+}
+.fte-agent-metric-name { font-weight: 700; color: var(--fte-text); font-size: .95rem; }
+.fte-agent-metric-value { font-size: 1.5rem; font-weight: 750; color: var(--fte-text); letter-spacing: .01em; }
+.fte-agent-metric-status {
+  font-size: .72rem; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--fte-muted); margin-left: auto;
+}
 :root {
   --fte-bg: #0a0d13;
   --fte-panel: #0f131b;
@@ -1838,6 +1917,10 @@ def _init_terminal_state() -> None:
         ("fte_assignment_nonce", None),
         ("fte_demo_mode", False),
         ("fte_demo_chat_messages", []),
+        # Sprint 12 - Assignment Agent (progressive guided workspace).
+        ("fte_agent_state", None),
+        ("fte_agent_explore", False),
+        ("fte_agent_ctx", None),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
@@ -3373,7 +3456,566 @@ def _student_conclusion_evidence(workspace) -> list:
     return points
 
 
+# =============================================================================
+# Sprint 12 - Assignment Agent (progressive guided workspace)
+# =============================================================================
+# Deterministic orchestration/presentation layer on top of the SAME student
+# workspace. The agent guides the student one step at a time (assignment ->
+# years -> metrics -> explain -> evidence -> drivers -> comparison -> Excel ->
+# memo -> conclusion) while the full workspace stays one click away via
+# "Explore workspace". Identical UX for the API and Demo paths.
+
+
+def _agent_apply(choice_id, workspace):
+    """Apply one Assignment Agent choice and rerun (deterministic state
+    machine -- never traps the student: Back / Skip / Explore always work)."""
+    choice_id = str(choice_id or "")
+    if choice_id == "explore":
+        st.session_state["fte_agent_explore"] = True
+        st.rerun()
+        return
+    if choice_id == "explore.back":
+        st.session_state["fte_agent_explore"] = False
+        st.rerun()
+        return
+    state = st.session_state.get("fte_agent_state") or fte_agent_initial_state()
+    st.session_state["fte_agent_state"] = fte_agent_apply_choice(state, choice_id, workspace)
+    st.rerun()
+
+
+def _agent_header_html() -> str:
+    return (
+        '<div class="fte-agent-header">'
+        '<span class="fte-agent-avatar">🎓</span>'
+        '<div class="fte-agent-header-text">'
+        '<div class="fte-agent-name">Assignment Agent</div>'
+        '<div class="fte-agent-sub">Deterministic guided workspace · same verified engine · no AI</div>'
+        '</div></div>'
+    )
+
+
+_AGENT_PROGRESS_ICONS = {"done": "✓", "current": "→", "todo": "○"}
+
+
+def _agent_progress_html(progress) -> str:
+    chips = "".join(
+        f'<span class="fte-agent-chip fte-agent-chip-{html.escape(str(p.get("state") or "todo"))}">'
+        f'{_AGENT_PROGRESS_ICONS.get(str(p.get("state") or "todo"), "○")} '
+        f'{html.escape(str(p.get("label") or ""))}</span>'
+        for p in (progress or [])
+    )
+    return f'<div class="fte-agent-progress">{chips}</div>'
+
+
+def _agent_msg_html(message: str) -> str:
+    return f'<div class="fte-agent-bubble"><div class="fte-agent-msg">{html.escape(str(message))}</div></div>'
+
+
+def _render_external_variables_form(prefix: str) -> None:
+    """Student-entered external variables (add + remove). Never document data."""
+    st.caption(
+        "Values not in the filings (risk-free rate, beta, professor "
+        "assumptions...). Student-entered data is always labeled "
+        "🟡 STUDENT_INPUT and never appears as document-verified."
+    )
+    vc = st.columns(5)
+    v_name = vc[0].text_input("Variable", key=prefix + "_extvar_name", placeholder="Risk-free rate")
+    v_value = vc[1].text_input("Value", key=prefix + "_extvar_value", placeholder="6.25%")
+    v_unit = vc[2].text_input("Unit", key=prefix + "_extvar_unit", placeholder="%")
+    v_period = vc[3].text_input("Period", key=prefix + "_extvar_period", placeholder="FY2025")
+    v_source = vc[4].text_input("Source / assumption", key=prefix + "_extvar_source", placeholder="Professor-provided")
+    if st.button("➕ Add external variable", key=prefix + "_btn_extvar_add"):
+        st.session_state["fte_external_variables"] = add_external_variable(
+            st.session_state.get("fte_external_variables") or [],
+            v_name, v_value, unit=v_unit, period=v_period, source=v_source,
+        )
+        st.rerun()
+    ext_vars = st.session_state.get("fte_external_variables") or []
+    if ext_vars:
+        for i, v in enumerate(ext_vars):
+            r1, r2 = st.columns([4, 1])
+            r1.markdown(
+                f"**{html.escape(str(v.get('name')))}** — {html.escape(str(v.get('value')))} "
+                f"{html.escape(str(v.get('unit')))} · "
+                f"<span style='color:var(--fte-derived)'>{html.escape(str(v.get('status_label')))}</span>",
+                unsafe_allow_html=True,
+            )
+            r1.caption(
+                f"Origin: {html.escape(str(v.get('origin')))} · "
+                f"Source: {html.escape(str(v.get('source')))}"
+            )
+            if r2.button("Remove", key=f"{prefix}_extvar_rm_{i}"):
+                st.session_state["fte_external_variables"] = [
+                    x for j, x in enumerate(ext_vars) if j != i
+                ]
+                st.rerun()
+
+
+def _render_memo_block(rows, memo_text, facts_src, workspace) -> None:
+    """Student memo with clickable metric tokens + floating evidence card
+    interaction (the existing machinery, unchanged)."""
+    memo_html = _memo_adaptive_html(rows, memo_text, facts_src, "student", assignment=workspace)
+    with st.container(border=True):
+        st.markdown('<div class="fte-memo-title">Student Memo</div>', unsafe_allow_html=True)
+        st.markdown(memo_html, unsafe_allow_html=True)
+    qmetric = st.query_params.get("fte_metric")
+    if qmetric:
+        st.session_state["fte_memo_metric_click"] = str(qmetric)
+        del st.query_params["fte_metric"]
+    if st.session_state.get("fte_memo_metric_click"):
+        _memo_metric_dialog(facts_src, [])
+
+
+def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo) -> None:
+    """Render the structured payload of one Assignment Agent stage."""
+    c = content or {}
+    if stage == "opening":
+        reqs = c.get("requirements") or []
+        if reqs:
+            st.markdown("**The assignment asks for:**")
+            st.markdown(" · ".join(f"`{html.escape(str(r))}`" for r in reqs))
+        cols = st.columns(4)
+        cols[0].metric("Requirements", int(c.get("requirement_count") or 0))
+        cols[1].metric("Periods found", int(len(c.get("periods") or [])))
+        cols[2].metric("Review-required", int(c.get("review_count") or 0))
+        cols[3].metric("Blocked", int(c.get("blocked_count") or 0))
+        if c.get("periods"):
+            st.caption("Periods found: " + ", ".join(str(p) for p in c["periods"]))
+        if c.get("comparison_active"):
+            st.caption("A peer comparison is available for this assignment.")
+    elif stage == "requirements":
+        req_rows = c.get("rows") or []
+        if req_rows:
+            st.dataframe(pd.DataFrame([
+                {
+                    "Requirement": r.get("requirement"),
+                    "Status": r.get("status_label"),
+                    "Result": r.get("result"),
+                }
+                for r in req_rows
+            ]), use_container_width=True, hide_index=True)
+            if (c.get("review_count") or 0) or (c.get("blocked_count") or 0):
+                st.caption(
+                    f"🟠 {c.get('review_count', 0)} review-required · "
+                    f"🔴 {c.get('blocked_count', 0)} blocked — details stay one click away."
+                )
+        else:
+            st.caption("No requirements parsed yet — define the assignment in the setup above.")
+    elif stage == "periods":
+        changes = c.get("changes") or []
+        if changes:
+            st.dataframe(pd.DataFrame([
+                {
+                    "Metric": o.get("metric"),
+                    "From": o.get("from"),
+                    "To": o.get("to"),
+                    "From Value": o.get("from_value"),
+                    "To Value": o.get("to_value"),
+                    "Change": o.get("change_display"),
+                }
+                for o in changes
+            ]), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No multi-period evidence in the current document set.")
+    elif stage == "metric":
+        metric = str(c.get("metric") or "—")
+        st.markdown(
+            f'<div class="fte-agent-metric-card">'
+            f'<div class="fte-agent-metric-name">{html.escape(metric)}</div>'
+            f'<div class="fte-agent-metric-value">{html.escape(str(c.get("value") or "—"))}</div>'
+            f'<div class="fte-agent-metric-status">{html.escape(str(c.get("status_label") or c.get("status") or "—"))}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        ch = c.get("change")
+        if ch:
+            st.caption(
+                f"{metric} moved {ch.get('change_display') or '—'} from "
+                f"{ch.get('from') or '—'} to {ch.get('to') or '—'}."
+            )
+        if c.get("is_blocked"):
+            st.warning(
+                "Required inputs are missing from the verified evidence — "
+                "I won't guess a value. Enter an external variable or continue."
+            )
+        elif c.get("is_review"):
+            st.warning(
+                "The label/extraction couldn't be normalized safely — I won't "
+                "merge it automatically because doing so could change your analysis."
+            )
+    elif stage == "explain":
+        if c.get("numerical") and c.get("numerical") != "—":
+            st.markdown(f"**Numerical driver:** {html.escape(str(c['numerical']))}")
+        if c.get("catalyst") and c.get("catalyst") != "—":
+            st.markdown(f"**Evidence-backed catalyst:** {html.escape(str(c['catalyst']))}")
+            st.markdown(f"**Relationship:** {html.escape(str(c['relationship']))}")
+        if c.get("causality_note") and c.get("causality_note") != "—":
+            st.caption(f"Causality: {html.escape(str(c['causality_note']))}")
+        if c.get("evidence") and c.get("evidence") != "—":
+            with st.expander("Evidence snippet", expanded=False):
+                st.markdown(f"_{html.escape(str(c['evidence']))}_")
+        if not c.get("has_qualitative") and not c.get("student_explanation"):
+            st.caption("Cause not established from permitted evidence.")
+    elif stage == "calculation":
+        if not c.get("available"):
+            st.caption(c.get("message") or "No deterministic calculation available.")
+        else:
+            st.markdown(f"**Formula:** `{html.escape(str(c.get('formula') or '—'))}`")
+            st.markdown(
+                f"**Result:** {html.escape(str(c.get('result') or '—'))} · "
+                f"{html.escape(str(c.get('status') or '—'))}"
+            )
+            inputs = c.get("inputs") or []
+            if inputs:
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Input": i.get("metric"),
+                        "Value": i.get("value"),
+                        "Provenance": i.get("provenance") or "",
+                    }
+                    for i in inputs
+                ]), use_container_width=True, hide_index=True)
+            if c.get("student_input_used"):
+                st.caption(
+                    "🟡 Uses a student-entered input — not derived solely from "
+                    "document-verified facts."
+                )
+            if c.get("reported_fact_value"):
+                st.caption(
+                    f"Reported in data: {c['reported_fact_value']} ({c['reported_fact_source']}) — "
+                    "recomputation blocked because components are not disclosed."
+                )
+            if c.get("note"):
+                st.caption(str(c["note"]))
+    elif stage == "evidence":
+        fields = c.get("fields") or []
+        if fields:
+            st.dataframe(pd.DataFrame([
+                {"Field": f.get("label"), "Value": f.get("value")}
+                for f in fields
+            ]), use_container_width=True, hide_index=True)
+        else:
+            st.caption(
+                "No provenance fields available for this metric — sources are "
+                "never fabricated."
+            )
+    elif stage == "drivers":
+        obs = c.get("observations") or []
+        if obs:
+            st.dataframe(pd.DataFrame([
+                {
+                    "Metric": o.get("metric"),
+                    "From": o.get("from"),
+                    "To": o.get("to"),
+                    "Change": o.get("change_display"),
+                }
+                for o in obs
+            ]), use_container_width=True, hide_index=True)
+        for cause in c.get("causes") or []:
+            st.markdown(f"- {html.escape(str(cause.get('statement') or ''))}")
+        if not obs:
+            st.caption("Cause not established from available evidence.")
+    elif stage == "qualitative":
+        qrows = c.get("rows") or []
+        if qrows:
+            st.dataframe(pd.DataFrame([
+                {
+                    "Metric": q.get("metric"),
+                    "Period": f"{q.get('period_from')} → {q.get('period_to')}",
+                    "Change": q.get("change_display"),
+                    "Numerical Driver": f"{q.get('numerical_driver')} ({q.get('driver_change') or '—'})",
+                    "Catalyst": q.get("catalyst"),
+                    "Relationship": q.get("relationship_label"),
+                    "Source": q.get("source"),
+                    "Page": q.get("page"),
+                }
+                for q in qrows
+            ]), use_container_width=True, hide_index=True)
+            for q in qrows:
+                if q.get("causality_note") and q.get("causality_note") != "—":
+                    st.caption(f"⚠ {html.escape(str(q.get('causality_note'))) }")
+        else:
+            st.caption(
+                "No qualitative catalyst evidence available — cause not established "
+                "from permitted evidence."
+            )
+    elif stage == "comparison":
+        comp_rows = c.get("rows") or []
+        if c.get("active"):
+            if comp_rows:
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Metric": r.get("canonical"),
+                        c.get("company_a"): r.get("value_a"),
+                        c.get("company_b"): r.get("value_b"),
+                        "Period": r.get("period"),
+                        "Difference": r.get("difference"),
+                        "Status": r.get("status_label"),
+                    }
+                    for r in comp_rows
+                ]), use_container_width=True, hide_index=True)
+            else:
+                st.caption(
+                    "No comparable metrics could be aligned in that area — missing "
+                    "inputs stay blocked; the comparison is never forced."
+                )
+            if (c.get("review_rows") or 0) > 0:
+                st.caption(
+                    f"🟠 {c.get('review_rows', 0)} row(s) excluded — could not be "
+                    "normalized safely."
+                )
+        else:
+            st.caption(
+                "Peer comparison is not applicable — no second-company evidence is "
+                "available, so I won't force one."
+            )
+    elif stage == "external":
+        variables = c.get("variables") or []
+        if variables:
+            for v in variables:
+                st.markdown(
+                    f"**{html.escape(str(v.get('name')))}** — "
+                    f"{html.escape(str(v.get('value')))} {html.escape(str(v.get('unit')))} · "
+                    f"{html.escape(str(v.get('status_label')))}"
+                )
+                st.caption(
+                    f"Origin: {html.escape(str(v.get('origin')))} · "
+                    f"Source: {html.escape(str(v.get('source')))}"
+                )
+        else:
+            st.caption("No external variables entered yet.")
+        st.markdown("---")
+        _render_external_variables_form("fte_ext_stage")
+        if c.get("note"):
+            st.caption(str(c["note"]))
+    elif stage == "excel":
+        st.caption("7 sheets · " + " · ".join(str(s) for s in (c.get("sheets") or [])))
+        if build_excel_working_model is not None:
+            try:
+                xlsx_bytes = build_excel_working_model(workspace)
+                st.download_button(
+                    "📥 Download Excel Working Model",
+                    data=xlsx_bytes,
+                    file_name="FTE_Student_Working_Model.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.warning(f"Excel export unavailable right now: {str(e)[:160]}")
+        else:
+            st.caption("Excel export module unavailable in this deployment.")
+    elif stage == "memo":
+        _render_memo_block(rows, _student_memo_text(workspace), facts_src, workspace)
+    elif stage == "conclusion":
+        for p in c.get("checklist") or []:
+            st.markdown(f"- {p}")
+        st.text_area(
+            "Your conclusion",
+            key="fte_student_conclusion",
+            height=180,
+            placeholder="State your own reasoned judgment here. FT-E never generates a conclusion.",
+        )
+        st.caption(
+            "FT-E is a Financial Analysis & Working Model Assistant — it automates "
+            "extraction, normalization, calculations, comparison and evidence "
+            "collection, but interpretation, judgment and the final conclusion "
+            "are yours."
+        )
+
+
+def _render_agent_choices(stage, choices, workspace) -> None:
+    """Stage action buttons (secondary — the ONE dominant action lives in
+    the What-should-I-do-next box)."""
+    main = [c for c in (choices or []) if c.get("id") not in ("back", "skip", "explore")]
+    if not main:
+        return
+    cols = st.columns(min(len(main), 3))
+    for i, c in enumerate(main):
+        key = "fte_agent_{}_c{}_{}".format(
+            str(stage), i, re.sub(r"[^A-Za-z0-9]+", "_", str(c.get("id") or ""))
+        )
+        if cols[i % len(cols)].button(
+            c.get("label"), key=key, use_container_width=True, type="secondary"
+        ):
+            _agent_apply(c.get("id"), workspace)
+
+
+def _render_agent_next_step(state, workspace) -> None:
+    """The central interaction: ONE recommended action + 1-2 alternatives."""
+    rec = fte_agent_what_next(workspace, state)
+    st.markdown("---")
+    st.markdown("**What should I do next?**")
+    recommended = rec.get("recommended")
+    alts = rec.get("alternatives") or []
+    if recommended:
+        actions = [recommended] + alts
+        cols = st.columns(len(actions))
+        for i, c in enumerate(actions):
+            key = "fte_agent_next_{}_{}".format(
+                i, re.sub(r"[^A-Za-z0-9]+", "_", str(c.get("id") or ""))
+            )
+            if cols[i].button(
+                c.get("label"), key=key, use_container_width=True,
+                type="primary" if i == 0 else "secondary",
+            ):
+                _agent_apply(c.get("id"), workspace)
+        st.caption(recommended.get("hint") or "")
+    else:
+        st.success("You've completed the guided stages — write your own conclusion.")
+
+
+def _render_agent_controls(workspace) -> None:
+    """Student control: Back / Skip / Explore are always available."""
+    b1, b2, b3 = st.columns(3)
+    if b1.button("← Back", key="fte_agent_ctl_back", use_container_width=True):
+        _agent_apply("back", workspace)
+    if b2.button("Skip", key="fte_agent_ctl_skip", use_container_width=True):
+        _agent_apply("skip", workspace)
+    if b3.button("Explore workspace", key="fte_agent_ctl_explore", use_container_width=True):
+        _agent_apply("explore", workspace)
+
+
 def _render_student_assignment_workspace(module3_result, demo=False) -> None:
+    """Sprint 12 - Student Assignment Agent: a guided, progressively disclosed
+    workspace shared by the real (API) pipeline and Demo Mode. The full
+    deterministic workspace stays one click away via Explore workspace."""
+    assignment_types = list(ASSIGNMENT_TYPES or ["Financial Ratio Analysis"])
+    default_type = assignment_types[0]
+
+    # Agent session defaults (robust to any state shape).
+    if not isinstance(st.session_state.get("fte_agent_state"), dict):
+        st.session_state["fte_agent_state"] = fte_agent_initial_state()
+    st.session_state.setdefault("fte_agent_explore", False)
+
+    if demo:
+        # Demo pre-fill: deterministic fixtures, isolated from the real
+        # pipeline and from _demo_module3_result().
+        if not str(st.session_state.get("fte_assignment_requirements") or "").strip():
+            st.session_state["fte_assignment_requirements"] = _demo_assignment_requirements_text()
+        if not str(st.session_state.get("fte_assignment_company") or "").strip():
+            st.session_state["fte_assignment_company"] = _DEMO_ASSIGNMENT_COMPANY
+        if not str(st.session_state.get("fte_assignment_company_b") or "").strip():
+            st.session_state["fte_assignment_company_b"] = "PeerCo Inc."
+        if not (st.session_state.get("fte_external_variables") or []):
+            st.session_state["fte_external_variables"] = [
+                add_external_variable([], "Risk-free rate", "6.25%", unit="%", period="FY2025", source="Professor-provided assumption")[0],
+                add_external_variable([], "Beta", "1.12", unit="x", period="FY2025", source="Professor-provided assumption")[0],
+                add_external_variable([], "Market risk premium", "5.50%", unit="%", period="FY2025", source="Professor-provided assumption")[0],
+            ]
+
+    st.markdown('<div class="fte-rail-title">🎓 Student Assignment Workspace</div>', unsafe_allow_html=True)
+    if demo:
+        st.caption("Demo Mode · deterministic fixtures · no AI · no API key")
+
+    # Assignment setup stays compact — the agent reveals detail on demand.
+    with st.expander("📋 Assignment setup", expanded=False):
+        st.caption("Define the assignment — the agent guides you through it below.")
+        c1, c2 = st.columns([1.6, 2.4], gap="medium")
+        with c1:
+            st.selectbox("Assignment type", assignment_types, key="fte_assignment_type")
+        with c2:
+            st.text_input(
+                "Company",
+                key="fte_assignment_company",
+                placeholder="e.g. Microsoft",
+            )
+        st.text_area(
+            "Assignment requirements",
+            key="fte_assignment_requirements",
+            height=92,
+            placeholder="e.g. Analyze Microsoft FY2023-FY2025 and calculate ROE, ROA, "
+            "Profit Margin, Current Ratio and Debt/Equity.",
+        )
+        _render_external_variables_form("fte_setup")
+        st.text_input(
+            "Company B (comparison peer — optional)",
+            key="fte_assignment_company_b",
+            placeholder="PeerCo Inc." if demo else "e.g. Apple",
+        )
+
+    st.markdown("---")
+    facts_src = module3_result or _demo_module3_result()
+    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(facts_src)
+    requirements_text = str(st.session_state.get("fte_assignment_requirements") or "")
+    company_a = str(st.session_state.get("fte_assignment_company") or "").strip() or "Company A"
+    company_b = str(st.session_state.get("fte_assignment_company_b") or "").strip()
+    ext_vars = st.session_state.get("fte_external_variables") or []
+
+    req_items = parse_requirements(requirements_text)
+    calc_metrics = [r["metric"] for r in req_items]
+
+    peer_company = None
+    peer_facts = None
+    if demo:
+        peer_company = "PeerCo Inc."
+        peer_facts = _FTE_DEMO_PEER_FACTS
+    elif company_b:
+        # No second-company facts in the current document set — the
+        # comparison machinery stays available and reports honestly.
+        peer_company = company_b
+        peer_facts = {}
+
+    period_facts = _FTE_DEMO_PERIOD_FACTS if demo else {}
+    qualitative_docs = (
+        _FTE_DEMO_QUALITATIVE_DOCS if demo
+        else (st.session_state.get("fte_ws_documents") or [])
+    )
+
+    workspace = build_student_workspace(
+        facts_src,
+        assignment_type=str(st.session_state.get("fte_assignment_type") or default_type),
+        requirements_text=requirements_text,
+        external_variables=ext_vars,
+        company_a=company_a,
+        peer_company=peer_company,
+        peer_facts=peer_facts,
+        period_facts=period_facts,
+        calc_metrics=calc_metrics,
+        missing=(facts_src or {}).get("missing_data"),
+        qualitative_documents=qualitative_docs,
+    )
+    # Sprint 11 - qualitative rows for the floating evidence cards.
+    st.session_state["fte_qualitative_rows"] = (
+        (workspace.get("qualitative_drivers") or {}).get("rows") or []
+    )
+
+    # Reset the agent session when the assignment context changes.
+    ctx = (requirements_text, company_a, company_b)
+    if st.session_state.get("fte_agent_ctx") != ctx:
+        st.session_state["fte_agent_state"] = fte_agent_initial_state()
+        st.session_state["fte_agent_explore"] = False
+        st.session_state["fte_agent_ctx"] = ctx
+
+    # Explore workspace: the full deterministic view, one click away.
+    if st.session_state.get("fte_agent_explore"):
+        if st.button("← Back to Assignment Agent", key="fte_agent_exit_explore"):
+            st.session_state["fte_agent_explore"] = False
+            st.rerun()
+        _render_student_assignment_workspace_legacy(module3_result, demo)
+        return
+
+    state = st.session_state["fte_agent_state"]
+    view = agent_session(workspace, state, facts_src=facts_src)
+    st.session_state["fte_agent_state"] = view.get("state") or state
+
+    st.markdown(_agent_header_html(), unsafe_allow_html=True)
+    st.markdown(_agent_progress_html(view.get("progress") or []), unsafe_allow_html=True)
+    guidance = view.get("guidance") or {}
+    if guidance.get("kind") == "blocked":
+        st.warning(guidance.get("message"))
+    elif guidance.get("kind") == "review":
+        st.warning(guidance.get("message"))
+    if guidance.get("conflicts"):
+        st.warning(guidance.get("conflict_message"))
+    st.markdown(_agent_msg_html(view.get("message") or ""), unsafe_allow_html=True)
+    _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
+    st.markdown("---")
+    _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)
+    _render_agent_next_step(state, workspace)
+    _render_agent_controls(workspace)
+
+
+def _render_student_assignment_workspace_legacy(module3_result, demo=False) -> None:
     """Sprint 10 Student Assignment Workspace - shared by the real (API)
     pipeline and Demo Mode. All derived values flow through the Sprint 7
     Formula Engine; the Excel working model is generated with real
