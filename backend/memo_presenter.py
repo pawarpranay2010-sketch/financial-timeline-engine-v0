@@ -174,6 +174,7 @@ def render_memo(
     rows: List[Dict[str, Any]],
     profile: str = "professional",
     include_evidence: bool = True,
+    assignment: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[str, Any]]:
     """Render the memo through the requested profile as structured blocks.
 
@@ -182,6 +183,11 @@ def render_memo(
         rows: the verified Financial Fact Graph rows (grid rows).
         profile: "student" | "professional".
         include_evidence: False omits the Sources & Evidence section.
+        assignment: optional Sprint 10 student workspace dict. When given
+            with the student profile, the memo gains the assignment-aware
+            sections (Assignment Requirements, Period Trends, Driver
+            Analysis, Company Comparison when applicable). Passing None
+            keeps the memo byte-identical to previous behavior.
 
     Returns:
         Ordered list of ("heading", ...) / ("para", ...) / ("bullets", ...)
@@ -205,6 +211,10 @@ def render_memo(
             if table:
                 blocks.append(("heading", title))
                 blocks.append(("table", table))
+                # Sprint 10 — student assignment blocks follow the Key
+                # Financial Metrics anchor (before the continue).
+                if assignment and profile == "student" and title == "Key Financial Metrics":
+                    _append_assignment_blocks(blocks, assignment)
             continue
 
         if kind == "evidence":
@@ -235,6 +245,87 @@ def render_memo(
                 blocks.append(("para", text))
 
     return blocks
+
+
+def _append_assignment_blocks(
+    blocks: List[Tuple[str, Any]], assignment: Dict[str, Any]
+) -> None:
+    """Insert the Sprint 10 assignment-aware sections after the Key
+    Financial Metrics block in a student memo. Pure presentation — every
+    value comes from the already-computed deterministic workspace dict."""
+    # 2. Assignment Requirements — from the workspace checklist.
+    reqs = assignment.get("requirements") or []
+    if reqs:
+        blocks.append(("heading", "Assignment Requirements"))
+        blocks.append(("table", {
+            "title": "Assignment Requirements",
+            "headers": ["Requirement", "Status", "Result", "Evidence/Source"],
+            "rows": [
+                [
+                    str(r.get("requirement") or "—"),
+                    str(r.get("status_label") or r.get("status") or "—"),
+                    str(r.get("result") or "—"),
+                    str(r.get("evidence") or "—") or str(r.get("detail") or ""),
+                ]
+                for r in reqs
+            ],
+            "notes": ["Status reflects verified facts and Formula-Engine calculations."],
+        }))
+
+    # 5/6. Period Trends + Driver Analysis — from the workspace.
+    driver = assignment.get("driver_analysis") or {}
+    obs = driver.get("observations") or []
+    if obs:
+        blocks.append(("heading", "Period Trends"))
+        blocks.append(("table", {
+            "title": "Period Trends",
+            "headers": ["Metric", "From", "To", "Change"],
+            "rows": [
+                [str(o.get("metric") or "—"), str(o.get("from") or "—"),
+                 str(o.get("to") or "—"), str(o.get("change_display") or "—")]
+                for o in obs
+            ],
+            "notes": ["Changes computed from verified period values only."],
+        }))
+        blocks.append(("heading", "Driver Analysis"))
+        cause_lines = [
+            str(c.get("statement") or "") for c in (driver.get("causes") or [])
+        ]
+        items = []
+        for obs_row in obs:
+            items.append(
+                f"{obs_row.get('metric')}: {obs_row.get('change_display')} "
+                f"({obs_row.get('from')} to {obs_row.get('to')})"
+            )
+        items += [c for c in cause_lines if c]
+        blocks.append(("bullets", items))
+
+    # 7. Company Comparison — only when a comparison is applicable.
+    comparison = assignment.get("comparison") or {}
+    comp_rows = list(comparison.get("rows") or [])
+    if comparison.get("active") and comp_rows:
+        blocks.append(("heading", "Company Comparison"))
+        ca = comparison.get("company_a") or "Company A"
+        cb = comparison.get("company_b") or "Company B"
+        blocks.append(("table", {
+            "title": f"{ca} vs {cb}",
+            "headers": ["Metric", ca, cb, "Period", "Difference", "Status"],
+            "rows": [
+                [
+                    str(r.get("canonical") or "—"),
+                    str(r.get("value_a") or "—"),
+                    str(r.get("value_b") or "—"),
+                    str(r.get("period") or "—"),
+                    str(r.get("difference") or "—"),
+                    str(r.get("status_label") or "—"),
+                ]
+                for r in comp_rows
+            ],
+            "notes": ["Comparison aligned on canonical metrics; never forced."],
+        }))
+    else:
+        blocks.append(("heading", "Company Comparison"))
+        blocks.append(("note", "Not applicable for this assignment."))
 
 
 def _build_table(

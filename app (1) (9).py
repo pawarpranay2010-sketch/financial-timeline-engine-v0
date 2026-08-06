@@ -78,6 +78,40 @@ from backend.formula_engine import (
     calculate_metric,
 )
 
+# Sprint 10 - Student Assignment Workspace + Excel Working Model.
+# Pure deterministic backend layers; the app only renders their output.
+try:
+    from backend.student_workspace import (
+        ASSIGNMENT_TYPES,
+        STATUS_LABELS as FTE_ASSIGNMENT_STATUS_LABELS,
+        add_external_variable,
+        build_student_workspace,
+        calculate_metric_with_variables,
+        canonicalize_metric,
+        parse_requirements,
+    )
+    from backend.excel_working_model import build_excel_working_model
+except Exception:
+    # Graceful degrade: the Assignment page hides itself if unavailable.
+    ASSIGNMENT_TYPES = []
+    FTE_ASSIGNMENT_STATUS_LABELS = {}
+    build_excel_working_model = None
+
+    def add_external_variable(*a, **k):
+        return list(a[0] or [])
+
+    def build_student_workspace(*a, **k):
+        return {}
+
+    def calculate_metric_with_variables(*a, **k):
+        return {}
+
+    def canonicalize_metric(*a, **k):
+        return (None, "none", "unavailable")
+
+    def parse_requirements(*a, **k):
+        return []
+
 # =============================================================================
 # SECTION 1: Config & Session State
 # =============================================================================
@@ -1793,6 +1827,15 @@ def _init_terminal_state() -> None:
         ("fte_last_memo_nonce", None),
         ("fte_overlay_open", False),
         ("fte_prev_selection_rows", ()),
+        # Sprint 10 - Student Assignment Workspace.
+        ("fte_assignment_type", "Financial Ratio Analysis"),
+        ("fte_assignment_requirements", ""),
+        ("fte_assignment_company", ""),
+        ("fte_assignment_company_b", ""),
+        ("fte_external_variables", []),
+        ("fte_student_conclusion", ""),
+        ("fte_assignment_workspace_open", False),
+        ("fte_assignment_nonce", None),
         ("fte_demo_mode", False),
         ("fte_demo_chat_messages", []),
     ]:
@@ -3108,6 +3151,513 @@ def _render_account_popover() -> None:
             st.rerun()
 
 
+# =============================================================================
+# Sprint 10 - Student Assignment Workspace (University Finance Assignments)
+# =============================================================================
+# Deterministic student workspace shared by the REAL (API) pipeline and Demo
+# Mode. Derived metrics always come from the Sprint 7 Formula Engine (C++
+# when available) - the UI never calculates. The final Student Conclusion is
+# intentionally left blank for the student to write. Demo fixtures are
+# isolated deterministic data used only by Demo Mode; they never modify
+# _demo_module3_result() and never enter the real pipeline.
+
+# --- Sprint 10 demo fixtures (isolated, deterministic, Demo-only) -----------
+_FTE_DEMO_PERIOD_FACTS = {
+    "Revenue": {"FY2024": "245120000000", "FY2025": "281700000000"},
+    "Net Profit": {"FY2024": "80100000000", "FY2025": "98300000000"},
+    "Operating Profit": {"FY2024": "102400000000", "FY2025": "127900000000"},
+    "Equity": {"FY2024": "268500000000", "FY2025": "268500000000"},
+    "Assets": {"FY2024": "512200000000", "FY2025": "512200000000"},
+    "Debt": {"FY2024": "96400000000", "FY2025": "101200000000"},
+    "Current Assets": {"FY2024": "128700000000", "FY2025": "147600000000"},
+    "Current Liabilities": {"FY2024": "95300000000", "FY2025": "105400000000"},
+    "ROE": {"FY2024": "0.298", "FY2025": "0.366"},
+    "ROA": {"FY2024": "0.156", "FY2025": "0.192"},
+    "Profit Margin": {"FY2024": "0.327", "FY2025": "0.349"},
+    "Current Ratio": {"FY2024": "1.35", "FY2025": "1.40"},
+    "Debt to Equity": {"FY2024": "0.36", "FY2025": "0.38"},
+}
+
+_FTE_DEMO_PEER_FACTS = {
+    "Revenue": {"value": 198400000000, "source": "PeerCo FY2025 · Income Statement", "reporting_period": "FY2025", "page": 22, "evidence": "PeerCo Consolidated Statements of Income, p. 22"},
+    "Net Profit": {"value": 61300000000, "source": "PeerCo FY2025 · Income Statement", "reporting_period": "FY2025", "page": 22, "evidence": "PeerCo Consolidated Statements of Income, p. 22"},
+    "Operating Profit": {"value": 74800000000, "source": "PeerCo FY2025 · Income Statement", "reporting_period": "FY2025", "page": 22, "evidence": "PeerCo Consolidated Statements of Income, p. 22"},
+    "Equity": {"value": 148900000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
+    "Assets": {"value": 352100000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
+    "Debt": {"value": 92400000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
+    "Current Assets": {"value": 88200000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
+    "Current Liabilities": {"value": 76100000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
+}
+
+_DEMO_ASSIGNMENT_COMPANY = "Contoso Analytics (Demo)"
+
+
+def _demo_assignment_requirements_text() -> str:
+    return (
+        "Analyze Contoso Analytics FY2024-FY2025 and calculate ROE, ROA, "
+        "Profit Margin, Current Ratio and Debt/Equity. Compare key metrics "
+        "against PeerCo Inc. and explain what drove the change in ROE."
+    )
+
+
+def _student_memo_text(workspace) -> str:
+    """Deterministic Student Memo draft built ONLY from the verified
+    workspace (no AI, no generic filler, no conclusion). Every factual
+    claim traces to workspace evidence."""
+    company = workspace.get("company") or "Company A"
+    reqs = workspace.get("requirements") or []
+    driver = workspace.get("driver_analysis") or {}
+    comparison = workspace.get("comparison") or {}
+
+    done = [r for r in reqs if r.get("status") not in ("BLOCKED", "REVIEW_REQUIRED", "UNANALYZED")]
+    blocked = [r for r in reqs if r.get("status") in ("BLOCKED", "REVIEW_REQUIRED")]
+    obs = driver.get("observations") or []
+    lines = []
+
+    cov = f"{len(done)} of {len(reqs)} requirements" if reqs else "no requirements defined"
+    top = " · ".join(
+        f"{r.get('requirement')} {r.get('result')}" for r in done[:5]
+    )
+    lines.append("EXECUTIVE SUMMARY")
+    lines.append(
+        f"This assignment covers {cov} from the verified document evidence for {company}. "
+        f"Key results: {top or 'no verified results yet'}."
+    )
+    lines.append("")
+
+    perf = " · ".join(
+        f"{r.get('requirement')}: {r.get('result')}" for r in done
+    )
+    lines.append("FINANCIAL PERFORMANCE")
+    lines.append(
+        f"Verified and derived performance metrics for {company}: "
+        f"{perf or 'no verified metrics yet'}."
+    )
+    lines.append("")
+
+    lines.append("KEY FINANCIAL EVENTS")
+    if obs:
+        for o in obs:
+            lines.append(
+                f"{o.get('metric')} moved {o.get('change_display')} from "
+                f"{o.get('from')} to {o.get('to')}."
+            )
+    else:
+        lines.append(
+            "No period-over-period movement could be established from available evidence."
+        )
+    lines.append("")
+
+    lines.append("RISKS & OPPORTUNITIES")
+    if blocked:
+        for r in blocked:
+            lines.append(
+                f"{r.get('requirement')} is {r.get('status_label')} - "
+                f"{r.get('detail') or 'see evidence card'}."
+            )
+    else:
+        lines.append(
+            "No blocked or review-required requirement in the current evidence set."
+        )
+    lines.append("")
+
+    lines.append("RECOMMENDATIONS")
+    lines.append(
+        "Confirm every cited figure against its evidence card before submission."
+    )
+    if comparison.get("active"):
+        lines.append(
+            f"Peer comparison vs {comparison.get('company_b')} is available "
+            "for canonical metrics."
+        )
+    lines.append(
+        "Complete the conclusion below with your own reasoned judgment."
+    )
+    return "\n".join(lines)
+
+
+def _student_conclusion_evidence(workspace) -> list:
+    """Deterministic evidence checklist for the blank conclusion - facts
+    only, never a verdict, never an opinion."""
+    points = []
+    driver = workspace.get("driver_analysis") or {}
+    obs = driver.get("observations") or []
+    if obs:
+        for o in obs[:4]:
+            points.append(
+                f"Profitability / trend: {o.get('metric')} {o.get('change_display')} "
+                f"({o.get('from')} to {o.get('to')})."
+            )
+    else:
+        points.append(
+            "Profitability / trend: no multi-period evidence in the current set."
+        )
+    req_by = {str(r.get("requirement")): r for r in (workspace.get("requirements") or [])}
+    for label, key in (
+        ("Liquidity", "Current Ratio"),
+        ("Leverage", "Debt to Equity"),
+        ("Cash flow", "Operating Cash Flow"),
+    ):
+        r = req_by.get(key)
+        if r and r.get("result") not in ("—", None, ""):
+            points.append(f"{label}: {key} {r.get('result')} ({r.get('status_label')}).")
+        else:
+            points.append(f"{label}: {key} not established from available evidence.")
+    comp = workspace.get("comparison") or {}
+    if comp.get("active") and (comp.get("rows") or []):
+        points.append(
+            f"Peer comparison: {len(comp['rows'])} canonical metric(s) compared "
+            f"vs {comp.get('company_b')} - see the comparison table."
+        )
+    causes = [c for c in (driver.get("causes") or []) if c.get("target") != "—"]
+    if causes:
+        points.append(
+            "Major disclosed drivers: "
+            + " ".join(str(c.get("statement")) for c in causes)
+        )
+    else:
+        points.append(
+            "Major disclosed drivers: none established from available evidence."
+        )
+    blocked = [r for r in (workspace.get("requirements") or [])
+               if r.get("status") in ("BLOCKED", "REVIEW_REQUIRED")]
+    if blocked:
+        points.append(
+            f"Risks / gaps: {len(blocked)} requirement(s) blocked or review-required "
+            f"({', '.join(str(r.get('requirement')) for r in blocked[:3])})."
+        )
+    points.append(
+        "Opportunities: consider any revenue or segment growth disclosed in "
+        "the verified evidence."
+    )
+    return points
+
+
+def _render_student_assignment_workspace(module3_result, demo=False) -> None:
+    """Sprint 10 Student Assignment Workspace - shared by the real (API)
+    pipeline and Demo Mode. All derived values flow through the Sprint 7
+    Formula Engine; the Excel working model is generated with real
+    formulas; the Student Conclusion stays blank for the student."""
+    assignment_types = list(ASSIGNMENT_TYPES or ["Financial Ratio Analysis"])
+    default_type = assignment_types[0]
+
+    if demo:
+        # Demo pre-fill: deterministic fixtures, isolated from the real
+        # pipeline and from _demo_module3_result().
+        if not str(st.session_state.get("fte_assignment_requirements") or "").strip():
+            st.session_state["fte_assignment_requirements"] = _demo_assignment_requirements_text()
+        if not str(st.session_state.get("fte_assignment_company") or "").strip():
+            st.session_state["fte_assignment_company"] = _DEMO_ASSIGNMENT_COMPANY
+        if not str(st.session_state.get("fte_assignment_company_b") or "").strip():
+            st.session_state["fte_assignment_company_b"] = "PeerCo Inc."
+        if not (st.session_state.get("fte_external_variables") or []):
+            st.session_state["fte_external_variables"] = [
+                add_external_variable([], "Risk-free rate", "6.25%", unit="%", period="FY2025", source="Professor-provided assumption")[0],
+                add_external_variable([], "Beta", "1.12", unit="x", period="FY2025", source="Professor-provided assumption")[0],
+                add_external_variable([], "Market risk premium", "5.50%", unit="%", period="FY2025", source="Professor-provided assumption")[0],
+            ]
+
+    st.markdown('<div class="fte-rail-title">🎓 Student Assignment Workspace</div>', unsafe_allow_html=True)
+    if demo:
+        st.caption("Demo Mode · deterministic fixtures · no AI · no API key")
+    st.caption(
+        "Define the assignment, review the verified requirement checklist, "
+        "then export a professional Excel working model and write your own conclusion."
+    )
+
+    c1, c2 = st.columns([1.6, 2.4], gap="medium")
+    with c1:
+        st.selectbox("Assignment type", assignment_types, key="fte_assignment_type")
+    with c2:
+        st.text_input(
+            "Company",
+            key="fte_assignment_company",
+            placeholder="e.g. Microsoft",
+        )
+
+    st.text_area(
+        "Assignment requirements",
+        key="fte_assignment_requirements",
+        height=92,
+        placeholder="e.g. Analyze Microsoft FY2023-FY2025 and calculate ROE, ROA, "
+        "Profit Margin, Current Ratio and Debt/Equity.",
+    )
+
+    with st.expander("External Variables (student-entered)", expanded=False):
+        st.caption(
+            "Values not in the filings (risk-free rate, beta, professor "
+            "assumptions...). Student-entered data is always labeled "
+            "🟡 STUDENT_INPUT and never appears as document-verified."
+        )
+        vc = st.columns(5)
+        v_name = vc[0].text_input("Variable", key="fte_extvar_name", placeholder="Risk-free rate")
+        v_value = vc[1].text_input("Value", key="fte_extvar_value", placeholder="6.25%")
+        v_unit = vc[2].text_input("Unit", key="fte_extvar_unit", placeholder="%")
+        v_period = vc[3].text_input("Period", key="fte_extvar_period", placeholder="FY2025")
+        v_source = vc[4].text_input("Source / assumption", key="fte_extvar_source", placeholder="Professor-provided")
+        if st.button("➕ Add external variable", key="fte_btn_extvar_add"):
+            st.session_state["fte_external_variables"] = add_external_variable(
+                st.session_state.get("fte_external_variables") or [],
+                v_name, v_value, unit=v_unit, period=v_period, source=v_source,
+            )
+            st.rerun()
+        ext_vars = st.session_state.get("fte_external_variables") or []
+        if ext_vars:
+            for i, v in enumerate(ext_vars):
+                r1, r2 = st.columns([4, 1])
+                r1.markdown(
+                    f"**{html.escape(str(v.get('name')))}** — {html.escape(str(v.get('value')))} "
+                    f"{html.escape(str(v.get('unit')))} · "
+                    f"<span style='color:var(--fte-derived)'>{html.escape(str(v.get('status_label')))}</span>",
+                    unsafe_allow_html=True,
+                )
+                r1.caption(
+                    f"Origin: {html.escape(str(v.get('origin')))} · "
+                    f"Source: {html.escape(str(v.get('source')))}"
+                )
+                if r2.button("Remove", key=f"fte_extvar_rm_{i}"):
+                    st.session_state["fte_external_variables"] = [
+                        x for j, x in enumerate(ext_vars) if j != i
+                    ]
+                    st.rerun()
+
+    st.text_input(
+        "Company B (comparison peer — optional)",
+        key="fte_assignment_company_b",
+        placeholder="PeerCo Inc." if demo else "e.g. Apple",
+    )
+
+    st.markdown("---")
+    facts_src = module3_result or _demo_module3_result()
+    rows = st.session_state.get("fte_grid_rows") or _build_terminal_rows(facts_src)
+    requirements_text = str(st.session_state.get("fte_assignment_requirements") or "")
+    company_a = str(st.session_state.get("fte_assignment_company") or "").strip() or "Company A"
+    company_b = str(st.session_state.get("fte_assignment_company_b") or "").strip()
+    ext_vars = st.session_state.get("fte_external_variables") or []
+
+    req_items = parse_requirements(requirements_text)
+    calc_metrics = [r["metric"] for r in req_items]
+
+    peer_company = None
+    peer_facts = None
+    if demo:
+        peer_company = "PeerCo Inc."
+        peer_facts = _FTE_DEMO_PEER_FACTS
+    elif company_b:
+        # No second-company facts in the current document set — the
+        # comparison machinery stays available and reports honestly.
+        peer_company = company_b
+        peer_facts = {}
+
+    period_facts = _FTE_DEMO_PERIOD_FACTS if demo else {}
+
+    workspace = build_student_workspace(
+        facts_src,
+        assignment_type=str(st.session_state.get("fte_assignment_type") or default_type),
+        requirements_text=requirements_text,
+        external_variables=ext_vars,
+        company_a=company_a,
+        peer_company=peer_company,
+        peer_facts=peer_facts,
+        period_facts=period_facts,
+        calc_metrics=calc_metrics,
+        missing=(facts_src or {}).get("missing_data"),
+    )
+
+    # 1 · Requirements checklist
+    st.markdown('<div class="fte-rail-title">1 · Assignment Requirements — Checklist</div>', unsafe_allow_html=True)
+    if workspace["requirements"]:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Requirement": r.get("requirement"),
+                    "Status": r.get("status_label"),
+                    "Result": r.get("result"),
+                    "Evidence / Detail": r.get("evidence") or r.get("detail") or "",
+                }
+                for r in workspace["requirements"]
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("No requirements parsed yet — enter the assignment brief above.")
+
+    # 2 · Canonical normalization
+    st.markdown('<div class="fte-rail-title">2 · Canonical Metric Normalization</div>', unsafe_allow_html=True)
+    norm = workspace.get("normalized_facts") or []
+    if norm:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Original Label": n.get("original_label"),
+                    "Canonical": n.get("canonical"),
+                    "Period": n.get("period"),
+                    "Value": n.get("display_value"),
+                    "Currency": n.get("currency"),
+                    "Source": n.get("source"),
+                    "Page": n.get("page"),
+                    "Normalization": n.get("normalization_status"),
+                }
+                for n in norm
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        review_n = [n for n in norm if n.get("normalization_status") == "REVIEW_REQUIRED"]
+        if review_n:
+            st.caption(
+                f"🟠 {len(review_n)} fact(s) not auto-normalized (ambiguous accounting "
+                "label) — shown for review, never silently merged."
+            )
+    else:
+        st.caption("No normalized facts available from the current evidence set.")
+
+    # 3 · Comparison
+    st.markdown('<div class="fte-rail-title">3 · Company Comparison</div>', unsafe_allow_html=True)
+    comp = workspace.get("comparison") or {}
+    if comp.get("active") and (comp.get("rows") or comp.get("review_rows")):
+        comp_df = pd.DataFrame([
+            {
+                "Canonical Metric": r.get("canonical"),
+                comp.get("company_a"): r.get("value_a"),
+                comp.get("company_b"): r.get("value_b"),
+                "Period": r.get("period"),
+                "Difference": r.get("difference"),
+                "Status": r.get("status_label"),
+            }
+            for r in (comp.get("rows") or [])
+        ])
+        if not comp_df.empty:
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+        if comp.get("review_rows"):
+            st.caption(
+                f"🟠 {len(comp['review_rows'])} row(s) could not be normalized "
+                "safely and are excluded from the automatic comparison."
+            )
+    else:
+        st.caption(
+            "No comparison available — provide a second company's data, or "
+            "switch to Demo Mode to see the comparison fixture."
+        )
+
+    # 4 · Driver analysis
+    st.markdown('<div class="fte-rail-title">4 · Period-over-Period Driver Analysis</div>', unsafe_allow_html=True)
+    driver = workspace.get("driver_analysis") or {}
+    obs = driver.get("observations") or []
+    causes = [c for c in (driver.get("causes") or []) if c.get("target") != "—"]
+    if obs:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Metric": o.get("metric"),
+                    "From": o.get("from"),
+                    "To": o.get("to"),
+                    "From Value": o.get("from_value"),
+                    "To Value": o.get("to_value"),
+                    "Change": o.get("change_display"),
+                }
+                for o in obs
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("No multi-period evidence in the current document set.")
+    for c in causes:
+        st.markdown(f"- {html.escape(str(c.get('statement')))}")
+    if not causes:
+        st.caption("Cause not established from available evidence.")
+
+    # 5 · Deterministic calculations (Formula Engine lineage)
+    st.markdown('<div class="fte-rail-title">5 · Deterministic Calculations</div>', unsafe_allow_html=True)
+    calcs = workspace.get("calculations") or []
+    if calcs:
+        for c in calcs:
+            with st.expander(
+                f"{c.get('metric') or c.get('name')} — "
+                f"{c.get('workspace_status_label') or c.get('status')} — "
+                f"{c.get('display_value') or '—'}",
+                expanded=False,
+            ):
+                st.markdown(f"**Formula:** `{html.escape(str(c.get('formula') or '—'))}`")
+                if c.get("inputs"):
+                    st.markdown(
+                        "**Inputs:** "
+                        + ", ".join(
+                            f"{html.escape(str(i.get('metric') or i.get('key') or '—'))}="
+                            f"{html.escape(str(i.get('value') or '—'))}"
+                            for i in c["inputs"]
+                        )
+                    )
+                if c.get("lineage"):
+                    st.caption(f"Lineage: {html.escape(str(c['lineage']))}")
+                if c.get("reported_fact_value"):
+                    st.caption(
+                        f"Reported in data: {html.escape(str(c.get('reported_fact_value')))} "
+                        f"({html.escape(str(c.get('reported_fact_source')) or '')}) — "
+                        "recomputation blocked because components are not disclosed."
+                    )
+                note = c.get("workspace_note")
+                if note:
+                    st.caption(f"Note: {html.escape(str(note))}")
+    else:
+        st.caption("No deterministic calculations requested — parse requirements to calculate them.")
+
+    # 6 · Excel working model
+    st.markdown('<div class="fte-rail-title">6 · Excel Working Model</div>', unsafe_allow_html=True)
+    if build_excel_working_model is not None:
+        try:
+            xlsx_bytes = build_excel_working_model(workspace)
+            st.download_button(
+                "📥 Export Professional Excel Working Model",
+                data=xlsx_bytes,
+                file_name="FTE_Student_Working_Model.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+            st.caption(
+                "6 sheets · Financial Data · Ratio Analysis (real Excel "
+                "formulas) · External Variables · Comparison · Driver "
+                "Analysis · Assignment Requirements"
+            )
+        except Exception as e:
+            st.warning(f"Excel export unavailable right now: {str(e)[:160]}")
+    else:
+        st.caption("Excel export module unavailable in this deployment.")
+
+    # 7 · Student Memo (adaptive, clickable, evidence-backed)
+    st.markdown('<div class="fte-rail-title">7 · Student Memo</div>', unsafe_allow_html=True)
+    memo_text = _student_memo_text(workspace)
+    memo_html = _memo_adaptive_html(rows, memo_text, facts_src, "student", assignment=workspace)
+    with st.container(border=True):
+        st.markdown('<div class="fte-memo-title">Student Memo</div>', unsafe_allow_html=True)
+        st.markdown(memo_html, unsafe_allow_html=True)
+    qmetric = st.query_params.get("fte_metric")
+    if qmetric:
+        st.session_state["fte_memo_metric_click"] = str(qmetric)
+        del st.query_params["fte_metric"]
+    if st.session_state.get("fte_memo_metric_click"):
+        _memo_metric_dialog(facts_src, [])
+
+    # 8 · Student Conclusion — ALWAYS blank
+    st.markdown('<div class="fte-rail-title">8 · Student Conclusion — you write this</div>', unsafe_allow_html=True)
+    st.caption("Evidence you may consider (from the verified workspace):")
+    for p in _student_conclusion_evidence(workspace):
+        st.markdown(f"- {p}")
+    st.text_area(
+        "Your conclusion",
+        key="fte_student_conclusion",
+        height=180,
+        placeholder="State your own reasoned judgment here. FT-E never generates a conclusion.",
+    )
+    st.caption(
+        "FT-E is a Financial Analysis & Working Model Assistant — it automates "
+        "extraction, normalization, calculations, comparison and evidence "
+        "collection, but interpretation, judgment and the final conclusion "
+        "are yours."
+    )
+
 def _render_workspace_shell(uploaded_files) -> None:
     """FT-E workspace: shared shell with three separate page views."""
     extraction_results, combined_raw_text, document_summaries = _run_ingestion(uploaded_files)
@@ -3155,7 +3705,7 @@ def _render_workspace_shell(uploaded_files) -> None:
     # so switching pages preserves grid selection, filters, chat and memo.
     st.segmented_control(
         "Workspace",
-        options=["Financial Grid", "Intelligence", "System"],
+        options=["Financial Grid", "Intelligence", "Assignment", "System"],
         key="fte_page",
         label_visibility="collapsed",
     )
@@ -3177,6 +3727,8 @@ def _render_workspace_shell(uploaded_files) -> None:
             _render_selected_metric_analysis(module3_result)
             st.markdown("---")
             _render_memo_generator(document_summaries)
+    elif page == "Assignment":
+        _render_student_assignment_workspace(module3_result, demo=False)
     else:
         _render_system_tab()
 
@@ -3615,7 +4167,7 @@ def _fte_currency_prefix(unit):
     }.get(str(unit or "").strip().upper(), "")
 
 
-def _memo_adaptive_html(rows, memo, module3_result, profile):
+def _memo_adaptive_html(rows, memo, module3_result, profile, assignment=None):
     """Render the memo through the Student/Professional presenter. Blocks
     (headings / paras / bullets / tables / evidence / notes) become ONE
     continuous HTML document; every metric token stays clickable with the
@@ -3627,7 +4179,7 @@ def _memo_adaptive_html(rows, memo, module3_result, profile):
         # Fallback: never break the memo if the presenter import failed.
         return _memo_metric_html(rows, memo, module3_result)
     try:
-        blocks = _fte_memo_presenter.render_memo(memo, rows, profile)
+        blocks = _fte_memo_presenter.render_memo(memo, rows, profile, assignment=assignment)
     except Exception:
         return _memo_metric_html(rows, memo, module3_result)
 
@@ -4175,7 +4727,7 @@ def _render_demo_workspace() -> None:
 
     st.segmented_control(
         "Workspace",
-        options=["Financial Grid", "Intelligence", "System"],
+        options=["Financial Grid", "Intelligence", "Assignment", "System"],
         key="fte_page",
         label_visibility="collapsed",
     )
@@ -4197,6 +4749,8 @@ def _render_demo_workspace() -> None:
             _render_selected_metric_analysis(module3_result)
             st.markdown("---")
             _render_demo_memo_generator()
+    elif page == "Assignment":
+        _render_student_assignment_workspace(module3_result, demo=True)
     else:
         _render_system_tab()
 
