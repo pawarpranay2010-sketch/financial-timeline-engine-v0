@@ -215,6 +215,10 @@ def render_memo(
                 # Financial Metrics anchor (before the continue).
                 if assignment and profile == "student" and title == "Key Financial Metrics":
                     _append_assignment_blocks(blocks, assignment)
+                # Sprint 11 — Professional profile: evidence-dense qualitative
+                # catalysts (compact, no student-only sections).
+                if assignment and profile == "professional" and title == "Key Financials":
+                    _append_qualitative_dense(blocks, assignment)
             continue
 
         if kind == "evidence":
@@ -300,6 +304,40 @@ def _append_assignment_blocks(
         items += [c for c in cause_lines if c]
         blocks.append(("bullets", items))
 
+    # Sprint 11 - Qualitative Catalysts (evidence-classified, fail-closed).
+    qual = assignment.get("qualitative_drivers") or {}
+    qrows = list(qual.get("rows") or [])
+    if qrows:
+        blocks.append(("heading", "Qualitative Catalysts"))
+        blocks.append(("table", {
+            "title": "Qualitative Drivers & Catalysts",
+            "headers": ["Metric", "Period", "Change", "Numerical Driver",
+                         "Catalyst", "Relationship", "Evidence", "Source", "Page"],
+            "rows": [
+                [
+                    str(q.get("metric") or "—"),
+                    f"{q.get('period_from') or '—'} → {q.get('period_to') or '—'}",
+                    str(q.get("change_display") or "—"),
+                    f"{q.get('numerical_driver') or '—'} ({q.get('driver_change') or '—'})",
+                    str(q.get("catalyst") or "—"),
+                    str(q.get("relationship_label") or "—"),
+                    str(q.get("evidence") or "—")[:120],
+                    str(q.get("source") or "—"),
+                    str(q.get("page") if q.get("page") is not None else "—"),
+                ]
+                for q in qrows
+            ],
+            "notes": [
+                "Relationship statuses are deterministic evidence classifications. "
+                "🟡/🟠/🔴 are never presented as established facts. Causality is "
+                "only claimed when the filing itself states it.",
+            ],
+        }))
+        expl = [str(q.get("student_explanation")) for q in qrows
+                if q.get("student_explanation")]
+        if expl:
+            blocks.append(("bullets", expl[:6]))
+
     # 7. Company Comparison — only when a comparison is applicable.
     comparison = assignment.get("comparison") or {}
     comp_rows = list(comparison.get("rows") or [])
@@ -326,6 +364,34 @@ def _append_assignment_blocks(
     else:
         blocks.append(("heading", "Company Comparison"))
         blocks.append(("note", "Not applicable for this assignment."))
+
+
+def _append_qualitative_dense(
+    blocks: List[Tuple[str, Any]], assignment: Dict[str, Any]
+) -> None:
+    """Sprint 11 - Professional profile: concise, evidence-dense qualitative
+    catalysts. Never generates a recommendation and never claims causality
+    the source does not establish."""
+    qual = assignment.get("qualitative_drivers") or {}
+    qrows = [q for q in (qual.get("rows") or [])
+             if q.get("metric") and q.get("relationship") != "CAUSE_NOT_ESTABLISHED"]
+    if not qrows:
+        return
+    blocks.append(("heading", "Qualitative Catalysts"))
+    items = []
+    for q in qrows:
+        items.append(
+            f"{q.get('metric')} — {q.get('period_from')} → {q.get('period_to')} | "
+            f"Change: {q.get('from_value')} → {q.get('to_value')} "
+            f"({q.get('change_display')}) | "
+            f"Primary numerical driver: {q.get('numerical_driver')} "
+            f"({q.get('driver_change')}) | "
+            f"Qualitative catalyst: {q.get('catalyst')} | "
+            f"Evidence: {q.get('source')}, p. {q.get('page')} | "
+            f"Relationship: {q.get('relationship_label')} | "
+            f"Causality: {q.get('causality_note')}"
+        )
+    blocks.append(("bullets", items))
 
 
 def _build_table(

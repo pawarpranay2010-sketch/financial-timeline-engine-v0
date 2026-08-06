@@ -313,8 +313,46 @@ def _requirements_sheet(ws, workspace: Dict[str, Any]) -> None:
     _set_widths(ws, [24, 22, 16, 60, 44])
 
 
+def _qualitative_drivers_sheet(ws, workspace: Dict[str, Any]) -> None:
+    """Sheet 7 — Qualitative Drivers & Catalysts (Sprint 11). Evidence-
+    classified driver-catalyst relationships only; never fabricated."""
+    headers = ["Metric", "Period", "Prior Value", "Current Value", "Change",
+               "Numerical Driver", "Catalyst", "Relationship Status",
+               "Evidence", "Source", "Page", "Section", "Confidence",
+               "Student Interpretation"]
+    ws.append(headers)
+    _style_header(ws, 1, len(headers))
+    ws.freeze_panes = "A2"
+    qual = workspace.get("qualitative_drivers") or {}
+    rows = list(qual.get("rows") or [])
+    r = 2
+    for q in rows:
+        ws.append([
+            q.get("metric") or "—",
+            f"{q.get('period_from') or '—'} → {q.get('period_to') or '—'}",
+            q.get("from_value") or "—",
+            q.get("to_value") or "—",
+            q.get("change_display") or "—",
+            f"{q.get('numerical_driver') or '—'} ({q.get('driver_change') or '—'})",
+            q.get("catalyst") or "—",
+            q.get("relationship_label") or "—",
+            q.get("evidence") or "—",
+            q.get("source") or "—",
+            str(q.get("page") if q.get("page") is not None else "—"),
+            q.get("section") or "—",
+            q.get("confidence") or "—",
+            q.get("student_explanation") or "—",
+        ])
+        r += 1
+    if r == 2:
+        ws.append(["No qualitative catalyst evidence available."] + [""] * 13)
+        r += 1
+    _style_body(ws, 2, r - 1, len(headers))
+    _set_widths(ws, [16, 14, 12, 12, 10, 22, 22, 22, 46, 26, 8, 26, 12, 60])
+
+
 def build_excel_working_model(workspace: Dict[str, Any]) -> bytes:
-    """Build the complete 6-sheet working model and return the raw .xlsx
+    """Build the complete 7-sheet working model and return the raw .xlsx
     bytes (safe for st.download_button / file write)."""
     wb = Workbook()
     ws1 = wb.active
@@ -335,6 +373,9 @@ def build_excel_working_model(workspace: Dict[str, Any]) -> bytes:
 
     ws6 = wb.create_sheet("Assignment Requirements")
     _requirements_sheet(ws6, workspace)
+
+    ws7 = wb.create_sheet("Qualitative Drivers")
+    _qualitative_drivers_sheet(ws7, workspace)
 
     bio = io.BytesIO()
     wb.save(bio)

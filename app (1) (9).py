@@ -2766,6 +2766,11 @@ def _metric_detail_dialog(module3_result) -> None:
     fields = _metric_overlay_fields(rows, module3_result, metric)
     explainer = _metric_explainer(metric)
     st.markdown(_metric_detail_html(fields, explainer), unsafe_allow_html=True)
+    # Sprint 11 - qualitative drivers & catalysts for this metric (if any).
+    _q_all = st.session_state.get("fte_qualitative_rows") or []
+    _q_rows = [q for q in _q_all if str(q.get("metric") or "") == str(metric)]
+    if _q_rows:
+        st.markdown(_qualitative_card_block(_q_rows), unsafe_allow_html=True)
     st.button("Close", key="fte_dlg_close", on_click=_fte_close_overlay)
 
 
@@ -3189,6 +3194,30 @@ _FTE_DEMO_PEER_FACTS = {
     "Current Liabilities": {"value": 76100000000, "source": "PeerCo FY2025 · Balance Sheet", "reporting_period": "FY2025", "page": 23, "evidence": "PeerCo Consolidated Balance Sheets, p. 23"},
 }
 
+# --- Sprint 11 demo qualitative corpus (isolated, deterministic, Demo-only) ---
+# Static narrative sections for the Demo assignment. Exercises the SAME
+# deterministic extraction/classification machinery as the real path:
+# explicitly disclosed (revenue/net profit), evidence-supported (operating
+# profit), possible (segment portfolio), insufficient (hedged leverage),
+# and cause-not-established (current ratio) cases. Never enters
+# _demo_module3_result() and never touches the real pipeline.
+_FTE_DEMO_QUALITATIVE_DOCS = [{
+    "document_name": "Contoso Analytics FY2025 10-K — MD&A, Notes, Risk Factors (Demo narrative)",
+    "text": (
+        '========== PAGE 40 ==========\n'
+        "Management's Discussion and Analysis\n"
+        'Revenue increased by 14.9% during FY2025, driven by higher volume and favorable pricing across cloud and productivity segments. Net profit increased by 22.7% during FY2025, driven by revenue growth outpacing operating expenses.\n'
+        'Results of Operations\n'
+        'Operating profit rose 24.9% during FY2025. Operating expenses increased alongside higher input costs and employee costs. The company continues to invest in its segment portfolio.\n'
+        '========== PAGE 41 ==========\n'
+        'Notes to Consolidated Financial Statements\n'
+        "During FY2025, the company recorded a one-time impairment charge of $2.1 billion related to goodwill. The effective tax rate was 18.2% during the period. Shareholders' equity at year-end was $268.5 billion.\n"
+        '========== PAGE 42 ==========\n'
+        'Risk Factors\n'
+        'Changes in interest rates could affect borrowing costs. Foreign exchange translation may affect reported results in future periods. Our leverage could be affected by future market conditions.\n'
+    ),
+}]
+
 _DEMO_ASSIGNMENT_COMPANY = "Contoso Analytics (Demo)"
 
 
@@ -3330,6 +3359,17 @@ def _student_conclusion_evidence(workspace) -> list:
         "Opportunities: consider any revenue or segment growth disclosed in "
         "the verified evidence."
     )
+    qual = workspace.get("qualitative_drivers") or {}
+    qrows = list(qual.get("rows") or [])
+    if qrows:
+        est = sum(1 for q in qrows if q.get("relationship") in (
+            "EXPLICITLY_DISCLOSED", "EVIDENCE_SUPPORTED"))
+        points.append(
+            f"Qualitative catalysts: {len(qrows)} evidence-classified "
+            f"driver-catalyst relationship(s) ({est} evidence-backed) — "
+            "review the Qualitative Drivers & Catalysts section; none are "
+            "established facts without your judgment."
+        )
     return points
 
 
@@ -3450,6 +3490,10 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
         peer_facts = {}
 
     period_facts = _FTE_DEMO_PERIOD_FACTS if demo else {}
+    qualitative_docs = (
+        _FTE_DEMO_QUALITATIVE_DOCS if demo
+        else (st.session_state.get("fte_ws_documents") or [])
+    )
 
     workspace = build_student_workspace(
         facts_src,
@@ -3462,6 +3506,11 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
         period_facts=period_facts,
         calc_metrics=calc_metrics,
         missing=(facts_src or {}).get("missing_data"),
+        qualitative_documents=qualitative_docs,
+    )
+    # Sprint 11 - qualitative rows for the floating evidence cards.
+    st.session_state["fte_qualitative_rows"] = (
+        (workspace.get("qualitative_drivers") or {}).get("rows") or []
     )
 
     # 1 · Requirements checklist
@@ -3569,8 +3618,44 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if not causes:
         st.caption("Cause not established from available evidence.")
 
-    # 5 · Deterministic calculations (Formula Engine lineage)
-    st.markdown('<div class="fte-rail-title">5 · Deterministic Calculations</div>', unsafe_allow_html=True)
+    # 5 · Qualitative Drivers & Catalysts (Sprint 11 — deterministic evidence classification)
+    st.markdown('<div class="fte-rail-title">5 · Qualitative Drivers & Catalysts</div>', unsafe_allow_html=True)
+    qdr = workspace.get("qualitative_drivers") or {}
+    qrows = list(qdr.get("rows") or [])
+    if qrows:
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Metric": q.get("metric"),
+                    "Period": f"{q.get('period_from')} → {q.get('period_to')}",
+                    "Change": q.get("change_display"),
+                    "Numerical Driver": f"{q.get('numerical_driver')} ({q.get('driver_change') or '—'})",
+                    "Catalyst": q.get("catalyst"),
+                    "Relationship": q.get("relationship_label"),
+                    "Evidence": q.get("evidence"),
+                    "Source": q.get("source"),
+                    "Page": q.get("page"),
+                    "Confidence": q.get("confidence"),
+                }
+                for q in qrows
+            ]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        for q in qrows:
+            if q.get("student_explanation"):
+                with st.expander(f"{q.get('metric')} — {q.get('relationship_label')}"):
+                    st.markdown(f"- {html.escape(str(q.get('student_explanation')))}")
+                    if q.get("causality_note"):
+                        st.caption(html.escape(str(q.get("causality_note"))))
+    else:
+        st.caption(
+            "No narrative sections with catalyst evidence in the current document set — "
+            "cause not established from permitted evidence."
+        )
+
+    # 6 · Deterministic calculations (Formula Engine lineage)
+    st.markdown('<div class="fte-rail-title">6 · Deterministic Calculations</div>', unsafe_allow_html=True)
     calcs = workspace.get("calculations") or []
     if calcs:
         for c in calcs:
@@ -3604,8 +3689,8 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     else:
         st.caption("No deterministic calculations requested — parse requirements to calculate them.")
 
-    # 6 · Excel working model
-    st.markdown('<div class="fte-rail-title">6 · Excel Working Model</div>', unsafe_allow_html=True)
+    # 7 · Excel working model
+    st.markdown('<div class="fte-rail-title">7 · Excel Working Model</div>', unsafe_allow_html=True)
     if build_excel_working_model is not None:
         try:
             xlsx_bytes = build_excel_working_model(workspace)
@@ -3617,17 +3702,17 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
                 use_container_width=True,
             )
             st.caption(
-                "6 sheets · Financial Data · Ratio Analysis (real Excel "
+                "7 sheets · Financial Data · Ratio Analysis (real Excel "
                 "formulas) · External Variables · Comparison · Driver "
-                "Analysis · Assignment Requirements"
+                "Analysis · Assignment Requirements · Qualitative Drivers"
             )
         except Exception as e:
             st.warning(f"Excel export unavailable right now: {str(e)[:160]}")
     else:
         st.caption("Excel export module unavailable in this deployment.")
 
-    # 7 · Student Memo (adaptive, clickable, evidence-backed)
-    st.markdown('<div class="fte-rail-title">7 · Student Memo</div>', unsafe_allow_html=True)
+    # 8 · Student Memo (adaptive, clickable, evidence-backed)
+    st.markdown('<div class="fte-rail-title">8 · Student Memo</div>', unsafe_allow_html=True)
     memo_text = _student_memo_text(workspace)
     memo_html = _memo_adaptive_html(rows, memo_text, facts_src, "student", assignment=workspace)
     with st.container(border=True):
@@ -3640,8 +3725,8 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if st.session_state.get("fte_memo_metric_click"):
         _memo_metric_dialog(facts_src, [])
 
-    # 8 · Student Conclusion — ALWAYS blank
-    st.markdown('<div class="fte-rail-title">8 · Student Conclusion — you write this</div>', unsafe_allow_html=True)
+    # 9 · Student Conclusion — ALWAYS blank
+    st.markdown('<div class="fte-rail-title">9 · Student Conclusion — you write this</div>', unsafe_allow_html=True)
     st.caption("Evidence you may consider (from the verified workspace):")
     for p in _student_conclusion_evidence(workspace):
         st.markdown(f"- {p}")
@@ -3681,6 +3766,9 @@ def _render_workspace_shell(uploaded_files) -> None:
                 module3_result,
                 workspace_documents=_ws_documents,
             )
+            # Sprint 11 - keep the ingested document texts for the qualitative
+            # catalyst layer (narrative extraction happens in the workspace).
+            st.session_state["fte_ws_documents"] = _ws_documents
     except Exception as e:
         st.warning("⚠️ Financial intelligence temporarily unavailable — verified data tools remain below.")
         st.session_state["pipeline_debug_log"] = [{"stage": "module3", "length": 0, "error_marker_detected": True, "preview": str(e)[:300]}]
@@ -3955,6 +4043,48 @@ def _memo_metric_slug(metric: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(metric).lower()).strip("-") or "metric"
 
 
+def _qualitative_card_block(qrows: list) -> str:
+    """Sprint 11 - qualitative drivers & catalysts section rendered INSIDE the
+    existing floating evidence card (never a second competing dialog). Every
+    field comes from the deterministic workspace; missing fields are omitted.
+    🟡/🟠/🔴 relationships are labelled as needing student judgment, never as
+    established facts."""
+    if not qrows:
+        return ""
+    parts = []
+    for q in qrows[:3]:
+        rows_html = ""
+        _q_fields = [
+            ("Numerical Driver", f"{q.get('numerical_driver') or '—'} ({q.get('driver_change') or '—'})"),
+            ("Catalyst", q.get("catalyst") or "—"),
+            ("Relationship", q.get("relationship_label") or "—"),
+            ("Evidence", q.get("evidence") or "—"),
+            ("Source", q.get("source") or "—"),
+            ("Page", q.get("page") if q.get("page") is not None else "—"),
+            ("Section", q.get("section") or "—"),
+            ("Confidence", q.get("confidence") or "—"),
+        ]
+        for k, v in _q_fields:
+            vtxt = "—" if v in (None, "") else str(v)
+            rows_html += (
+                f'<div style="display:grid;grid-template-columns:96px 1fr;gap:5px;font-size:.82rem;padding:2px 0">'
+                f'<div style="color:var(--fte-muted)">{html.escape(str(k))}</div>'
+                f'<div style="color:var(--fte-text);overflow-wrap:anywhere">{html.escape(vtxt)}</div></div>'
+            )
+        note = q.get("causality_note")
+        note_html = ""
+        if note:
+            note_html = (
+                f'<div style="font-size:.76rem;color:var(--fte-muted);margin-top:.3rem;'
+                f'font-style:italic">{html.escape(str(note))}</div>'
+            )
+        parts.append(
+            f'<div class="fte-card-section">'
+            f'<div class="fte-card-label">Qualitative Drivers & Catalysts</div>{rows_html}{note_html}</div>'
+        )
+    return "".join(parts)
+
+
 def _demo_memo_card_html(fields: dict, explainer: str) -> str:
     """Compact floating evidence card for a demo memo metric. Pre-rendered
     from the static demo dataset ONLY; shown/hidden purely with CSS
@@ -4019,6 +4149,12 @@ def _demo_memo_card_html(fields: dict, explainer: str) -> str:
         parts.append(
             f'<div class="fte-card-note">⚠️ Analysis limited — {html.escape(str(fields["note"]))}</div>'
         )
+    # Sprint 11 - qualitative drivers & catalysts (from session state when the
+    # assignment workspace rendered them; absent elsewhere -> no change).
+    _q_all = st.session_state.get("fte_qualitative_rows") or []
+    _q_rows = [q for q in _q_all if str(q.get("metric") or "") == str(fields.get("metric") or "")]
+    if _q_rows:
+        parts.append(_qualitative_card_block(_q_rows))
     return (
         f'<div class="fte-memo-card" role="dialog" data-card="ftemetric-{slug}" '
         f'aria-modal="true" aria-label="{html.escape(str(fields.get("metric") or ""), quote=True)}">'
@@ -4278,6 +4414,11 @@ def _memo_metric_dialog(module3_result, documents=None) -> None:
     fields = _metric_overlay_fields(rows, module3_result, metric, documents)
     explainer = _metric_explainer(metric)
     st.markdown(_metric_detail_html(fields, explainer), unsafe_allow_html=True)
+    # Sprint 11 - qualitative drivers & catalysts for this metric (if any).
+    _q_all = st.session_state.get("fte_qualitative_rows") or []
+    _q_rows = [q for q in _q_all if str(q.get("metric") or "") == str(metric)]
+    if _q_rows:
+        st.markdown(_qualitative_card_block(_q_rows), unsafe_allow_html=True)
     st.button("Close", key="fte_memo_metric_close", on_click=_clear_memo_metric_click)
 
 

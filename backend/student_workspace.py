@@ -47,6 +47,7 @@ from backend.formula_engine import (
     SUPPORTED_FORMULAS,
 )
 from backend.evidence_resolver import PROVENANCE_TIER
+from backend.qualitative_catalyst import build_qualitative_drivers
 
 # ---------------------------------------------------------------------------
 # Status model
@@ -918,6 +919,7 @@ def build_student_workspace(
     calc_metrics: Optional[List[str]] = None,
     missing: Optional[Dict[str, Any]] = None,
     workspace_documents: Optional[List[Dict[str, Any]]] = None,
+    qualitative_documents: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Assemble the complete deterministic student workspace dict consumed
     by the UI, the memo presenter and the Excel working model.
@@ -943,6 +945,21 @@ def build_student_workspace(
         comparison = build_comparison(company_a, facts, peer_company, peer_facts)
 
     driver = build_driver_analysis(period_facts or {}, company=company_a)
+
+    # Sprint 11 - Evidence-backed qualitative catalyst & driver analysis.
+    # Deterministic layer over the verified fact graph: numerical change
+    # -> numerical driver -> candidate catalyst -> source evidence ->
+    # evidence/relationship classification -> student-facing explanation.
+    # Never uses a review-required fact as a verified foundation and never
+    # invents a numerical change for a blocked metric (fail closed).
+    qualitative = build_qualitative_drivers(
+        driver.get("observations") or [],
+        facts=facts,
+        period_facts=period_facts or {},
+        qualitative_documents=qualitative_documents or [],
+        requirements=requirements,
+        company=company_a,
+    )
 
     # Deterministic calculations for the requested/available metrics.
     calcs: List[Dict[str, Any]] = []
@@ -975,6 +992,7 @@ def build_student_workspace(
         "normalized_facts": normalized,
         "comparison": comparison,
         "driver_analysis": driver,
+        "qualitative_drivers": qualitative,
         "external_variables": external_variables,
         "calculations": calcs,
         "canonical_count": len(normalized),

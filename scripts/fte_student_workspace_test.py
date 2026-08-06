@@ -409,9 +409,10 @@ wsx = _real_workspace(period_facts=period_facts)
 xlsx = build_excel_working_model(wsx)
 wb = openpyxl.load_workbook(io.BytesIO(xlsx))
 check("9a · workbook returns valid xlsx bytes", isinstance(xlsx, bytes) and len(xlsx) > 4000)
-check("9b · workbook has exactly the 6 required sheets",
+check("9b · workbook has the 6 required sheets plus the Sprint 11 Qualitative Drivers sheet",
       wb.sheetnames == ["Financial Data", "Ratio Analysis", "External Variables",
-                        "Comparison", "Driver Analysis", "Assignment Requirements"],
+                        "Comparison", "Driver Analysis", "Assignment Requirements",
+                        "Qualitative Drivers"],
       str(wb.sheetnames))
 check("9c · Financial Data sheet has the required columns",
       [c.value for c in wb["Financial Data"][1]] == [
