@@ -1466,6 +1466,11 @@ def render_terminal_embed() -> None:
 _TERMINAL_CSS = """
 
 /* Sprint 12: Assignment Agent - progressive guided workspace. */
+/* Sprint 12.1: the guided Agent conversation stays in a centered,
+   readable ~680px column — a tutor chat, not a dashboard. */
+[class*="st-key-fte_agent_ws"] {
+  max-width: 680px; margin: 0 auto;
+}
 .fte-agent-header {
   display: flex; align-items: center; gap: .8rem;
   padding: .75rem 1rem; margin-bottom: .55rem;
