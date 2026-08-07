@@ -455,11 +455,16 @@ check("18e · requirements.edit still yields a full session view",
 
 # 19. Agent tells the student what happened
 check("19a · high state explains the parse", "I've parsed your assignment" in v_clean["message"])
-check("19b · partial state names the uncertain item",
-      "identified most of the assignment requirements" in v_part["message"] and
+check("19b · partial state names clear vs. unclear counts",
+      "clear requirements" in v_part["message"] and
+      "confirmation" in v_part["message"] and
       "ROIC" in v_part["message"])
 check("19c · low state reassures nothing is broken",
-      "couldn't reliably identify" in v_low["message"] and "Nothing is broken" in v_low["message"])
+      "couldn't confidently interpret" in v_low["message"] and "Nothing is broken" in v_low["message"])
+check("19d · high state states the requirement count",
+      "identified" in v_clean["message"] and "requirements from it" in v_clean["message"])
+check("19e · partial state numbers the unclear items",
+      any(ch.isdigit() for ch in v_part["message"].split("found")[-1][:4]))
 
 # 20. Agent tells the student what to do next
 check("20a · high state gives the next step",
@@ -496,6 +501,13 @@ check("24a · excel orientation payload present before opening",
       bool((v_xl["content"].get("orientation") or {}).get("first")))
 check("24b · excel stage message introduces the model",
       "Your working model is ready" in v_xl["message"])
+check("24c · excel message points to Sheet 2 and evidence cards",
+      "Sheet 2" in v_xl["message"] and "evidence cards" in v_xl["message"])
+_sn = (v_xl["content"].get("orientation") or {}).get("sheet_notes") or {}
+check("24d · per-sheet guidance covers all seven sheets",
+      set(_sn.keys()) == _EXPECTED_SHEETS, f"got {sorted(_sn.keys())}")
+check("24e · Ratio Analysis is identified as the starting sheet",
+      "Start here" in str(_sn.get("Ratio Analysis") or ""))
 check("25a · Ratio Analysis is the first verification location",
       (v_xl["content"].get("orientation") or {}).get("first") == "Ratio Analysis")
 check("25b · metric-level where-to-look names Ratio Analysis",

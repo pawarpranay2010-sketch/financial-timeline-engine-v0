@@ -64,6 +64,7 @@ from backend.assignment_agent import (  # noqa: E402
     PARSE_PARTIAL,
     agent_session,
     agent_step,
+    AGENT_STEPS,
     apply_choice,
     confirmation_candidates,
     initial_state,
@@ -311,24 +312,32 @@ check("5b · requirements.confirm advances",
       s_conf["stage"] in (STAGE_PERIODS, STAGE_METRIC))
 check("5c · confirm after partial still yields a full view",
       bool(agent_session(ws_part, s_conf, requirements_text=PARTIAL_TXT)["message"]))
+check("5e · confirm shows the calm 'Got it' notice",
+      s_conf.get("notice") == "Got it. I'll use these requirements for the working model.")
+check("5f · high-confidence continue carries no confirmation notice",
+      "notice" not in apply_choice(initial_state(), "requirements.continue", ws_demo))
 check("5d · quiet-link action wires to the same state machine",
       "fte_agent_action=explain.evidence" in app._agent_quiet_link("explain.evidence", "Verify source"))
 
 # 6. Step indicator (Step N of 5)
 check("6a · five tutor steps defined", agent_step(STAGE_OPENING)["total"] == 5)
-check("6b · opening is Step 1 of 5 · Understand Assignment",
+check("6b · opening is Step 1 of 5 · Understanding your assignment",
       agent_step(STAGE_OPENING)["number"] == 1 and
-      agent_step(STAGE_OPENING)["label"] == "Understand Assignment")
-check("6c · periods is Step 2 of 5 · Verify Financial Data",
+      agent_step(STAGE_OPENING)["label"] == "Understanding your assignment")
+check("6c · periods is Step 2 of 5 · Checking your financial evidence",
       agent_step(STAGE_PERIODS)["number"] == 2 and
-      agent_step(STAGE_PERIODS)["label"] == "Verify Financial Data")
+      agent_step(STAGE_PERIODS)["label"] == "Checking your financial evidence")
 check("6d · explain/drivers/comparison is Step 3 of 5",
       agent_step(STAGE_EXPLAIN)["number"] == agent_step(STAGE_DRIVERS)["number"] ==
       agent_step(STAGE_COMPARISON)["number"] == 3)
-check("6e · excel is Step 4 of 5 · Review Working Model",
-      agent_step(STAGE_EXCEL)["number"] == 4)
-check("6f · conclusion is Step 5 of 5 · Write Conclusion",
-      agent_step(STAGE_CONCLUSION)["number"] == 5)
+check("6e · excel is Step 4 of 5 · Reviewing the working model",
+      agent_step(STAGE_EXCEL)["number"] == 4 and
+      agent_step(STAGE_EXCEL)["label"] == "Reviewing the working model")
+check("6f · conclusion is Step 5 of 5 · Writing your conclusion",
+      agent_step(STAGE_CONCLUSION)["number"] == 5 and
+      agent_step(STAGE_CONCLUSION)["label"] == "Writing your conclusion")
+check("6i · tracker labels stay gerund (calm tutor tone)",
+      all(l["label"][:1].isupper() and l["label"].split()[0].endswith("ing") for l in AGENT_STEPS))
 check("6g · session view carries the step indicator",
       v_open.get("step", {}).get("number") == 1 and
       _drive(ws_demo, STAGE_CONCLUSION).get("step", {}).get("number") == 5)
@@ -391,6 +400,14 @@ check("12a · excel recommended action is Open Working Model",
 check("12b · orientation introduces the model before opening",
       bool((v_xl["content"].get("orientation") or {}).get("first")) and
       "Your working model is ready" in v_xl["message"])
+check("12c · excel offers a quiet 'Understand the model' action",
+      any(c.get("id") == "excel.understand" for c in v_xl.get("choices") or []))
+_s_xl = {"stage": STAGE_EXCEL, "visited": [], "metric": None, "area": None}
+_s_on = apply_choice(_s_xl, "excel.understand", ws_demo)
+_s_off = apply_choice(_s_on, "excel.understand", ws_demo)
+check("12d · 'Understand the model' toggles contextual sheet guidance",
+      _s_on.get("show_sheet_notes") is True and _s_off.get("show_sheet_notes") is False and
+      _s_on.get("stage") == STAGE_EXCEL)
 
 # 13. Conclusion blank
 v_concl = _drive(ws_demo, STAGE_CONCLUSION)

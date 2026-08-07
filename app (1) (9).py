@@ -1510,6 +1510,12 @@ _TERMINAL_CSS = """
   font-size: .74rem; letter-spacing: .08em; text-transform: uppercase;
   color: var(--fte-muted); margin: .1rem 0 .6rem; font-weight: 600;
 }
+.fte-agent-notice {
+  font-size: .88rem; color: #3d7a52;
+  background: rgba(61,122,82,.08); border: 1px solid rgba(61,122,82,.25);
+  border-radius: 6px; padding: .5rem .75rem; margin: .1rem 0 .6rem;
+  line-height: 1.5;
+}
 .fte-agent-quiet-group { margin-top: .5rem; }
 .fte-agent-quiet-row { margin: .3rem 0; line-height: 1.5; }
 .fte-agent-quiet {
@@ -3994,6 +4000,15 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 st.markdown(f"**Then check:** {html.escape(' · '.join(then_sheets))}")
             if optional_sheets:
                 st.markdown(f"**Optional:** {html.escape(' · '.join(optional_sheets))}")
+        _agent_state_now = st.session_state.get("fte_agent_state") or {}
+        if _agent_state_now.get("show_sheet_notes"):
+            # Sprint 12.2 - contextual per-sheet guidance, only when asked.
+            sheet_notes = orient.get("sheet_notes") or {}
+            st.markdown("**What each sheet is for:**")
+            for sh in c.get("sheets") or []:
+                note = sheet_notes.get(str(sh))
+                if note:
+                    st.markdown(f"- **{html.escape(str(sh))}** — {html.escape(str(note))}")
         st.caption("Check the results against the evidence cards before submission.")
         st.caption("7 sheets · " + " · ".join(str(s) for s in (c.get("sheets") or [])))
         if build_excel_working_model is not None:
@@ -4237,6 +4252,15 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if guidance.get("conflicts"):
         st.warning(guidance.get("conflict_message"))
     st.markdown(_agent_msg_html(view.get("message") or ""), unsafe_allow_html=True)
+    notice = (st.session_state.get("fte_agent_state") or {}).get("notice")
+    if notice:
+        st.markdown(
+            f'<div class="fte-agent-notice">✅ {html.escape(str(notice))}</div>',
+            unsafe_allow_html=True,
+        )
+        st.session_state["fte_agent_state"] = {
+            **st.session_state["fte_agent_state"], "notice": None,
+        }
     _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
     st.markdown("---")
     _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)

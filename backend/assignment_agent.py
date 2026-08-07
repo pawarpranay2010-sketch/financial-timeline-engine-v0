@@ -111,11 +111,12 @@ _STAGE_PROGRESS: Dict[str, str] = {
 
 # Sprint 12.1 UX - five quiet tutor steps derived from the stage machine.
 AGENT_STEPS: List[Dict[str, str]] = [
-    {"id": "understand", "label": "Understand Assignment"},
-    {"id": "verify", "label": "Verify Financial Data"},
-    {"id": "analyze", "label": "Analyze Trends & Drivers"},
-    {"id": "review", "label": "Review Working Model"},
-    {"id": "conclude", "label": "Write Conclusion"},
+    # Sprint 12.2 - gerund labels keep the tracker calm and tutor-like.
+    {"id": "understand", "label": "Understanding your assignment"},
+    {"id": "verify", "label": "Checking your financial evidence"},
+    {"id": "analyze", "label": "Analyzing the trends"},
+    {"id": "review", "label": "Reviewing the working model"},
+    {"id": "conclude", "label": "Writing your conclusion"},
 ]
 
 _STAGE_STEP: Dict[str, int] = {
@@ -893,6 +894,18 @@ def _content_excel(workspace: Dict[str, Any]) -> Dict[str, Any]:
                 {"n": 3, "text": "Compare them with the evidence cards"},
                 {"n": 4, "text": "Explore other sheets only if needed"},
             ],
+            # Sprint 12.2 - contextual one-line guidance per sheet. Rendered
+            # only when the student asks ('Understand the model'), never all
+            # at once.
+            "sheet_notes": {
+                "Financial Data": "Raw verified financial inputs used by the model.",
+                "Ratio Analysis": "Your main working sheet. Start here.",
+                "External Variables": "Values you manually provide, such as risk-free rate or beta. These are explicitly marked as student inputs.",
+                "Comparison": "Compare the company with the selected peer where sufficient evidence exists.",
+                "Driver Analysis": "See what changed between periods and which numerical components contributed.",
+                "Assignment Requirements": "Verify that every assignment requirement has been addressed.",
+                "Qualitative Drivers": "Review evidence-backed explanations and their confidence/status.",
+            },
         },
     }
 
@@ -1012,21 +1025,32 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
                 f" Heads up: {'; '.join(flags)} — I'll flag them when they matter."
                 if flags else ""
             )
+            n = len(rec["confirmed"])
+            # Sprint 12.2 - high confidence is stated with a count, never
+            # followed by an unnecessary interruption.
             return (
-                f"I've parsed your assignment. You need to calculate {summary}"
-                f"{period_txt}.{tail} Continue to the analysis when you're ready."
+                f"I've parsed your assignment and identified {n} requirements from it. "
+                f"You need to calculate {summary}{period_txt}.{tail} "
+                "Continue to the analysis when you're ready."
             )
         if rec["state"] == PARSE_PARTIAL:
             items = rec["uncertain"] + rec["review_required"]
             item_txt = ", ".join(f"'{i}'" for i in items[:2]) or "one item"
+            n_clear = len(rec["confirmed"])
+            n_unc = len(items)
+            word = "item" if n_unc == 1 else "items"
+            need_word = "needs" if n_unc == 1 else "need"
+            # Sprint 12.2 - medium confidence: counts of clear vs. unclear.
             return (
-                f"I've identified most of the assignment requirements, but {item_txt} "
-                "is unclear. Please confirm it before I continue."
+                f"I found {n_clear} clear requirements and {n_unc} {word} that "
+                f"{need_word} confirmation — {item_txt}. Please confirm it before I continue."
             )
+        # Sprint 12.2 - low confidence: reassure, then ask, never a technical
+        # failure message.
         return (
-            "I couldn't reliably identify the required metrics from the assignment "
-            "text yet. Nothing is broken — I just need you to confirm what the "
-            "professor asked you to calculate."
+            "I couldn't confidently interpret the assignment wording. Nothing is "
+            "broken — let's confirm what the professor asked you to calculate "
+            "before I continue."
         )
     if stage == STAGE_PERIODS:
         c = _content_periods(workspace)
@@ -1170,9 +1194,13 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
             "student-entered data (🟡 STUDENT_INPUT), never document evidence."
         )
     if stage == STAGE_EXCEL:
+        # Sprint 12.2 - explain the model before it is opened: where to start
+        # and what to check.
         return (
             "Your working model is ready. The calculations are already completed "
-            "by FT-E's formula engine — you don't need to rebuild them."
+            "— you don't need to rebuild them. For this assignment, start with "
+            "Sheet 2 — Ratio Analysis and verify the results against the evidence "
+            "cards."
         )
     if stage == STAGE_MEMO:
         return (
@@ -1386,6 +1414,10 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
             "hint": "Check the source evidence before reviewing the workbook.",
         })
         choices.append({
+            "id": "excel.understand", "label": "Understand the model",
+            "hint": "What each of the seven sheets is for.",
+        })
+        choices.append({
             "id": "continue", "label": "Continue in FT-E",
             "hint": "Keep working in the workspace without downloading.",
         })
@@ -1562,7 +1594,14 @@ def apply_choice(
     if choice_id.startswith("requirements."):
         sub = choice_id.split(".", 1)[1]
         if sub in ("continue", "confirm"):
-            return go(STAGE_PERIODS if _period_list(workspace or {}) else STAGE_METRIC)
+            new = go(STAGE_PERIODS if _period_list(workspace or {}) else STAGE_METRIC)
+            if sub == "confirm":
+                # Sprint 12.2 - manual confirmation is a normal, calm step.
+                new = {
+                    **new,
+                    "notice": "Got it. I'll use these requirements for the working model.",
+                }
+            return new
         if sub == "edit":
             # Stay on the requirements stage — the UI opens the setup editor
             # (the deterministic state machine never dead-ends).
@@ -1618,6 +1657,13 @@ def apply_choice(
         return go(STAGE_COMPARISON, None, choice_id.split(".", 2)[2])
     if choice_id == "excel.download":
         return go(STAGE_EXCEL)
+    if choice_id == "excel.understand":
+        # Sprint 12.2 - toggle contextual per-sheet guidance in place.
+        return {
+            **state,
+            "stage": STAGE_EXCEL,
+            "show_sheet_notes": not bool(state.get("show_sheet_notes")),
+        }
     if choice_id == "excel.evidence":
         top = _strongest_changes(workspace or {}, 1)
         ev_metric = str(top[0].get("metric")) if top else None
