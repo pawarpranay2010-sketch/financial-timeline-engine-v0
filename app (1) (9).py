@@ -4247,30 +4247,31 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     )
     st.session_state["fte_agent_state"] = view.get("state") or state
 
-    st.markdown(_agent_header_html(), unsafe_allow_html=True)
-    st.markdown(_agent_step_html(view.get("step")), unsafe_allow_html=True)
-    guidance = view.get("guidance") or {}
-    if guidance.get("kind") == "blocked":
-        st.warning(guidance.get("message"))
-    elif guidance.get("kind") == "review":
-        st.warning(guidance.get("message"))
-    if guidance.get("conflicts"):
-        st.warning(guidance.get("conflict_message"))
-    st.markdown(_agent_msg_html(view.get("message") or ""), unsafe_allow_html=True)
-    notice = (st.session_state.get("fte_agent_state") or {}).get("notice")
-    if notice:
-        st.markdown(
-            f'<div class="fte-agent-notice">✅ {html.escape(str(notice))}</div>',
-            unsafe_allow_html=True,
-        )
-        st.session_state["fte_agent_state"] = {
-            **st.session_state["fte_agent_state"], "notice": None,
-        }
-    _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
-    st.markdown("---")
-    _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)
-    _render_agent_next_step(state, workspace, requirements_text)
-    _render_agent_controls(workspace)
+    with st.container(key="fte_agent_ws"):
+        st.markdown(_agent_header_html(), unsafe_allow_html=True)
+        st.markdown(_agent_step_html(view.get("step")), unsafe_allow_html=True)
+        guidance = view.get("guidance") or {}
+        if guidance.get("kind") == "blocked":
+            st.warning(guidance.get("message"))
+        elif guidance.get("kind") == "review":
+            st.warning(guidance.get("message"))
+        if guidance.get("conflicts"):
+            st.warning(guidance.get("conflict_message"))
+        st.markdown(_agent_msg_html(view.get("message") or ""), unsafe_allow_html=True)
+        notice = (st.session_state.get("fte_agent_state") or {}).get("notice")
+        if notice:
+            st.markdown(
+                f'<div class="fte-agent-notice">✅ {html.escape(str(notice))}</div>',
+                unsafe_allow_html=True,
+            )
+            st.session_state["fte_agent_state"] = {
+                **st.session_state["fte_agent_state"], "notice": None,
+            }
+        _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
+        st.markdown("---")
+        _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)
+        _render_agent_next_step(state, workspace, requirements_text)
+        _render_agent_controls(workspace)
 
 
 def _render_student_assignment_workspace_legacy(module3_result, demo=False) -> None:
