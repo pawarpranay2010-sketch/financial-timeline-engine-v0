@@ -446,6 +446,14 @@ def _uncertain_tokens(requirements_text: str, confirmed: List[str]) -> List[str]
         if canonical:
             if canonical.lower() in confirmed_l:
                 return
+        # Uppercase fragments that belong to an already-confirmed metric
+        # label ("PROFIT"/"MARGIN" inside "PROFIT MARGIN") are not new
+        # requirements — never surface them for confirmation.
+        if tok.isupper() and any(
+            t in set(re.findall(r"[a-z0-9]{2,}", cl))
+            for cl in confirmed_l
+        ):
+            return
         if any(x.lower() == t for x in out):
             return
         out.append(tok)
@@ -878,6 +886,13 @@ def _content_excel(workspace: Dict[str, Any]) -> Dict[str, Any]:
             "first": "Ratio Analysis",
             "then": ["Financial Data"],
             "optional": ["Comparison", "Driver Analysis"],
+            # Sprint 12.1 - numbered 'start here' orientation steps.
+            "steps": [
+                {"n": 1, "text": "Sheet 2 — Ratio Analysis"},
+                {"n": 2, "text": "Check the calculated metrics"},
+                {"n": 3, "text": "Compare them with the evidence cards"},
+                {"n": 4, "text": "Explore other sheets only if needed"},
+            ],
         },
     }
 
@@ -1156,11 +1171,8 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
         )
     if stage == STAGE_EXCEL:
         return (
-            "Your working model is ready. It contains the professional 7-sheet "
-            "workbook with real Excel formulas — Financial Data, Ratio Analysis, "
-            "External Variables, Comparison, Driver Analysis, Assignment "
-            "Requirements and Qualitative Drivers. Download it, review it, or "
-            "continue to the memo."
+            "Your working model is ready. The calculations are already completed "
+            "by FT-E's formula engine — you don't need to rebuild them."
         )
     if stage == STAGE_MEMO:
         return (
@@ -1368,6 +1380,10 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
         choices.append({
             "id": "excel.download", "label": "Open Excel Working Model",
             "hint": "Download the 7-sheet working model.",
+        })
+        choices.append({
+            "id": "excel.evidence", "label": "Verify evidence first",
+            "hint": "Check the source evidence before reviewing the workbook.",
         })
         choices.append({
             "id": "continue", "label": "Continue in FT-E",
@@ -1602,6 +1618,10 @@ def apply_choice(
         return go(STAGE_COMPARISON, None, choice_id.split(".", 2)[2])
     if choice_id == "excel.download":
         return go(STAGE_EXCEL)
+    if choice_id == "excel.evidence":
+        top = _strongest_changes(workspace or {}, 1)
+        ev_metric = str(top[0].get("metric")) if top else None
+        return go(STAGE_EVIDENCE, ev_metric)
     if choice_id == "memo.conclusion":
         return go(STAGE_CONCLUSION)
 

@@ -3980,14 +3980,21 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
         st.markdown(
             "The calculations are already completed — you don't need to edit the formulas."
         )
-        first_sheet = str(orient.get("first") or "Ratio Analysis")
-        then_sheets = [str(s) for s in (orient.get("then") or [])]
-        optional_sheets = [str(s) for s in (orient.get("optional") or [])]
-        st.markdown(f"**Start with:** {html.escape(first_sheet)}")
-        if then_sheets:
-            st.markdown(f"**Then check:** {html.escape(' · '.join(then_sheets))}")
-        if optional_sheets:
-            st.markdown(f"**Optional:** {html.escape(' · '.join(optional_sheets))}")
+        st.markdown("**Start here:**")
+        steps = orient.get("steps") or []
+        if steps:
+            for s in steps:
+                st.markdown(f"{int(s.get('n') or 0)}. {html.escape(str(s.get('text') or ''))}")
+        else:
+            first_sheet = str(orient.get("first") or "Ratio Analysis")
+            then_sheets = [str(s) for s in (orient.get("then") or [])]
+            optional_sheets = [str(s) for s in (orient.get("optional") or [])]
+            st.markdown(f"**Start with:** {html.escape(first_sheet)}")
+            if then_sheets:
+                st.markdown(f"**Then check:** {html.escape(' · '.join(then_sheets))}")
+            if optional_sheets:
+                st.markdown(f"**Optional:** {html.escape(' · '.join(optional_sheets))}")
+        st.caption("Check the results against the evidence cards before submission.")
         st.caption("7 sheets · " + " · ".join(str(s) for s in (c.get("sheets") or [])))
         if build_excel_working_model is not None:
             try:

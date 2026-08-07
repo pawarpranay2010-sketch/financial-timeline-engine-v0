@@ -615,6 +615,94 @@ check("e5 · blocked/review state still surfaces in the requirements stage",
       rec_rev["state"] == PARSE_PARTIAL and bool(rec_rev["review_required"]))
 
 
+# ---------------------------------------------------------------------------
+# Sprint 12.1 hardening - additional adversarial recovery, Excel & safety
+# ---------------------------------------------------------------------------
+_MESSY_CASES = [
+    ("copied PDF", "Calculate ROE, ROA and Profit Margin for FY2024–FY2025.\n\nSource: Annual Report 2025, page 40."),
+    ("bullets", "• ROE\n• ROA\n• Profit Margin"),
+    ("numbered", "1. ROE\n2. ROA\n3. Profit Margin"),
+    ("dup spaces", "Calculate  ROE   and    ROA"),
+    ("line break in metric", "Calculate Return\non Equity (ROE) and Profit Margin"),
+    ("mixed caps", "calculate roe, ROA and PROFIT MARGIN"),
+    ("professor noise", "Submit by March 30. Marks: 10%. Calculate ROE and Debt to Equity. Read chapter 4."),
+    ("british analyse", "Analyse the company's debt-to-equity and current ratio."),
+    ("parens spellout", "Calculate return on equity (ROE), return on assets (ROA), and profit margin."),
+    ("ROE and ROA", "ROE and ROA"),
+]
+for _name, _txt in _MESSY_CASES:
+    _ws = _real_workspace(requirements_text=_txt, period_facts=_PERIOD_FACTS)
+    _rec = parse_recovery(_ws, _txt)
+    check(f"h1 · messy text '{_name}' recovers to a clean parse",
+          _rec["state"] == PARSE_HIGH, f"got {_rec}")
+
+# Safety: no fabrication, no silent loss, no label collisions
+check("h2 · unknown-only text fabricates no requirements",
+      parse_recovery(_real_workspace(requirements_text="Investigate the firm."),
+                     "Investigate the firm.")["state"] == PARSE_LOW and
+      parse_requirements("Investigate the firm.") == [])
+_h3 = _real_workspace(requirements_text="Calculate ROE, ROA and ROIC.", period_facts=_PERIOD_FACTS)
+_h3rec = parse_recovery(_h3, "Calculate ROE, ROA and ROIC.")
+check("h3 · partial parse silently loses no confirmed requirement",
+      _h3rec["state"] == PARSE_PARTIAL and
+      {"ROE", "ROA"} <= set(_h3rec["confirmed"]) and
+      any("ROIC" in str(x).upper() for x in _h3rec["uncertain"]), f"got {_h3rec}")
+check("h4 · EPS/EPSILON, Revenue/Revenue Growth, Debt/Debt-like collisions still blocked",
+      canonicalize_metric("EPSILON")[0] is None and
+      canonicalize_metric("Revenue Growth")[0] == "Revenue Growth" and
+      canonicalize_metric("Debt-like")[0] is None)
+
+# UX state: edit -> corrected; cancellation -> no corruption
+_corrected = "Calculate ROE and Current Ratio."
+_ws_edit = _real_workspace(requirements_text=_corrected, period_facts=_PERIOD_FACTS)
+check("h5 · edit -> corrected requirements re-parse clean",
+      parse_recovery(_ws_edit, _corrected)["state"] == PARSE_HIGH and
+      {r["metric"] for r in parse_requirements(_corrected)} == {"ROE", "Current Ratio"})
+_s_cancel = apply_choice(apply_choice(initial_state(), "opening.requirements", ws_partial), "back", ws_partial)
+check("h6 · cancellation (back) leaves the workspace intact",
+      _s_cancel["stage"] == STAGE_OPENING and
+      bool(agent_session(ws_partial, _s_cancel, requirements_text=PARTIAL_TXT)["content"]))
+check("h7 · re-enter after cancellation still confirms and advances",
+      apply_choice(apply_choice(initial_state(), "opening.requirements", ws_partial),
+                   "requirements.confirm", ws_partial)["stage"] in (STAGE_PERIODS, STAGE_METRIC))
+
+# Excel: numbered orientation, verify-evidence-first routing, no error literals
+check("h8 · excel orientation exposes numbered start-here steps",
+      len((v_xl["content"].get("orientation") or {}).get("steps") or []) == 4 and
+      any("Ratio Analysis" in str(s.get("text") or "")
+          for s in (v_xl["content"].get("orientation") or {}).get("steps") or []))
+check("h9 · excel stage offers the quiet 'Verify evidence first' action",
+      any(c.get("id") == "excel.evidence" for c in v_xl["choices"]))
+_s_ev = apply_choice(
+    {"stage": STAGE_EXCEL, "metric": None, "area": None,
+     "visited": ["opening", "requirements", "periods"]},
+    "excel.evidence", ws_demo,
+)
+check("h10 · Verify evidence first routes to the evidence stage",
+      _s_ev["stage"] == STAGE_EVIDENCE and bool(_s_ev.get("metric")), f"got {_s_ev}")
+_formula_errors = []
+for _wsn in wb.sheetnames:
+    for _row in wb[_wsn].iter_rows(values_only=True):
+        for _cell in _row:
+            if isinstance(_cell, str) and re.search(r"#REF!|#DIV/0!|#VALUE!|#NAME\?", _cell):
+                _formula_errors.append((_wsn, _cell))
+check("h11 · workbook contains no formula error literals (#REF! / #DIV/0! / #VALUE! / #NAME?)",
+      not _formula_errors, _formula_errors[:3])
+
+# Demo: no reliability/backend internals leak into the student view
+_banned_internal = ("extraction_state", "normalization_status", "bbox",
+                    "provenance_tier", "workspace_status", "traceback")
+_v_ev_demo = agent_session(ws_demo, {"stage": STAGE_EVIDENCE, "metric": "ROE", "area": None,
+                                    "visited": ["opening", "requirements", "periods", "metric"]})
+_demo_payloads = [
+    str(v_demo_open["content"]), str(v_demo_rec["content"]),
+    str(v_xl["content"]), str(v_concl["content"]), str(_v_ev_demo["content"]),
+    str(v_demo_open["message"]), str(v_xl["message"]),
+]
+check("h12 · demo leaks no reliability/backend internals to the student",
+      all(b not in p.lower() for p in _demo_payloads for b in _banned_internal))
+
+
 def main():
     failures = [c for c in CHECKS if not c[1]]
     print(f"\nRESULT: {len(CHECKS) - len(failures)}/{len(CHECKS)} checks pass")
