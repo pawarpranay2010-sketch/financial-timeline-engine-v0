@@ -109,6 +109,45 @@ _STAGE_PROGRESS: Dict[str, str] = {
     STAGE_CONCLUSION: "conclusion",
 }
 
+# Sprint 12.1 UX - five quiet tutor steps derived from the stage machine.
+AGENT_STEPS: List[Dict[str, str]] = [
+    {"id": "understand", "label": "Understand Assignment"},
+    {"id": "verify", "label": "Verify Financial Data"},
+    {"id": "analyze", "label": "Analyze Trends & Drivers"},
+    {"id": "review", "label": "Review Working Model"},
+    {"id": "conclude", "label": "Write Conclusion"},
+]
+
+_STAGE_STEP: Dict[str, int] = {
+    STAGE_OPENING: 0,
+    STAGE_REQUIREMENTS: 0,
+    STAGE_PERIODS: 1,
+    STAGE_METRIC: 1,
+    STAGE_CALCULATION: 1,
+    STAGE_EVIDENCE: 1,
+    STAGE_EXTERNAL: 1,
+    STAGE_EXPLAIN: 2,
+    STAGE_DRIVERS: 2,
+    STAGE_QUALITATIVE: 2,
+    STAGE_COMPARISON: 2,
+    STAGE_EXCEL: 3,
+    STAGE_MEMO: 3,
+    STAGE_CONCLUSION: 4,
+}
+
+
+def agent_step(stage: Optional[str]) -> Dict[str, Any]:
+    """Deterministic muted 'Step N of 5' indicator for the current stage."""
+    idx = _STAGE_STEP.get(stage, 0)
+    step = AGENT_STEPS[idx]
+    return {
+        "number": idx + 1,
+        "label": step["label"],
+        "total": len(AGENT_STEPS),
+        "id": step["id"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Agent state
 # ---------------------------------------------------------------------------
@@ -451,6 +490,30 @@ def _uncertain_tokens(requirements_text: str, confirmed: List[str]) -> List[str]
     return sorted(out)[:4]
 
 
+def confirmation_candidates(token: str) -> List[str]:
+    """Deterministic canonical-metric suggestions for one uncertain
+    assignment token (e.g. 'D/E' -> ['Debt to Equity'], 'Quick Ratio' ->
+    ['Current Ratio']). Never guesses: only canonical metrics whose label
+    shares a meaningful word with the token are offered, max 3."""
+    tok = str(token or "").strip().lower()
+    if not tok:
+        return []
+    canonical, _conf, _reason = canonicalize_metric(tok)
+    if canonical:
+        return [canonical]
+    words = set(re.findall(r"[a-z0-9]{2,}", tok))
+    if not words:
+        return []
+    out: List[str] = []
+    for name in sorted(CANONICAL_METRICS.keys()):
+        name_words = set(re.findall(r"[a-z0-9]{2,}", name.lower()))
+        if name_words and (words & name_words):
+            out.append(name)
+        if len(out) >= 3:
+            break
+    return out
+
+
 def parse_recovery(
     workspace: Dict[str, Any],
     requirements_text: str = "",
@@ -572,6 +635,11 @@ def _content_requirements(workspace: Dict[str, Any], requirements_text: str = ""
         "parse_state": rec["state"],
         "confirmed": rec["confirmed"],
         "uncertain": rec["uncertain"],
+        # Sprint 12.1 UX - per-item 'did your professor mean' candidates.
+        "uncertain_candidates": [
+            {"token": str(t), "candidates": confirmation_candidates(t)}
+            for t in rec["uncertain"]
+        ],
         "review_required": rec["review_required"],
         # Manual requirement selector options for the low-confidence state.
         "options": sorted(CANONICAL_METRICS.keys()),
@@ -579,9 +647,11 @@ def _content_requirements(workspace: Dict[str, Any], requirements_text: str = ""
 
 
 def _content_periods(workspace: Dict[str, Any]) -> Dict[str, Any]:
+    changes = _strongest_changes(workspace, 4)
     return {
         "periods": _period_list(workspace),
-        "changes": _strongest_changes(workspace, 4),
+        "changes": changes,
+        "strongest": changes[0] if changes else None,
         "metric_choices": _metric_choices(workspace, 4),
         "has_periods": bool(_period_list(workspace)),
     }
@@ -754,11 +824,23 @@ def _content_qualitative(workspace: Dict[str, Any], metric: Optional[str]) -> Di
 def _content_comparison(workspace: Dict[str, Any], area: Optional[str]) -> Dict[str, Any]:
     comp = _comparison(workspace)
     rows = _comparison_rows(workspace, area)
+    # Compact preview: prefer the most assignment-relevant metrics, then the
+    # strongest remaining rows, capped at 3. The full table stays accessible.
+    preview = []
+    for preferred in ("Revenue", "Net Profit"):
+        for r in rows:
+            if str(r.get("canonical")) == preferred:
+                preview.append(r)
+    for r in rows:
+        if r not in preview:
+            preview.append(r)
+    preview = preview[:3]
     return {
         "active": bool(comp.get("active")),
         "company_a": str(comp.get("company_a") or "Company A"),
         "company_b": str(comp.get("company_b") or "—"),
         "rows": rows,
+        "preview": preview,
         "area": area,
         "review_rows": len(comp.get("review_rows") or []),
         "areas": [
@@ -889,31 +971,14 @@ def _content_conclusion(workspace: Dict[str, Any]) -> Dict[str, Any]:
 def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], area: Optional[str], requirements_text: str = "") -> str:
     if stage == STAGE_OPENING:
         c = _content_opening(workspace)
-        req_names = ", ".join(c["requirements"]) if c["requirements"] else "no parsed requirements"
-        lines = [
-            "I've reviewed your assignment.",
-            f"You need to work with: {req_names}.",
-        ]
-        if c["periods"]:
-            lines.append(
-                f"I found the periods {', '.join(c['periods'])} in the verified evidence."
-            )
-        if c["comparison_active"]:
-            lines.append("A peer comparison is available for this assignment.")
-        if c["review_count"] or c["blocked_count"] or c["conflict_count"]:
-            flags = []
-            if c["review_count"]:
-                flags.append(f"{c['review_count']} item(s) flagged review-required")
-            if c["blocked_count"]:
-                flags.append(f"{c['blocked_count']} item(s) blocked")
-            if c["conflict_count"]:
-                flags.append(f"{c['conflict_count']} item(s) with conflicting evidence")
-            lines.append(
-                "Heads up: " + "; ".join(flags) +
-                " — I'll show you those when they matter instead of burying them."
-            )
-        lines.append("Let's start with what you need to do. What would you like to work on first?")
-        return " ".join(lines)
+        req_names = (
+            ", ".join(c["requirements"])
+            if c["requirements"] else "no parsed requirements yet"
+        )
+        return (
+            f"I've reviewed your assignment. You need to work with: {req_names}."
+            " What would you like to work on first?"
+        )
     if stage == STAGE_REQUIREMENTS:
         rec = parse_recovery(workspace, requirements_text)
         c = _content_requirements(workspace)
@@ -1351,7 +1416,7 @@ def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any], requir
         if p["is_blocked"] or p["is_review"]:
             return {"id": "metric.review", "label": "Review what's missing", "hint": "See why this metric can't be finalized yet."}
         if p["has_explain"]:
-            return {"id": "metric.explain", "label": "Explain this change", "hint": "Evidence-first explanation of the move."}
+            return {"id": "metric.explain", "label": "Investigate why", "hint": "Evidence-first explanation of the move."}
         if p["has_calculation"]:
             return {"id": "metric.calculation", "label": "Show the calculation", "hint": "Formula and inputs."}
         return {"id": "metric.evidence", "label": "Verify the evidence", "hint": "Provenance fields."}
@@ -1604,6 +1669,7 @@ def agent_session(
         return {
             "state": state,
             "stage": stage,
+            "step": agent_step(stage),
             "explore": True,
             "message": "You're in the full workspace — everything remains available.",
             "content": {},
@@ -1677,6 +1743,7 @@ def agent_session(
     return {
         "state": state,
         "stage": stage,
+        "step": agent_step(stage),
         "explore": False,
         "message": _message_for(stage, workspace, metric, area, requirements_text),
         "content": content,

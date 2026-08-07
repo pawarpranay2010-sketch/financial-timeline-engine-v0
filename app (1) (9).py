@@ -1503,9 +1503,39 @@ _TERMINAL_CSS = """
   margin: .5rem 0 .6rem; padding: .85rem 1.05rem;
   border: 1px solid var(--fte-border); border-radius: 4px 14px 14px 14px;
   background: rgba(127,127,127,.05); color: var(--fte-text);
-  line-height: 1.55; font-size: .92rem;
+  line-height: 1.6; font-size: .92rem;
 }
 .fte-agent-msg { color: inherit; }
+.fte-agent-step {
+  font-size: .74rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--fte-muted); margin: .1rem 0 .6rem; font-weight: 600;
+}
+.fte-agent-quiet-group { margin-top: .5rem; }
+.fte-agent-quiet-row { margin: .3rem 0; line-height: 1.5; }
+.fte-agent-quiet {
+  color: var(--fte-muted); text-decoration: underline;
+  text-decoration-color: rgba(139,147,163,.45); text-underline-offset: 3px;
+  font-size: .84rem; cursor: pointer;
+  transition: color var(--hover) ease, text-decoration-color var(--hover) ease;
+}
+.fte-agent-quiet:hover { color: var(--fte-text); text-decoration-color: var(--fte-text); }
+.fte-agent-change {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: .3rem 0; border-bottom: 1px solid rgba(34,42,56,.55); line-height: 1.6;
+}
+.fte-agent-change:last-child { border-bottom: none; }
+.fte-agent-change .m { font-weight: 700; color: var(--fte-text); }
+.fte-agent-change .d { font-weight: 700; color: var(--fte-ok); }
+.fte-agent-change .d.neg { color: var(--fte-blocked); }
+.fte-agent-cmp {
+  padding: .6rem .85rem; margin: .35rem 0;
+  border: 1px solid var(--fte-border); border-radius: 10px;
+  background: var(--fte-panel); line-height: 1.55;
+}
+.fte-agent-cmp .cn { font-weight: 700; color: var(--fte-text); margin-bottom: .3rem; }
+.fte-agent-cmp .lbl { color: var(--fte-muted); font-size: .78rem; margin-right: .4rem; }
+.fte-agent-cmp .v { color: var(--fte-text); }
+.fte-agent-cmp .diff { color: var(--fte-muted); font-size: .8rem; margin-top: .2rem; }
 .fte-agent-metric-card {
   display: flex; align-items: baseline; gap: .9rem; flex-wrap: wrap;
   padding: .85rem 1rem; margin: .4rem 0;
@@ -3502,6 +3532,22 @@ def _agent_header_html() -> str:
     )
 
 
+def _agent_step_html(step) -> str:
+    """Muted 'Step N of 5 · label' tutor indicator (Sprint 12.1 UX)."""
+    s = step or {}
+    number = int(s.get("number") or 1)
+    total = int(s.get("total") or 5)
+    label = html.escape(str(s.get("label") or ""))
+    return f'<div class="fte-agent-step">Step {number} of {total} · {label}</div>'
+
+
+def _agent_quiet_link(choice_id, label) -> str:
+    """A quiet secondary action rendered as a real link (no button grid)."""
+    cid = html.escape(str(choice_id or ""))
+    lab = html.escape(str(label or "Open"))
+    return f'<a class="fte-agent-quiet" href="?fte_agent_action={cid}">{lab}</a>'
+
+
 _AGENT_PROGRESS_ICONS = {"done": "✓", "current": "→", "todo": "○"}
 
 
@@ -3634,7 +3680,45 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 notes.append(f"🟠 `{html.escape(str(it))}` needs review")
             if notes:
                 st.markdown(" ".join(notes[:3]))
-            if pstate == "partial":
+            if pstate == "partial" and uncertain:
+                st.markdown("---")
+                st.markdown("**Did your professor mean one of these?**")
+                cand_items = c.get("uncertain_candidates") or []
+                selections = []
+                for i, item in enumerate(cand_items[:2]):
+                    token = str(item.get("token") or "this item")
+                    cands = [str(x) for x in (item.get("candidates") or [])]
+                    opts = cands + ["__edit__"]
+                    if not cands:
+                        opts = ["__edit__"]
+                    if opts:
+                        sel = st.radio(
+                            f"“{html.escape(token)}” means…",
+                            options=opts,
+                            format_func=lambda o: (
+                                "Something else — I'll type the exact wording"
+                                if o == "__edit__" else o
+                            ),
+                            key=f"fte_req_confirm_{i}",
+                            label_visibility="collapsed",
+                        )
+                        selections.append(sel)
+                if selections and st.button(
+                    "Apply my choices", key="fte_req_apply_choices",
+                    use_container_width=True,
+                ):
+                    if any(s == "__edit__" for s in selections):
+                        st.session_state["fte_agent_edit_reqs"] = True
+                    else:
+                        chosen = [s for s in selections if s != "__edit__"]
+                        if chosen:
+                            st.session_state["fte_assignment_requirements"] = ", ".join(
+                                list(confirmed) + chosen
+                            )
+                            st.session_state["fte_agent_edit_reqs"] = False
+                    st.rerun()
+                st.caption("Or confirm the requirements above to continue.")
+            elif pstate == "partial":
                 st.caption(
                     "Confirm & Continue to accept these — or Edit requirements "
                     "to correct the wording."
@@ -3661,18 +3745,36 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
             st.caption("No requirements parsed yet — define the assignment in the setup above.")
     elif stage == "periods":
         changes = c.get("changes") or []
+        strongest = c.get("strongest") or (changes[0] if changes else None)
         if changes:
-            st.dataframe(pd.DataFrame([
-                {
-                    "Metric": o.get("metric"),
-                    "From": o.get("from"),
-                    "To": o.get("to"),
-                    "From Value": o.get("from_value"),
-                    "To Value": o.get("to_value"),
-                    "Change": o.get("change_display"),
-                }
-                for o in changes
-            ]), use_container_width=True, hide_index=True)
+            rows_html = []
+            for o in changes:
+                change_txt = str(o.get("change_display") or "—")
+                neg = change_txt.startswith(("-", "−"))
+                rows_html.append(
+                    f'<div class="fte-agent-change">'
+                    f'<span class="m">{html.escape(str(o.get("metric") or "—"))}</span>'
+                    f'<span class="d{" neg" if neg else ""}">{html.escape(change_txt)}</span>'
+                    f'</div>'
+                )
+            st.markdown("".join(rows_html), unsafe_allow_html=True)
+            if strongest:
+                st.caption(
+                    f"**{html.escape(str(strongest.get('metric') or ''))}** changed the most "
+                    "relevantly for your assignment."
+                )
+            with st.expander("Show all period changes", expanded=False):
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Metric": o.get("metric"),
+                        "From": o.get("from"),
+                        "To": o.get("to"),
+                        "From Value": o.get("from_value"),
+                        "To Value": o.get("to_value"),
+                        "Change": o.get("change_display"),
+                    }
+                    for o in changes
+                ]), use_container_width=True, hide_index=True)
         else:
             st.caption("No multi-period evidence in the current document set.")
     elif stage == "metric":
@@ -3803,19 +3905,41 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
             )
     elif stage == "comparison":
         comp_rows = c.get("rows") or []
+        preview = c.get("preview") or comp_rows[:3]
         if c.get("active"):
-            if comp_rows:
-                st.dataframe(pd.DataFrame([
-                    {
-                        "Metric": r.get("canonical"),
-                        c.get("company_a"): r.get("value_a"),
-                        c.get("company_b"): r.get("value_b"),
-                        "Period": r.get("period"),
-                        "Difference": r.get("difference"),
-                        "Status": r.get("status_label"),
-                    }
-                    for r in comp_rows
-                ]), use_container_width=True, hide_index=True)
+            if preview:
+                ca = html.escape(str(c.get("company_a") or "Company A"))
+                cb = html.escape(str(c.get("company_b") or "Peer"))
+                cards = []
+                for r in preview:
+                    diff = str(r.get("difference") or "—")
+                    status = str(r.get("status_label") or r.get("period") or "")
+                    cards.append(
+                        f'<div class="fte-agent-cmp">'
+                        f'<div class="cn">{html.escape(str(r.get("canonical") or "—"))}</div>'
+                        f'<div><span class="lbl">{ca}</span> '
+                        f'<span class="v">{html.escape(str(r.get("value_a") or "—"))}</span></div>'
+                        f'<div><span class="lbl">{cb}</span> '
+                        f'<span class="v">{html.escape(str(r.get("value_b") or "—"))}</span></div>'
+                        f'<div class="diff">Difference: {html.escape(diff)} · {html.escape(status)}</div>'
+                        f'</div>'
+                    )
+                st.markdown("".join(cards), unsafe_allow_html=True)
+                if len(comp_rows) > len(preview):
+                    with st.expander("Explore full comparison", expanded=False):
+                        st.dataframe(pd.DataFrame([
+                            {
+                                "Metric": r.get("canonical"),
+                                c.get("company_a"): r.get("value_a"),
+                                c.get("company_b"): r.get("value_b"),
+                                "Period": r.get("period"),
+                                "Difference": r.get("difference"),
+                                "Status": r.get("status_label"),
+                            }
+                            for r in comp_rows
+                        ]), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("All comparable metrics are shown above.")
             else:
                 st.caption(
                     "No comparable metrics could be aligned in that area — missing "
@@ -3905,42 +4029,42 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
 
 
 def _render_agent_choices(stage, choices, workspace) -> None:
-    """Stage action buttons (secondary — the ONE dominant action lives in
-    the What-should-I-do-next box)."""
+    """Quiet secondary actions as links — never a button grid. The ONE
+    dominant action lives in the What-should-I-do-next box; Back/Skip/
+    Explore stay as visible controls below."""
     main = [c for c in (choices or []) if c.get("id") not in ("back", "skip", "explore")]
     if not main:
         return
-    cols = st.columns(min(len(main), 3))
-    for i, c in enumerate(main):
-        key = "fte_agent_{}_c{}_{}".format(
-            str(stage), i, re.sub(r"[^A-Za-z0-9]+", "_", str(c.get("id") or ""))
-        )
-        if cols[i % len(cols)].button(
-            c.get("label"), key=key, use_container_width=True, type="secondary"
-        ):
-            _agent_apply(c.get("id"), workspace)
+    links = "".join(
+        f'<div class="fte-agent-quiet-row">{_agent_quiet_link(c.get("id"), c.get("label"))}</div>'
+        for c in main
+    )
+    st.markdown(f'<div class="fte-agent-quiet-group">{links}</div>', unsafe_allow_html=True)
 
 
 def _render_agent_next_step(state, workspace, requirements_text="") -> None:
-    """The central interaction: ONE recommended action + 1-2 alternatives."""
+    """The central interaction: ONE dominant primary action + quiet links."""
     rec = fte_agent_what_next(workspace, state, requirements_text=requirements_text)
     st.markdown("---")
-    st.markdown("**What should I do next?**")
     recommended = rec.get("recommended")
     alts = rec.get("alternatives") or []
     if recommended:
-        actions = [recommended] + alts
-        cols = st.columns(len(actions))
-        for i, c in enumerate(actions):
-            key = "fte_agent_next_{}_{}".format(
-                i, re.sub(r"[^A-Za-z0-9]+", "_", str(c.get("id") or ""))
+        st.markdown("**What should I do next?**")
+        key = "fte_agent_next_primary_{}".format(
+            re.sub(r"[^A-Za-z0-9]+", "_", str(recommended.get("id") or "next"))
+        )
+        if st.button(
+            recommended.get("label"), key=key, use_container_width=True, type="primary"
+        ):
+            _agent_apply(recommended.get("id"), workspace)
+        if recommended.get("hint"):
+            st.caption(recommended.get("hint") or "")
+        if alts:
+            links = "".join(
+                f'<div class="fte-agent-quiet-row">{_agent_quiet_link(c.get("id"), c.get("label"))}</div>'
+                for c in alts
             )
-            if cols[i].button(
-                c.get("label"), key=key, use_container_width=True,
-                type="primary" if i == 0 else "secondary",
-            ):
-                _agent_apply(c.get("id"), workspace)
-        st.caption(recommended.get("hint") or "")
+            st.markdown(f'<div class="fte-agent-quiet-group">{links}</div>', unsafe_allow_html=True)
     else:
         st.success("You've completed the guided stages — write your own conclusion.")
 
@@ -3960,6 +4084,13 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     """Sprint 12 - Student Assignment Agent: a guided, progressively disclosed
     workspace shared by the real (API) pipeline and Demo Mode. The full
     deterministic workspace stays one click away via Explore workspace."""
+    # Quiet secondary actions arrive as links (?fte_agent_action=...) and run
+    # the exact same deterministic state machine as the buttons below.
+    q_action = st.query_params.get("fte_agent_action")
+    if q_action:
+        st.session_state["fte_agent_pending"] = str(q_action)
+        del st.query_params["fte_agent_action"]
+
     assignment_types = list(ASSIGNMENT_TYPES or ["Financial Ratio Analysis"])
     default_type = assignment_types[0]
 
@@ -4067,7 +4198,13 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if st.session_state.get("fte_agent_ctx") != ctx:
         st.session_state["fte_agent_state"] = fte_agent_initial_state()
         st.session_state["fte_agent_explore"] = False
+        st.session_state["fte_agent_edit_reqs"] = False
         st.session_state["fte_agent_ctx"] = ctx
+
+    # Apply a quiet-link action (if any) through the same state machine.
+    if st.session_state.get("fte_agent_pending"):
+        pending = st.session_state.pop("fte_agent_pending")
+        _agent_apply(pending, workspace)
 
     # Explore workspace: the full deterministic view, one click away.
     if st.session_state.get("fte_agent_explore"):
@@ -4084,7 +4221,7 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     st.session_state["fte_agent_state"] = view.get("state") or state
 
     st.markdown(_agent_header_html(), unsafe_allow_html=True)
-    st.markdown(_agent_progress_html(view.get("progress") or []), unsafe_allow_html=True)
+    st.markdown(_agent_step_html(view.get("step")), unsafe_allow_html=True)
     guidance = view.get("guidance") or {}
     if guidance.get("kind") == "blocked":
         st.warning(guidance.get("message"))
