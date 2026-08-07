@@ -3470,6 +3470,14 @@ def _agent_apply(choice_id, workspace):
     """Apply one Assignment Agent choice and rerun (deterministic state
     machine -- never traps the student: Back / Skip / Explore always work)."""
     choice_id = str(choice_id or "")
+    if choice_id == "requirements.edit":
+        # Sprint 12.1 - open the setup editor so the student can correct the
+        # requirement wording; the parse re-runs on the next render.
+        st.session_state["fte_agent_edit_reqs"] = True
+        st.rerun()
+        return
+    if choice_id in ("requirements.confirm", "requirements.continue", "requirements.review"):
+        st.session_state["fte_agent_edit_reqs"] = False
     if choice_id == "explore":
         st.session_state["fte_agent_explore"] = True
         st.rerun()
@@ -3584,22 +3592,72 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
         if c.get("comparison_active"):
             st.caption("A peer comparison is available for this assignment.")
     elif stage == "requirements":
+        pstate = str(c.get("parse_state") or "")
+        confirmed = c.get("confirmed") or []
+        uncertain = c.get("uncertain") or []
+        review_required = c.get("review_required") or []
+        if pstate == "low":
+            st.markdown(
+                "**I couldn't reliably identify the required metrics from the "
+                "assignment text yet.**"
+            )
+            st.markdown(
+                "Nothing is broken — I just need you to confirm what the "
+                "professor asked you to calculate."
+            )
+            opts = sorted(set(str(o) for o in (c.get("options") or [])))
+            if opts:
+                sel = st.multiselect(
+                    "Select the required metrics:",
+                    options=opts,
+                    key="fte_req_manual_sel",
+                )
+                if st.button(
+                    "Use these requirements", key="fte_req_manual_apply",
+                    use_container_width=True,
+                ):
+                    if sel:
+                        st.session_state["fte_assignment_requirements"] = ", ".join(sel)
+                        st.session_state["fte_agent_edit_reqs"] = False
+                        st.rerun()
+            st.caption(
+                "Or use “Edit requirements” to type the exact wording from the assignment."
+            )
+        else:
+            st.markdown("**I found these requirements:**")
+            for r in confirmed:
+                st.markdown(f"- ☑ {html.escape(str(r))}")
+            notes = []
+            for it in uncertain:
+                notes.append(f"⚠️ `{html.escape(str(it))}` needs your confirmation")
+            for it in review_required:
+                notes.append(f"🟠 `{html.escape(str(it))}` needs review")
+            if notes:
+                st.markdown(" ".join(notes[:3]))
+            if pstate == "partial":
+                st.caption(
+                    "Confirm & Continue to accept these — or Edit requirements "
+                    "to correct the wording."
+                )
+            else:
+                st.caption("Ready to continue to the analysis.")
         req_rows = c.get("rows") or []
         if req_rows:
-            st.dataframe(pd.DataFrame([
-                {
-                    "Requirement": r.get("requirement"),
-                    "Status": r.get("status_label"),
-                    "Result": r.get("result"),
-                }
-                for r in req_rows
-            ]), use_container_width=True, hide_index=True)
-            if (c.get("review_count") or 0) or (c.get("blocked_count") or 0):
-                st.caption(
-                    f"🟠 {c.get('review_count', 0)} review-required · "
-                    f"🔴 {c.get('blocked_count', 0)} blocked — details stay one click away."
-                )
-        else:
+            with st.expander("Requirement details", expanded=False):
+                st.dataframe(pd.DataFrame([
+                    {
+                        "Requirement": r.get("requirement"),
+                        "Status": r.get("status_label"),
+                        "Result": r.get("result"),
+                    }
+                    for r in req_rows
+                ]), use_container_width=True, hide_index=True)
+                if (c.get("review_count") or 0) or (c.get("blocked_count") or 0):
+                    st.caption(
+                        f"🟠 {c.get('review_count', 0)} review-required · "
+                        f"🔴 {c.get('blocked_count', 0)} blocked — details stay one click away."
+                    )
+        elif pstate != "low":
             st.caption("No requirements parsed yet — define the assignment in the setup above.")
     elif stage == "periods":
         changes = c.get("changes") or []
@@ -3643,6 +3701,8 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 "The label/extraction couldn't be normalized safely — I won't "
                 "merge it automatically because doing so could change your analysis."
             )
+        if c.get("excel_where"):
+            st.caption(str(c["excel_where"]))
     elif stage == "explain":
         if c.get("numerical") and c.get("numerical") != "—":
             st.markdown(f"**Numerical driver:** {html.escape(str(c['numerical']))}")
@@ -3656,6 +3716,8 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 st.markdown(f"_{html.escape(str(c['evidence']))}_")
         if not c.get("has_qualitative") and not c.get("student_explanation"):
             st.caption("Cause not established from permitted evidence.")
+        if c.get("excel_where"):
+            st.caption(str(c["excel_where"]))
     elif stage == "calculation":
         if not c.get("available"):
             st.caption(c.get("message") or "No deterministic calculation available.")
@@ -3789,6 +3851,19 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
         if c.get("note"):
             st.caption(str(c["note"]))
     elif stage == "excel":
+        orient = c.get("orientation") or {}
+        st.markdown("**Your working model is ready.**")
+        st.markdown(
+            "The calculations are already completed — you don't need to edit the formulas."
+        )
+        first_sheet = str(orient.get("first") or "Ratio Analysis")
+        then_sheets = [str(s) for s in (orient.get("then") or [])]
+        optional_sheets = [str(s) for s in (orient.get("optional") or [])]
+        st.markdown(f"**Start with:** {html.escape(first_sheet)}")
+        if then_sheets:
+            st.markdown(f"**Then check:** {html.escape(' · '.join(then_sheets))}")
+        if optional_sheets:
+            st.markdown(f"**Optional:** {html.escape(' · '.join(optional_sheets))}")
         st.caption("7 sheets · " + " · ".join(str(s) for s in (c.get("sheets") or [])))
         if build_excel_working_model is not None:
             try:
@@ -3807,6 +3882,12 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
     elif stage == "memo":
         _render_memo_block(rows, _student_memo_text(workspace), facts_src, workspace)
     elif stage == "conclusion":
+        scaffold = c.get("scaffold") or []
+        if scaffold:
+            st.markdown("**Evidence-backed scaffolding** — your interpretation stays yours:")
+            for s in scaffold:
+                st.markdown(f"- {html.escape(str(s))}")
+        st.markdown("**Evidence checklist:**")
         for p in c.get("checklist") or []:
             st.markdown(f"- {p}")
         st.text_area(
@@ -3840,9 +3921,9 @@ def _render_agent_choices(stage, choices, workspace) -> None:
             _agent_apply(c.get("id"), workspace)
 
 
-def _render_agent_next_step(state, workspace) -> None:
+def _render_agent_next_step(state, workspace, requirements_text="") -> None:
     """The central interaction: ONE recommended action + 1-2 alternatives."""
-    rec = fte_agent_what_next(workspace, state)
+    rec = fte_agent_what_next(workspace, state, requirements_text=requirements_text)
     st.markdown("---")
     st.markdown("**What should I do next?**")
     recommended = rec.get("recommended")
@@ -3886,6 +3967,7 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if not isinstance(st.session_state.get("fte_agent_state"), dict):
         st.session_state["fte_agent_state"] = fte_agent_initial_state()
     st.session_state.setdefault("fte_agent_explore", False)
+    st.session_state.setdefault("fte_agent_edit_reqs", False)
 
     if demo:
         # Demo pre-fill: deterministic fixtures, isolated from the real
@@ -3908,7 +3990,8 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
         st.caption("Demo Mode · deterministic fixtures · no AI · no API key")
 
     # Assignment setup stays compact — the agent reveals detail on demand.
-    with st.expander("📋 Assignment setup", expanded=False):
+    # Sprint 12.1: "Edit requirements" opens this panel for correction.
+    with st.expander("📋 Assignment setup", expanded=bool(st.session_state.get("fte_agent_edit_reqs"))):
         st.caption("Define the assignment — the agent guides you through it below.")
         c1, c2 = st.columns([1.6, 2.4], gap="medium")
         with c1:
@@ -3995,7 +4078,9 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
         return
 
     state = st.session_state["fte_agent_state"]
-    view = agent_session(workspace, state, facts_src=facts_src)
+    view = agent_session(
+        workspace, state, facts_src=facts_src, requirements_text=requirements_text
+    )
     st.session_state["fte_agent_state"] = view.get("state") or state
 
     st.markdown(_agent_header_html(), unsafe_allow_html=True)
@@ -4011,7 +4096,7 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
     st.markdown("---")
     _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)
-    _render_agent_next_step(state, workspace)
+    _render_agent_next_step(state, workspace, requirements_text)
     _render_agent_controls(workspace)
 
 

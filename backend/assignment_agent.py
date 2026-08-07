@@ -1,5 +1,22 @@
 """
 Financial Timeline Engine
+Sprint 12.1 - Zero-Panic Assignment Onboarding & Excel Guidance
+
+* The Assignment Agent NEVER presents an ambiguous assignment parse as a
+  system failure. Parsing confidence is classified deterministically into
+  three recovery states:
+      high    -> clean assignment, direct "Continue to analysis"
+      partial -> most requirements confirmed, one item needs confirmation
+      low     -> nothing reliably identified, manual requirement selector
+* Unknown metric-like tokens in the assignment text (ROIC, Quick Ratio,
+  EPSILON...) are SURFACED for student confirmation, never silently
+  invented and never silently discarded.
+* The Excel working model is introduced with orientation guidance:
+  "Start with Ratio Analysis, then Financial Data" — the model itself is
+  unchanged (7 sheets, real formulas, professional formatting).
+* The conclusion remains student-authored; the agent may only offer
+  evidence-backed scaffolding, never a generated conclusion.
+
 Sprint 12 - Student Assignment Agent (Progressive Guided Workspace)
 
 A DETERMINISTIC orchestration/presentation layer that guides a student
@@ -28,9 +45,11 @@ the Demo path — only the underlying workspace differs.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from backend.qualitative_catalyst import RELATIONSHIP_LABELS
+from backend.student_workspace import CANONICAL_METRICS, canonicalize_metric
 
 # ---------------------------------------------------------------------------
 # Stage vocabulary
@@ -314,6 +333,181 @@ def _blocked_metrics(workspace: Dict[str, Any]) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Sprint 12.1 - Zero-panic parse recovery (high / partial / low)
+# ---------------------------------------------------------------------------
+
+PARSE_HIGH = "high"
+PARSE_PARTIAL = "partial"
+PARSE_LOW = "low"
+
+# Tokens that commonly appear in assignment prose but are NEVER treated as
+# metric requirements (professor filler, document words, units...).
+_NOISE_TOKENS: set = {
+    "analysis", "analyst", "assignment", "calculate", "compute", "please",
+    "explain", "compare", "comparison", "review", "report", "memo",
+    "worksheet", "worksheet", "excel", "model", "the", "and", "for",
+    "with", "from", "into", "across", "using", "between", "under",
+    "over", "during", "based", "assuming", "include", "including",
+    "must", "should", "need", "needs", "required", "required", "show",
+    "find", "derive", "determine", "evaluate", "assess", "company",
+    "fiscal", "year", "years", "period", "periods", "statement",
+    "statements", "annual", "quarterly", "quarter", "quarters",
+    "professor", "course", "class", "peer", "peerco", "inc", "ltd",
+    "llc", "corp", "group", "holdings", "plc", "fy", "usd", "inr",
+    "crore", "lakh", "million", "billion", "thousand", "bn", "mm",
+    "figures", "numbers", "data", "net", "total", "gross", "operating",
+}
+
+# Metric-like suffix phrases: "quick ratio", "inventory turnover"...
+_METRIC_SUFFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9 .'&/()]{1,28}?)\s+"
+    r"(ratio|margin|turnover|coverage|yield|gearing|multiple|per share)"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+# Standalone uppercase acronyms: ROIC, D/E, WACC... (never FY/ROE if already
+# confirmed, and never noise words).
+_ACRONYM_RE = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2,6}(?:/[A-Z]{1,4})?)(?![A-Za-z0-9])")
+
+
+# Common assignment instruction words that can precede a metric phrase.
+_INSTRUCTION_WORDS = frozenset({
+    "calculate", "compute", "find", "determine", "estimate", "assess",
+    "analyze", "analyse", "evaluate", "show", "give", "provide", "derive",
+    "identify", "consider", "explain", "state", "include", "cover", "review",
+    "perform", "produce", "use", "apply", "measure", "check", "verify",
+    "please", "the", "also", "then", "and", "over", "for", "of",
+})
+
+
+def _uncertain_tokens(requirements_text: str, confirmed: List[str]) -> List[str]:
+    """Deterministic detection of metric-like assignment tokens that were
+    NOT parsed into a confirmed requirement. Never guesses: only uppercase
+    acronyms, metric-suffix phrases, or known ambiguous labels are surfaced
+    for the student to confirm/correct. Max 4, sorted, deduplicated."""
+    text = requirements_text or ""
+    if not text.strip():
+        return []
+    confirmed_l = {str(c).lower() for c in confirmed}
+    out: List[str] = []
+
+    def add(tok: str) -> None:
+        tok = tok.strip()
+        t = tok.lower()
+        if not tok or len(tok) > 40:
+            return
+        if t in confirmed_l or tok in confirmed:
+            return
+        if t in _NOISE_TOKENS:
+            return
+        # A token that canonicalizes to a supported metric is a confirmed
+        # requirement (or one the parser already resolved) — not uncertain.
+        canonical, _conf, _reason = canonicalize_metric(tok)
+        if canonical:
+            if canonical.lower() in confirmed_l:
+                return
+        if any(x.lower() == t for x in out):
+            return
+        out.append(tok)
+
+    # 1) uppercase acronyms in the original (case-preserved) text
+    for m in _ACRONYM_RE.finditer(text):
+        add(m.group(1))
+    # 2) metric-suffix phrases (e.g. "quick ratio", "inventory turnover").
+    #    The regex can capture leading instruction words ("Calculate
+    #    Operating Margin") or earlier metrics joined by "and" ("ROE and
+    #    Quick Ratio"), so: drop instruction words, keep the trailing
+    #    conjunction segment, and prefer the longest trailing sub-phrase
+    #    that is itself a supported metric (already confirmed). Anything
+    #    metric-like that remains is surfaced for the student to confirm.
+    for m in _METRIC_SUFFIX_RE.finditer(text):
+        phrase = " ".join((m.group(1) + " " + m.group(2)).strip().split())
+        words = phrase.split()
+        while len(words) > 2 and words[0].lower() in _INSTRUCTION_WORDS:
+            words = words[1:]
+        phrase = " ".join(words)
+        segments = re.split(
+            r"\s+(?:and|&|or|of|for|then|plus|with)\s+", phrase, flags=re.IGNORECASE
+        )
+        phrase = segments[-1].strip()
+        words = phrase.split()
+        best = phrase
+        for i in range(len(words) - 1):
+            tail = " ".join(words[i:])
+            if canonicalize_metric(tail)[0]:
+                best = tail
+                break
+        add(best)
+    # 3) known ambiguous accounting labels (never silently merged); keep
+    #    only the most specific labels so "segment gross margin" does not
+    #    also emit its substring "gross margin".
+    from backend.student_workspace import _AMBIGUOUS_LABELS
+    present = [lbl for lbl in sorted(_AMBIGUOUS_LABELS, key=len, reverse=True)
+               if re.search(rf"(?<![a-z0-9]){re.escape(lbl)}(?![a-z0-9])", text.lower())]
+    for lbl in present:
+        if not any(lbl in other for other in present if other != lbl):
+            add(lbl)
+    return sorted(out)[:4]
+
+
+def parse_recovery(
+    workspace: Dict[str, Any],
+    requirements_text: str = "",
+) -> Dict[str, Any]:
+    """Deterministic classification of assignment-parse confidence.
+
+    state
+      high    every detected requirement is confirmed (clean assignment)
+      partial some requirements confirmed, one item needs confirmation
+      low     nothing was reliably identified -> manual selector
+    """
+    confirmed = [str(r.get("requirement") or "") for r in _req_rows(workspace)]
+    confirmed = [c for c in confirmed if c]
+    if not confirmed:
+        return {
+            "state": PARSE_LOW,
+            "confirmed": [],
+            "uncertain": [],
+            "review_required": [],
+        }
+    confirmed_l = {c.lower() for c in confirmed}
+    # Only review flags that belong to a confirmed assignment requirement make
+    # the parse uncertain. An unrelated review-required fact (e.g. a flagged
+    # Cash Flow line the professor never asked about) stays visible elsewhere
+    # but does not block a clean assignment.
+    review_required = [
+        m for m in _review_required_metrics(workspace) if m.lower() in confirmed_l
+    ]
+    uncertain = _uncertain_tokens(requirements_text, confirmed)
+    if uncertain or review_required:
+        return {
+            "state": PARSE_PARTIAL,
+            "confirmed": confirmed,
+            "uncertain": uncertain,
+            "review_required": review_required,
+        }
+    return {
+        "state": PARSE_HIGH,
+        "confirmed": confirmed,
+        "uncertain": [],
+        "review_required": [],
+    }
+
+
+def _parse_summary(workspace: Dict[str, Any], requirements_text: str) -> str:
+    """Deterministic one-line summary of the confirmed requirements for the
+    high-confidence opening (e.g. "ROE, ROA and Profit Margin")."""
+    confirmed = [str(r.get("requirement") or "") for r in _req_rows(workspace)]
+    confirmed = [c for c in confirmed if c]
+    if not confirmed:
+        return "the required metrics"
+    if len(confirmed) == 1:
+        return confirmed[0]
+    return ", ".join(confirmed[:-1]) + " and " + confirmed[-1]
+
+
+# ---------------------------------------------------------------------------
 # Stage content builders (message + structured content)
 # ---------------------------------------------------------------------------
 
@@ -358,7 +552,7 @@ def _content_opening(workspace: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _content_requirements(workspace: Dict[str, Any]) -> Dict[str, Any]:
+def _content_requirements(workspace: Dict[str, Any], requirements_text: str = "") -> Dict[str, Any]:
     rows = []
     for r in _req_rows(workspace):
         rows.append({
@@ -368,11 +562,19 @@ def _content_requirements(workspace: Dict[str, Any]) -> Dict[str, Any]:
             "result": str(r.get("result") or "—"),
             "evidence": str(r.get("evidence") or r.get("detail") or ""),
         })
+    rec = parse_recovery(workspace, requirements_text)
     return {
         "rows": rows,
         "total": len(rows),
         "review_count": len(_review_required_metrics(workspace)),
         "blocked_count": len(_blocked_metrics(workspace)),
+        # Sprint 12.1 - zero-panic parse recovery state.
+        "parse_state": rec["state"],
+        "confirmed": rec["confirmed"],
+        "uncertain": rec["uncertain"],
+        "review_required": rec["review_required"],
+        # Manual requirement selector options for the low-confidence state.
+        "options": sorted(CANONICAL_METRICS.keys()),
     }
 
 
@@ -413,7 +615,32 @@ def _metric_payload(workspace: Dict[str, Any], metric: str) -> Dict[str, Any]:
 
 
 def _content_metric(workspace: Dict[str, Any], metric: str) -> Dict[str, Any]:
-    return _metric_payload(workspace, metric)
+    payload = _metric_payload(workspace, metric)
+    payload["excel_where"] = _excel_where(workspace, metric)
+    return payload
+
+
+# Metrics whose primary location in the Excel working model is the Ratio
+# Analysis sheet (everything else lives in Financial Data).
+_RATIO_SHEET_METRICS: set = {
+    "ROE", "ROA", "Profit Margin", "Operating Margin", "Current Ratio",
+    "Debt to Equity", "Revenue Growth", "EPS Growth", "CAGR",
+}
+
+
+def _excel_where(workspace: Dict[str, Any], metric: str) -> str:
+    """Deterministic 'where do I look?' guidance for one metric in the Excel
+    model. Never claims a sheet that does not exist — ratio metrics map to
+    Ratio Analysis, everything else to Financial Data; underlying inputs are
+    named from the Formula-Engine calculation when available."""
+    sheet = "Ratio Analysis" if metric in _RATIO_SHEET_METRICS else "Financial Data"
+    calc = _calc_metric(workspace, metric)
+    inputs = [str(i.get("metric") or i.get("key") or "") for i in (calc or {}).get("inputs") or []]
+    inputs = [i for i in inputs if i][:2]
+    msg = f"Checking {metric}? Start with {sheet} → {metric}."
+    if inputs:
+        msg += f" The underlying {' and '.join(inputs)} values are linked from Financial Data."
+    return msg
 
 
 def _content_explain(workspace: Dict[str, Any], metric: str) -> Dict[str, Any]:
@@ -448,6 +675,7 @@ def _content_explain(workspace: Dict[str, Any], metric: str) -> Dict[str, Any]:
         "has_qualitative": bool(qual_row),
         "is_blocked": payload.get("is_blocked"),
         "is_review": payload.get("is_review"),
+        "excel_where": _excel_where(workspace, metric),
     }
 
 
@@ -561,6 +789,14 @@ def _content_excel(workspace: Dict[str, Any]) -> Dict[str, Any]:
             "Qualitative Drivers",
         ],
         "ready": True,
+        # Sprint 12.1 - orientation: where to look first, without dumping the
+        # whole workbook on the student.
+        "orientation": {
+            "formulas_done": True,
+            "first": "Ratio Analysis",
+            "then": ["Financial Data"],
+            "optional": ["Comparison", "Driver Analysis"],
+        },
     }
 
 
@@ -618,7 +854,31 @@ def _content_conclusion(workspace: Dict[str, Any]) -> Dict[str, Any]:
             f"Qualitative catalysts: {len(qual_rows)} evidence-classified "
             f"driver-catalyst relationship(s) ({est} evidence-backed)."
         )
-    return {"checklist": checklist, "never_generate": True}
+    # Sprint 12.1 - evidence-backed scaffolding. The agent NEVER writes the
+    # conclusion; it only points at what the evidence suggests and leaves
+    # the judgment (and the writing) to the student.
+    scaffold: List[str] = []
+    obs_top = _strongest_changes(workspace, 1)
+    if obs_top:
+        o = obs_top[0]
+        scaffold.append(
+            f"Evidence suggests: {o.get('metric')} {o.get('change_display') or 'moved'} "
+            f"between {o.get('from')} and {o.get('to')}."
+        )
+    else:
+        scaffold.append(
+            "Evidence suggests: no multi-period trend is established from the "
+            "current evidence set."
+        )
+    scaffold.append(
+        "Think about: was the improvement related to pricing, volume, costs, "
+        "or another factor disclosed in the evidence?"
+    )
+    scaffold.append(
+        "Your task: decide which explanation is best supported and write your "
+        "interpretation in your own words."
+    )
+    return {"checklist": checklist, "never_generate": True, "scaffold": scaffold}
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +886,7 @@ def _content_conclusion(workspace: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], area: Optional[str]) -> str:
+def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], area: Optional[str], requirements_text: str = "") -> str:
     if stage == STAGE_OPENING:
         c = _content_opening(workspace)
         req_names = ", ".join(c["requirements"]) if c["requirements"] else "no parsed requirements"
@@ -655,21 +915,39 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
         lines.append("Let's start with what you need to do. What would you like to work on first?")
         return " ".join(lines)
     if stage == STAGE_REQUIREMENTS:
+        rec = parse_recovery(workspace, requirements_text)
         c = _content_requirements(workspace)
-        if c["total"] == 0:
-            return (
-                "I couldn't parse any requirement from the assignment brief yet. "
-                "Add the requirements above and I'll build the checklist."
+        if rec["state"] == PARSE_HIGH:
+            summary = _parse_summary(workspace, requirements_text)
+            periods = _period_list(workspace)
+            period_txt = ""
+            if len(periods) >= 2:
+                period_txt = f" across {', '.join(periods)}"
+            flags = []
+            if c["review_count"]:
+                flags.append(f"{c['review_count']} item(s) flagged for review")
+            if c["blocked_count"]:
+                flags.append(f"{c['blocked_count']} item(s) blocked")
+            tail = (
+                f" Heads up: {'; '.join(flags)} — I'll flag them when they matter."
+                if flags else ""
             )
-        flags = []
-        if c["review_count"]:
-            flags.append(f"{c['review_count']} needs review")
-        if c["blocked_count"]:
-            flags.append(f"{c['blocked_count']} is blocked")
-        tail = f" 🟠 {c['review_count']} item(s) need review and 🔴 {c['blocked_count']} item(s) are blocked." if flags else (
-            " Every requirement resolves to a verified or derived result."
+            return (
+                f"I've parsed your assignment. You need to calculate {summary}"
+                f"{period_txt}.{tail} Continue to the analysis when you're ready."
+            )
+        if rec["state"] == PARSE_PARTIAL:
+            items = rec["uncertain"] + rec["review_required"]
+            item_txt = ", ".join(f"'{i}'" for i in items[:2]) or "one item"
+            return (
+                f"I've identified most of the assignment requirements, but {item_txt} "
+                "is unclear. Please confirm it before I continue."
+            )
+        return (
+            "I couldn't reliably identify the required metrics from the assignment "
+            "text yet. Nothing is broken — I just need you to confirm what the "
+            "professor asked you to calculate."
         )
-        return f"Here is your assignment checklist — {c['total']} requirement(s).{tail}"
     if stage == STAGE_PERIODS:
         c = _content_periods(workspace)
         if not c["has_periods"]:
@@ -854,7 +1132,7 @@ def _explore_choice() -> Dict[str, Any]:
     return {"id": "explore", "label": "Explore workspace", "hint": "Open the full workspace when you want it."}
 
 
-def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], area: Optional[str]) -> List[Dict[str, Any]]:
+def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], area: Optional[str], requirements_text: str = "") -> List[Dict[str, Any]]:
     choices: List[Dict[str, Any]] = []
     if stage == STAGE_OPENING:
         choices.append({
@@ -873,14 +1151,34 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
                 "hint": "Compare with the peer company.",
             })
     elif stage == STAGE_REQUIREMENTS:
-        choices.append({
-            "id": "requirements.continue", "label": "Continue to results",
-            "hint": "See the strongest verified results.",
-        })
-        if _review_required_metrics(workspace) or _blocked_metrics(workspace):
+        rec = parse_recovery(workspace, requirements_text)
+        if rec["state"] == PARSE_HIGH:
             choices.append({
-                "id": "requirements.review", "label": "Review details",
-                "hint": "Open the full checklist with evidence details.",
+                "id": "requirements.continue", "label": "Continue to analysis",
+                "hint": "Move to the results.",
+            })
+            if _review_required_metrics(workspace) or _blocked_metrics(workspace):
+                choices.append({
+                    "id": "requirements.review", "label": "Review details",
+                    "hint": "Open the full checklist with evidence details.",
+                })
+        elif rec["state"] == PARSE_PARTIAL:
+            choices.append({
+                "id": "requirements.confirm", "label": "Confirm & Continue",
+                "hint": "Confirm the detected requirements and move on.",
+            })
+            choices.append({
+                "id": "requirements.edit", "label": "Edit requirements",
+                "hint": "Correct the requirement wording.",
+            })
+        else:
+            choices.append({
+                "id": "requirements.confirm", "label": "Continue",
+                "hint": "Continue once the requirements are set.",
+            })
+            choices.append({
+                "id": "requirements.edit", "label": "Edit requirements",
+                "hint": "Type or select the required metrics manually.",
             })
         choices.append(_back_choice(stage))
     elif stage == STAGE_PERIODS:
@@ -1003,10 +1301,13 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
         choices.append(_back_choice(stage))
     elif stage == STAGE_EXCEL:
         choices.append({
-            "id": "excel.download", "label": "Download Excel",
-            "hint": "Export the 7-sheet working model.",
+            "id": "excel.download", "label": "Open Excel Working Model",
+            "hint": "Download the 7-sheet working model.",
         })
-        choices.append(_continue_choice())
+        choices.append({
+            "id": "continue", "label": "Continue in FT-E",
+            "hint": "Keep working in the workspace without downloading.",
+        })
         choices.append(_back_choice(stage))
     elif stage == STAGE_MEMO:
         choices.append({
@@ -1026,7 +1327,7 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
 # ---------------------------------------------------------------------------
 
 
-def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any], requirements_text: str = "") -> Optional[Dict[str, Any]]:
     stage = state.get("stage")
     metric = state.get("metric")
     if stage == STAGE_OPENING:
@@ -1034,7 +1335,12 @@ def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any]) -> Opt
             return {"id": "opening.periods", "label": "Start with the period analysis", "hint": "Review FY changes first — your assignment asks for them."}
         return {"id": "opening.requirements", "label": "Review the assignment requirements", "hint": "See what the assignment asks for."}
     if stage == STAGE_REQUIREMENTS:
-        return {"id": "requirements.continue", "label": "Continue to the results", "hint": "See the strongest verified results next."}
+        rec = parse_recovery(workspace, requirements_text)
+        if rec["state"] == PARSE_HIGH:
+            return {"id": "requirements.continue", "label": "Continue to the analysis", "hint": "See the strongest verified results next."}
+        if rec["state"] == PARSE_PARTIAL:
+            return {"id": "requirements.confirm", "label": "Confirm & Continue", "hint": "Confirm the detected requirements and move on."}
+        return {"id": "requirements.confirm", "label": "Continue", "hint": "Continue once the requirements are set."}
     if stage == STAGE_PERIODS:
         mc = _metric_choices(workspace, 1)
         if mc:
@@ -1074,12 +1380,12 @@ def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any]) -> Opt
     return {"id": "continue", "label": "Continue", "hint": "Proceed."}
 
 
-def _alternative_choices(state: Dict[str, Any], workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _alternative_choices(state: Dict[str, Any], workspace: Dict[str, Any], requirements_text: str = "") -> List[Dict[str, Any]]:
     stage = state.get("stage")
     if stage == STAGE_CONCLUSION:
         return []
-    all_choices = _choices_for(stage, workspace, state.get("metric"), state.get("area"))
-    rec = _recommended_choice(state, workspace)
+    all_choices = _choices_for(stage, workspace, state.get("metric"), state.get("area"), requirements_text)
+    rec = _recommended_choice(state, workspace, requirements_text)
     rec_id = rec["id"] if rec else None
     alts = [c for c in all_choices if c["id"] != rec_id]
     # Prefer meaningful actions over Back/Skip for the alternatives slot.
@@ -1174,8 +1480,12 @@ def apply_choice(
             return go(STAGE_COMPARISON)
     if choice_id.startswith("requirements."):
         sub = choice_id.split(".", 1)[1]
-        if sub == "continue":
+        if sub in ("continue", "confirm"):
             return go(STAGE_PERIODS if _period_list(workspace or {}) else STAGE_METRIC)
+        if sub == "edit":
+            # Stay on the requirements stage — the UI opens the setup editor
+            # (the deterministic state machine never dead-ends).
+            return dict(state)
         if sub == "review":
             return {**state, "stage": STAGE_EXPLORE_UI, "visited": visited}
     if choice_id.startswith("period."):
@@ -1274,6 +1584,7 @@ def agent_session(
     workspace: Dict[str, Any],
     state: Optional[Dict[str, Any]] = None,
     facts_src: Optional[Dict[str, Any]] = None,
+    requirements_text: str = "",
 ) -> Dict[str, Any]:
     """Deterministic full view of the Assignment Agent for the current
     state: {state, stage, message, content, choices, recommended,
@@ -1307,7 +1618,7 @@ def agent_session(
     if stage == STAGE_OPENING:
         content = _content_opening(workspace)
     elif stage == STAGE_REQUIREMENTS:
-        content = _content_requirements(workspace)
+        content = _content_requirements(workspace, requirements_text)
     elif stage == STAGE_PERIODS:
         content = _content_periods(workspace)
     elif stage == STAGE_METRIC:
@@ -1367,11 +1678,11 @@ def agent_session(
         "state": state,
         "stage": stage,
         "explore": False,
-        "message": _message_for(stage, workspace, metric, area),
+        "message": _message_for(stage, workspace, metric, area, requirements_text),
         "content": content,
-        "choices": _choices_for(stage, workspace, metric, area),
-        "recommended": _recommended_choice(state, workspace),
-        "alternatives": _alternative_choices(state, workspace),
+        "choices": _choices_for(stage, workspace, metric, area, requirements_text),
+        "recommended": _recommended_choice(state, workspace, requirements_text),
+        "alternatives": _alternative_choices(state, workspace, requirements_text),
         "progress": agent_progress(workspace, state),
         "guidance": guidance,
         "conflict_metrics": conflicts,
@@ -1382,9 +1693,10 @@ def agent_session(
 def what_next(
     workspace: Dict[str, Any],
     state: Optional[Dict[str, Any]] = None,
+    requirements_text: str = "",
 ) -> Dict[str, Any]:
     """The central interaction: ONE recommended action plus 1-2 alternatives."""
-    view = agent_session(workspace, state)
+    view = agent_session(workspace, state, requirements_text=requirements_text)
     return {
         "recommended": view["recommended"],
         "alternatives": view["alternatives"],
