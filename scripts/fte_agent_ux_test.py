@@ -319,29 +319,38 @@ check("5f · high-confidence continue carries no confirmation notice",
 check("5d · quiet-link action wires to the same state machine",
       "fte_agent_action=explain.evidence" in app._agent_quiet_link("explain.evidence", "Verify source"))
 
-# 6. Step indicator (Step N of 5)
-check("6a · five tutor steps defined", agent_step(STAGE_OPENING)["total"] == 5)
-check("6b · opening is Step 1 of 5 · Understanding your assignment",
+# 6. Step indicator (Sprint 13: Step N of 7 guided journey)
+check("6a · seven tutor steps defined", agent_step(STAGE_OPENING)["total"] == 7)
+check("6b · opening is Step 1 of 7 · Assignment",
       agent_step(STAGE_OPENING)["number"] == 1 and
-      agent_step(STAGE_OPENING)["label"] == "Understanding your assignment")
-check("6c · periods is Step 2 of 5 · Checking your financial evidence",
+      agent_step(STAGE_OPENING)["label"] == "Assignment")
+check("6c · periods is Step 2 of 7 · Financial data",
       agent_step(STAGE_PERIODS)["number"] == 2 and
-      agent_step(STAGE_PERIODS)["label"] == "Checking your financial evidence")
-check("6d · explain/drivers/comparison is Step 3 of 5",
+      agent_step(STAGE_PERIODS)["label"] == "Financial data")
+check("6d · metric is Step 3 of 7 · Trends",
+      agent_step(STAGE_METRIC)["number"] == 3 and
+      agent_step(STAGE_METRIC)["label"] == "Trends")
+check("6e · explain/drivers/comparison is Step 4 of 7 · Why it changed",
       agent_step(STAGE_EXPLAIN)["number"] == agent_step(STAGE_DRIVERS)["number"] ==
-      agent_step(STAGE_COMPARISON)["number"] == 3)
-check("6e · excel is Step 4 of 5 · Reviewing the working model",
-      agent_step(STAGE_EXCEL)["number"] == 4 and
-      agent_step(STAGE_EXCEL)["label"] == "Reviewing the working model")
-check("6f · conclusion is Step 5 of 5 · Writing your conclusion",
-      agent_step(STAGE_CONCLUSION)["number"] == 5 and
-      agent_step(STAGE_CONCLUSION)["label"] == "Writing your conclusion")
-check("6i · tracker labels stay gerund (calm tutor tone)",
-      all(l["label"][:1].isupper() and l["label"].split()[0].endswith("ing") for l in AGENT_STEPS))
-check("6g · session view carries the step indicator",
+      agent_step(STAGE_COMPARISON)["number"] == 4 and
+      agent_step(STAGE_EXPLAIN)["label"] == "Why it changed")
+check("6f · evidence is Step 5 of 7 · Evidence",
+      agent_step(STAGE_EVIDENCE)["number"] == 5 and
+      agent_step(STAGE_EVIDENCE)["label"] == "Evidence")
+check("6g · excel/memo is Step 6 of 7 · Working model",
+      agent_step(STAGE_EXCEL)["number"] == 6 and
+      agent_step(STAGE_EXCEL)["label"] == "Working model")
+check("6h · conclusion is Step 7 of 7 · Student conclusion",
+      agent_step(STAGE_CONCLUSION)["number"] == 7 and
+      agent_step(STAGE_CONCLUSION)["label"] == "Student conclusion")
+check("6i · tracker labels match the sprint narrative",
+      [l["label"] for l in AGENT_STEPS] == [
+          "Assignment", "Financial data", "Trends", "Why it changed",
+          "Evidence", "Working model", "Student conclusion"])
+check("6j · session view carries the step indicator",
       v_open.get("step", {}).get("number") == 1 and
-      _drive(ws_demo, STAGE_CONCLUSION).get("step", {}).get("number") == 5)
-check("6h · app renders the muted step line",
+      _drive(ws_demo, STAGE_CONCLUSION).get("step", {}).get("number") == 7)
+check("6k · app renders the muted step line",
       f'Step {v_open["step"]["number"]} of {v_open["step"]["total"]}' in
       app._agent_step_html(v_open["step"]))
 

@@ -65,7 +65,7 @@ STAGE_EVIDENCE = "evidence"
 STAGE_DRIVERS = "drivers"
 STAGE_QUALITATIVE = "qualitative"
 STAGE_COMPARISON = "comparison"
-STAGE_EXTERNAL = "external"
+STAGE_EXTERNAL = "external"  # probe-top
 STAGE_EXCEL = "excel"
 STAGE_MEMO = "memo"
 STAGE_CONCLUSION = "conclusion"
@@ -109,36 +109,39 @@ _STAGE_PROGRESS: Dict[str, str] = {
     STAGE_CONCLUSION: "conclusion",
 }
 
-# Sprint 12.1 UX - five quiet tutor steps derived from the stage machine.
+# Sprint 13 - seven tutor steps matching the guided student journey:
+# Assignment -> Financial data -> Trends -> Why it changed -> Evidence ->
+# Working model -> Student conclusion.
 AGENT_STEPS: List[Dict[str, str]] = [
-    # Sprint 12.2 - gerund labels keep the tracker calm and tutor-like.
-    {"id": "understand", "label": "Understanding your assignment"},
-    {"id": "verify", "label": "Checking your financial evidence"},
-    {"id": "analyze", "label": "Analyzing the trends"},
-    {"id": "review", "label": "Reviewing the working model"},
-    {"id": "conclude", "label": "Writing your conclusion"},
+    {"id": "assignment", "label": "Assignment"},
+    {"id": "financials", "label": "Financial data"},
+    {"id": "trends", "label": "Trends"},
+    {"id": "why", "label": "Why it changed"},
+    {"id": "evidence", "label": "Evidence"},
+    {"id": "model", "label": "Working model"},
+    {"id": "conclusion", "label": "Student conclusion"},
 ]
 
 _STAGE_STEP: Dict[str, int] = {
     STAGE_OPENING: 0,
     STAGE_REQUIREMENTS: 0,
     STAGE_PERIODS: 1,
-    STAGE_METRIC: 1,
-    STAGE_CALCULATION: 1,
-    STAGE_EVIDENCE: 1,
     STAGE_EXTERNAL: 1,
-    STAGE_EXPLAIN: 2,
-    STAGE_DRIVERS: 2,
-    STAGE_QUALITATIVE: 2,
-    STAGE_COMPARISON: 2,
-    STAGE_EXCEL: 3,
-    STAGE_MEMO: 3,
-    STAGE_CONCLUSION: 4,
+    STAGE_METRIC: 2,
+    STAGE_EXPLAIN: 3,
+    STAGE_CALCULATION: 3,
+    STAGE_DRIVERS: 3,
+    STAGE_QUALITATIVE: 3,
+    STAGE_COMPARISON: 3,
+    STAGE_EVIDENCE: 4,
+    STAGE_EXCEL: 5,
+    STAGE_MEMO: 5,
+    STAGE_CONCLUSION: 6,
 }
 
 
 def agent_step(stage: Optional[str]) -> Dict[str, Any]:
-    """Deterministic muted 'Step N of 5' indicator for the current stage."""
+    """Deterministic muted 'Step N of 7' tutor indicator for the current stage."""
     idx = _STAGE_STEP.get(stage, 0)
     step = AGENT_STEPS[idx]
     return {
@@ -370,6 +373,54 @@ def _blocked_metrics(workspace: Dict[str, Any]) -> List[str]:
         str(r.get("requirement")) for r in _req_rows(workspace)
         if r.get("status") == "BLOCKED"
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 13 - student-facing confidence & status language
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_CLEAR = "clear"
+CONFIDENCE_CONFIRM = "needs_confirmation"
+CONFIDENCE_UNKNOWN = "cannot_determine"
+
+# Sprint 13 - every requirement carries an internal confidence/state; the
+# student only ever sees the friendly one-liner, never parser internals.
+_STATUS_STUDENT_LANGUAGE: Dict[str, str] = {
+    "VERIFIED": "Directly supported by the evidence.",
+    "DERIVED": "Calculated from verified figures.",
+    "EXTERNAL_DERIVED": "Calculated using a student-entered external value.",
+    "STUDENT_INPUT": "You entered this value yourself.",
+    "REVIEW_REQUIRED": "I found a possible figure, but the accounting label or structure is ambiguous. Please verify it before using it.",
+    "BLOCKED": "I don't have enough verified information to calculate this safely.",
+    "UNANALYZED": "No verified information is available for this item yet.",
+}
+
+
+def _status_student_language(status: str) -> str:
+    return _STATUS_STUDENT_LANGUAGE.get(str(status or ""), "")
+
+
+def _missing_facts_for(workspace: Dict[str, Any], metric: str) -> List[str]:
+    """Deterministic names of the missing/unreliable inputs for one metric,
+    used by the tutor-style blocked explanation. Never guesses."""
+    out: List[str] = []
+    calc = _calcs(workspace).get(metric)
+    if calc:
+        for i in (calc.get("inputs") or []):
+            v = i.get("value")
+            if v in (None, "", "—"):
+                name = str(i.get("metric") or i.get("key") or "")
+                if name and name not in out:
+                    out.append(name)
+    if len(out) < 3:
+        m_l = str(metric).lower()
+        for section in ("financial_data", "ratios"):
+            for item in ((workspace or {}).get("missing_data") or {}).get(section) or []:
+                s = str(item or "")
+                if s and (s.lower() in m_l or m_l in s.lower()):
+                    if s not in out:
+                        out.append(s)
+    return out[:3]
 
 
 # ---------------------------------------------------------------------------
@@ -625,19 +676,36 @@ def _content_opening(workspace: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _content_requirements(workspace: Dict[str, Any], requirements_text: str = "") -> Dict[str, Any]:
+    rec = parse_recovery(workspace, requirements_text)
+    uncertain_set = {str(t) for t in rec["uncertain"]}
+    review_set = {str(m) for m in rec["review_required"]}
+    blocked_set = set(_blocked_metrics(workspace))
     rows = []
     for r in _req_rows(workspace):
+        name = str(r.get("requirement") or "—")
+        status = str(r.get("status") or "—")
+        if name in uncertain_set or name in review_set:
+            confidence, emoji = CONFIDENCE_CONFIRM, "🟡"
+        elif name in blocked_set or status == "BLOCKED":
+            confidence, emoji = CONFIDENCE_UNKNOWN, "🔴"
+        else:
+            confidence, emoji = CONFIDENCE_CLEAR, "🟢"
         rows.append({
-            "requirement": str(r.get("requirement") or "—"),
-            "status": str(r.get("status") or "—"),
+            "requirement": name,
+            "status": status,
             "status_label": str(r.get("status_label") or r.get("status") or "—"),
+            "confidence": confidence,
+            "confidence_emoji": emoji,
+            "status_language": _status_student_language(status),
             "result": str(r.get("result") or "—"),
             "evidence": str(r.get("evidence") or r.get("detail") or ""),
         })
-    rec = parse_recovery(workspace, requirements_text)
     return {
         "rows": rows,
         "total": len(rows),
+        "clear_count": sum(1 for row in rows if row["confidence"] == CONFIDENCE_CLEAR),
+        "confirm_count": sum(1 for row in rows if row["confidence"] == CONFIDENCE_CONFIRM),
+        "unknown_count": sum(1 for row in rows if row["confidence"] == CONFIDENCE_UNKNOWN),
         "review_count": len(_review_required_metrics(workspace)),
         "blocked_count": len(_blocked_metrics(workspace)),
         # Sprint 12.1 - zero-panic parse recovery state.
@@ -690,6 +758,8 @@ def _metric_payload(workspace: Dict[str, Any], metric: str) -> Dict[str, Any]:
         "has_evidence": bool(facts_evidence),
         "qualitative": qual_row,
         "status_label": str((calc or {}).get("workspace_status_label") or status or "—"),
+        "status_language": _status_student_language(status),
+        "missing_facts": _missing_facts_for(workspace, metric),
     }
 
 
@@ -1039,11 +1109,13 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
             n_clear = len(rec["confirmed"])
             n_unc = len(items)
             word = "item" if n_unc == 1 else "items"
-            need_word = "needs" if n_unc == 1 else "need"
-            # Sprint 12.2 - medium confidence: counts of clear vs. unclear.
+            verb = "needs" if n_unc == 1 else "need"
+            # Sprint 13 - tutor-style: what was understood, what is unclear,
+            # and the single decision the student needs to make.
             return (
-                f"I found {n_clear} clear requirements and {n_unc} {word} that "
-                f"{need_word} confirmation — {item_txt}. Please confirm it before I continue."
+                f"I understood most of your assignment. I found {n_clear} clear "
+                f"requirements and {n_unc} {word} that {verb} confirmation: "
+                f"{item_txt}. Should I include it in your analysis?"
             )
         # Sprint 12.2 - low confidence: reassure, then ask, never a technical
         # failure message.
@@ -1068,16 +1140,25 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
     if stage == STAGE_METRIC:
         p = _metric_payload(workspace, metric or "")
         if p["is_blocked"]:
+            missing_txt = ""
+            if p.get("missing_facts"):
+                missing_txt = (
+                    " The figures I couldn't confirm: "
+                    + ", ".join(str(m) for m in p["missing_facts"]) + "."
+                )
             return (
-                f"{metric} cannot currently be calculated. Required inputs are "
-                "missing from the verified evidence, so I won't invent a value. "
-                "You can review what's missing or continue with the items that work."
+                f"I couldn't safely calculate {metric} — the required inputs are "
+                "missing or not reliable enough, so I don't have enough verified "
+                "information to work with safely."
+                f"{missing_txt} Next: verify the relevant figures, add an "
+                "external variable, or continue with the metrics that are supported."
             )
         if p["is_review"]:
             return (
-                f"I found an accounting label related to {metric} that I couldn't "
-                "normalize safely. I won't merge it automatically because doing so "
-                "could change your analysis."
+                f"I found a possible figure for {metric}, but the accounting "
+                "label or structure is ambiguous. Please verify it before using "
+                "it. Next: review the source evidence or continue with the "
+                "metrics that are supported."
             )
         change_txt = ""
         change = p.get("change")
@@ -1113,6 +1194,14 @@ def _message_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
             )
         else:
             msg += "Cause not established from permitted evidence."
+        if c["has_qualitative"] and not c["is_blocked"] and not c["is_review"]:
+            # Sprint 13 - learning layer: the agent teaches the reasoning,
+            # never writes the student's judgment.
+            msg += (
+                " Think about: what drove this — pricing, volume, operating "
+                "costs, or another factor disclosed in the evidence? "
+                "Your task: decide which explanation the report supports best."
+            )
         msg += " The explanation is evidence-first — I never invent a cause."
         return msg
     if stage == STAGE_CALCULATION:
@@ -1272,6 +1361,18 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
                 "id": "requirements.confirm", "label": "Confirm & Continue",
                 "hint": "Confirm the detected requirements and move on.",
             })
+            items = rec["uncertain"] + rec["review_required"]
+            for i, tok in enumerate(items[:2]):
+                choices.append({
+                    "id": f"requirements.include.{i}",
+                    "label": f"Yes, include “{tok}”",
+                    "hint": "Confirm this item and continue.",
+                })
+                choices.append({
+                    "id": f"requirements.exclude.{i}",
+                    "label": f"No, continue without “{tok}”",
+                    "hint": "Leave this item out and continue.",
+                })
             choices.append({
                 "id": "requirements.edit", "label": "Edit requirements",
                 "hint": "Correct the requirement wording.",
@@ -1493,18 +1594,129 @@ def _recommended_choice(state: Dict[str, Any], workspace: Dict[str, Any], requir
     return {"id": "continue", "label": "Continue", "hint": "Proceed."}
 
 
+def _comparison_biggest(workspace: Dict[str, Any]) -> Optional[str]:
+    """Canonical metric with the largest |value difference| in the active
+    comparison (ties broken alphabetically). None when not comparable."""
+    best = None
+    best_abs = -1.0
+    for r in _comparison_rows(workspace):
+        try:
+            va = float(str(r.get("value_a") or "0").replace(",", ""))
+            vb = float(str(r.get("value_b") or "0").replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        d = abs(va - vb)
+        if d > best_abs or (d == best_abs and str(r.get("canonical") or "") < (best or "")):
+            best_abs = d
+            best = str(r.get("canonical") or "")
+    return best or None
+
+
+def _suggested_questions(
+    stage: str,
+    workspace: Dict[str, Any],
+    metric: Optional[str] = None,
+    area: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Sprint 13 - contextual suggested questions. Deterministic, rotate with
+    the stage, capped so the workspace never becomes a button wall."""
+    out: List[Dict[str, Any]] = []
+
+    def add(cid: str, label: str, hint: str = "") -> None:
+        if cid and label and all(c["id"] != cid for c in out):
+            out.append({"id": cid, "label": label, "hint": hint})
+
+    top = _strongest_changes(workspace, 1)
+    top_m = str(top[0].get("metric")) if top else None
+
+    if stage == STAGE_OPENING:
+        add("opening.requirements", "Show me what the assignment requires")
+        if _comparison(workspace).get("active"):
+            add("opening.comparison", "Start with the company comparison")
+    elif stage in (STAGE_PERIODS, STAGE_METRIC):
+        if top_m and _metric_change(workspace, top_m):
+            add(f"suggest.explain.{top_m}", f"Why did {top_m} change?")
+        if _comparison(workspace).get("active"):
+            add("suggest.comparison", "Compare with the peer company")
+        if top_m:
+            add(f"suggest.evidence.{top_m}", "Verify the source")
+    elif stage in (STAGE_EXPLAIN, STAGE_DRIVERS, STAGE_QUALITATIVE):
+        if top_m:
+            add(f"suggest.evidence.{top_m}", "Show the evidence")
+            add(f"suggest.calculation.{top_m}", "Open the calculation")
+        else:
+            add("continue", "Continue")
+    elif stage == STAGE_EVIDENCE:
+        add("continue", "Continue to the driver analysis")
+        if top_m and _metric_change(workspace, top_m):
+            add(f"suggest.explain.{top_m}", "Explain why it changed")
+    elif stage == STAGE_COMPARISON:
+        biggest = _comparison_biggest(workspace)
+        if biggest:
+            add(f"suggest.explain.{biggest}", "Explain the biggest difference")
+            add(f"suggest.evidence.{biggest}", "Check the underlying figures")
+        add("suggest.conclusion", "Continue to the conclusion")
+    elif stage == STAGE_EXCEL:
+        add("excel.evidence", "Verify evidence first")
+        add("excel.understand", "Understand the model")
+        add("continue", "Continue in FT-E")
+    elif stage == STAGE_MEMO:
+        add("memo.conclusion", "Go to your conclusion")
+    elif stage == STAGE_CONCLUSION:
+        pass
+    return out[:3]
+
+
 def _alternative_choices(state: Dict[str, Any], workspace: Dict[str, Any], requirements_text: str = "") -> List[Dict[str, Any]]:
+    """Sprint 13 - one primary plus at most 1-2 quiet secondaries. Recovery
+    on the requirements stage keeps its yes/no/include/edit controls."""
     stage = state.get("stage")
     if stage == STAGE_CONCLUSION:
         return []
-    all_choices = _choices_for(stage, workspace, state.get("metric"), state.get("area"), requirements_text)
-    rec = _recommended_choice(state, workspace, requirements_text)
-    rec_id = rec["id"] if rec else None
-    alts = [c for c in all_choices if c["id"] != rec_id]
-    # Prefer meaningful actions over Back/Skip for the alternatives slot.
-    meaningful = [c for c in alts if c["id"] not in ("back", "skip", "continue", "explore")]
-    rest = [c for c in alts if c not in meaningful]
-    return (meaningful + rest)[:2]
+    if stage == STAGE_OPENING:
+        rec = _recommended_choice(state, workspace, requirements_text)
+        if rec and rec.get("id") == "opening.requirements":
+            return ([{"id": "opening.comparison", "label": "Start with the company comparison", "hint": "Compare with the peer company."}]
+                    if _comparison(workspace).get("active") else [])
+        return [{"id": "opening.requirements", "label": "Show me what the assignment requires", "hint": "Review the parsed requirement checklist."}]
+    if stage == STAGE_REQUIREMENTS:
+        rec = parse_recovery(workspace, requirements_text)
+        alts: List[Dict[str, Any]] = []
+        if rec["state"] == PARSE_PARTIAL:
+            items = rec["uncertain"] + rec["review_required"]
+            if items:
+                alts.append({
+                    "id": "requirements.include.0",
+                    "label": "Yes, include \u201c%s\u201d" % items[0],
+                    "hint": "Confirm this item and continue.",
+                })
+                alts.append({
+                    "id": "requirements.exclude.0",
+                    "label": "No, continue without \u201c%s\u201d" % items[0],
+                    "hint": "Leave this item out and continue.",
+                })
+            alts.append({
+                "id": "requirements.edit", "label": "Edit requirements",
+                "hint": "Correct the requirement wording.",
+            })
+        elif rec["state"] == PARSE_HIGH:
+            if _review_required_metrics(workspace) or _blocked_metrics(workspace):
+                alts.append({
+                    "id": "requirements.review", "label": "Review details",
+                    "hint": "Open the full checklist with evidence details.",
+                })
+            else:
+                alts.append({
+                    "id": "requirements.edit", "label": "Review requirements",
+                    "hint": "Review the requirement checklist.",
+                })
+        else:
+            alts.append({
+                "id": "requirements.edit", "label": "Edit requirements",
+                "hint": "Type or select the required metrics manually.",
+            })
+        return alts[:3]
+    return _suggested_questions(stage, workspace, state.get("metric"), state.get("area"))[:2]
 
 
 # ---------------------------------------------------------------------------
@@ -1549,6 +1761,7 @@ def apply_choice(
     state: Dict[str, Any],
     choice_id: str,
     workspace: Optional[Dict[str, Any]] = None,
+    requirements_text: str = "",
 ) -> Dict[str, Any]:
     """Deterministic state transition for a choice id. Unknown ids are
     ignored (fail-closed — the session never crashes or dead-ends)."""
@@ -1608,6 +1821,27 @@ def apply_choice(
             return dict(state)
         if sub == "review":
             return {**state, "stage": STAGE_EXPLORE_UI, "visited": visited}
+        if sub.startswith("include.") or sub.startswith("exclude."):
+            # Sprint 13 - per-item yes/no confirmation: the student decides
+            # on the uncertain item; the decision is recorded calmly and the
+            # agent continues with the verified workspace (never fabricates).
+            rec = parse_recovery(workspace or {}, requirements_text)
+            items = rec["uncertain"] + rec["review_required"]
+            try:
+                idx = int(sub.split(".", 1)[1])
+                tok = str(items[idx] or "this item")
+            except (IndexError, ValueError):
+                tok = "this item"
+            key = "included" if sub.startswith("include.") else "excluded"
+            prior = list(state.get(key) or [])
+            if tok not in prior:
+                prior.append(tok)
+            if sub.startswith("include."):
+                notice = "Got it. I'll use \u201c%s\u201d for the working model." % tok
+            else:
+                notice = "Understood \u2014 I'll continue without \u201c%s\u201d." % tok
+            new = go(STAGE_PERIODS if _period_list(workspace or {}) else STAGE_METRIC)
+            return {**new, key: prior, "notice": notice}
     if choice_id.startswith("period."):
         sub = choice_id.split(".", 1)[1]
         if sub == "continue":
@@ -1670,6 +1904,22 @@ def apply_choice(
         return go(STAGE_EVIDENCE, ev_metric)
     if choice_id == "memo.conclusion":
         return go(STAGE_CONCLUSION)
+
+    # Sprint 13 - contextual suggested-question targets (deterministic).
+    if choice_id.startswith("suggest."):
+        sub = choice_id.split(".", 1)[1]
+        if sub == "comparison":
+            return go(STAGE_COMPARISON)
+        if sub == "conclusion":
+            return go(STAGE_CONCLUSION)
+        if sub == "drivers":
+            return go(STAGE_DRIVERS)
+        if sub.startswith("explain."):
+            return go(STAGE_EXPLAIN, sub.split(".", 1)[1])
+        if sub.startswith("evidence."):
+            return go(STAGE_EVIDENCE, sub.split(".", 1)[1])
+        if sub.startswith("calculation."):
+            return go(STAGE_CALCULATION, sub.split(".", 1)[1])
 
     return dict(state)
 
@@ -1742,6 +1992,7 @@ def agent_session(
             "choices": [],
             "recommended": None,
             "alternatives": [],
+            "suggested": [],
             "progress": agent_progress(workspace, state),
             "guidance": {},
         }
@@ -1783,6 +2034,17 @@ def agent_session(
             guidance = {
                 "kind": "blocked",
                 "metric": metric,
+                "title": f"\U0001f534 {metric} is blocked",
+                "what": f"I couldn't safely calculate {metric}.",
+                "why": (
+                    "I don't have enough verified information — the required "
+                    "figures are missing or not reliable enough to work with safely."
+                ),
+                "next": (
+                    "Verify the relevant figures, add an external variable, or "
+                    "continue with the metrics that are supported."
+                ),
+                "missing": _missing_facts_for(workspace, metric),
                 "message": (
                     f"{metric} is blocked: required inputs are missing from the "
                     "verified evidence. I won't guess a value."
@@ -1792,6 +2054,20 @@ def agent_session(
             guidance = {
                 "kind": "review",
                 "metric": metric,
+                "title": f"\U0001f7e0 {metric} needs your review",
+                "what": (
+                    f"I found a possible figure for {metric}, but the accounting "
+                    "label or structure is ambiguous."
+                ),
+                "why": (
+                    "I won't merge it automatically because doing so could "
+                    "change your analysis."
+                ),
+                "next": (
+                    "Verify the figure before using it, or continue with the "
+                    "metrics that are supported."
+                ),
+                "missing": [],
                 "message": (
                     f"{metric} is flagged review-required — the label or "
                     "extraction couldn't be normalized safely."
@@ -1816,6 +2092,7 @@ def agent_session(
         "choices": _choices_for(stage, workspace, metric, area, requirements_text),
         "recommended": _recommended_choice(state, workspace, requirements_text),
         "alternatives": _alternative_choices(state, workspace, requirements_text),
+        "suggested": _suggested_questions(stage, workspace, metric, area),
         "progress": agent_progress(workspace, state),
         "guidance": guidance,
         "conflict_metrics": conflicts,

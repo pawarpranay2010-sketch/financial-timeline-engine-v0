@@ -1521,6 +1521,14 @@ _TERMINAL_CSS = """
   border-radius: 6px; padding: .5rem .75rem; margin: .1rem 0 .6rem;
   line-height: 1.5;
 }
+.fte-agent-tutor {
+  border-left: 3px solid; border-radius: 6px; padding: .6rem .85rem;
+  margin: .2rem 0 .6rem; line-height: 1.55; font-size: .88rem;
+}
+.fte-agent-tutor-blocked { border-color: var(--fte-blocked); background: rgba(255,99,99,.06); }
+.fte-agent-tutor-review { border-color: var(--fte-warn); background: rgba(255,180,60,.07); }
+.fte-agent-tutor-title { font-weight: 700; margin-bottom: .2rem; }
+.fte-agent-tutor-line { margin: .15rem 0; }
 .fte-agent-quiet-group { margin-top: .5rem; }
 .fte-agent-quiet-row { margin: .3rem 0; line-height: 1.5; }
 .fte-agent-quiet {
@@ -3507,7 +3515,7 @@ def _student_conclusion_evidence(workspace) -> list:
 # "Explore workspace". Identical UX for the API and Demo paths.
 
 
-def _agent_apply(choice_id, workspace):
+def _agent_apply(choice_id, workspace, requirements_text=""):
     """Apply one Assignment Agent choice and rerun (deterministic state
     machine -- never traps the student: Back / Skip / Explore always work)."""
     choice_id = str(choice_id or "")
@@ -3517,7 +3525,8 @@ def _agent_apply(choice_id, workspace):
         st.session_state["fte_agent_edit_reqs"] = True
         st.rerun()
         return
-    if choice_id in ("requirements.confirm", "requirements.continue", "requirements.review"):
+    if (choice_id in ("requirements.confirm", "requirements.continue", "requirements.review")
+            or choice_id.startswith(("requirements.include.", "requirements.exclude."))):
         st.session_state["fte_agent_edit_reqs"] = False
     if choice_id == "explore":
         st.session_state["fte_agent_explore"] = True
@@ -3528,7 +3537,8 @@ def _agent_apply(choice_id, workspace):
         st.rerun()
         return
     state = st.session_state.get("fte_agent_state") or fte_agent_initial_state()
-    st.session_state["fte_agent_state"] = fte_agent_apply_choice(state, choice_id, workspace)
+    st.session_state["fte_agent_state"] = fte_agent_apply_choice(
+        state, choice_id, workspace, requirements_text=requirements_text)
     st.rerun()
 
 
@@ -3544,7 +3554,7 @@ def _agent_header_html() -> str:
 
 
 def _agent_step_html(step) -> str:
-    """Muted 'Step N of 5 · label' tutor indicator (Sprint 12.1 UX)."""
+    """Muted 'Step N of 7 · label' tutor indicator (Sprint 13 UX)."""
     s = step or {}
     number = int(s.get("number") or 1)
     total = int(s.get("total") or 5)
@@ -3705,6 +3715,12 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 notes.append(f"🟠 `{html.escape(str(it))}` needs review")
             if notes:
                 st.markdown(" ".join(notes[:3]))
+            if pstate == "partial" and notes:
+                st.markdown(
+                    "**Should I include the item above?** Choose \u201cYes, include "
+                    "it\u201d or \u201cNo, continue without it\u201d below — or Edit "
+                    "requirements to correct the wording."
+                )
             if pstate == "partial" and uncertain:
                 st.markdown("---")
                 st.markdown("**Did your professor mean one of these?**")
@@ -3756,6 +3772,7 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 st.dataframe(pd.DataFrame([
                     {
                         "Requirement": r.get("requirement"),
+                        "Confidence": r.get("confidence_emoji"),
                         "Status": r.get("status_label"),
                         "Result": r.get("result"),
                     }
@@ -3818,16 +3835,8 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 f"{metric} moved {ch.get('change_display') or '—'} from "
                 f"{ch.get('from') or '—'} to {ch.get('to') or '—'}."
             )
-        if c.get("is_blocked"):
-            st.warning(
-                "Required inputs are missing from the verified evidence — "
-                "I won't guess a value. Enter an external variable or continue."
-            )
-        elif c.get("is_review"):
-            st.warning(
-                "The label/extraction couldn't be normalized safely — I won't "
-                "merge it automatically because doing so could change your analysis."
-            )
+        if c.get("status_language"):
+            st.caption(str(c["status_language"]))
         if c.get("excel_where"):
             st.caption(str(c["excel_where"]))
     elif stage == "explain":
@@ -4097,7 +4106,7 @@ def _render_agent_next_step(state, workspace, requirements_text="") -> None:
         if st.button(
             recommended.get("label"), key=key, use_container_width=True, type="primary"
         ):
-            _agent_apply(recommended.get("id"), workspace)
+            _agent_apply(recommended.get("id"), workspace, requirements_text)
         if recommended.get("hint"):
             st.caption(recommended.get("hint") or "")
         if alts:
@@ -4245,7 +4254,7 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     # Apply a quiet-link action (if any) through the same state machine.
     if st.session_state.get("fte_agent_pending"):
         pending = st.session_state.pop("fte_agent_pending")
-        _agent_apply(pending, workspace)
+        _agent_apply(pending, workspace, requirements_text)
 
     # Explore workspace: the full deterministic view, one click away.
     if st.session_state.get("fte_agent_explore"):
@@ -4265,9 +4274,31 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
         st.markdown(_agent_header_html(), unsafe_allow_html=True)
         st.markdown(_agent_step_html(view.get("step")), unsafe_allow_html=True)
         guidance = view.get("guidance") or {}
-        if guidance.get("kind") == "blocked":
-            st.warning(guidance.get("message"))
-        elif guidance.get("kind") == "review":
+        gkind = guidance.get("kind")
+        if gkind in ("blocked", "review"):
+            gtitle = html.escape(str(guidance.get("title") or (guidance.get("message") or "")))
+            gwhat = html.escape(str(guidance.get("what") or ""))
+            gwhy = html.escape(str(guidance.get("why") or ""))
+            gnext = html.escape(str(guidance.get("next") or ""))
+            gmiss = guidance.get("missing") or []
+            miss_html = ""
+            if gmiss:
+                miss_html = (
+                    '<div class="fte-agent-tutor-line"><b>Missing / unreliable:</b> '
+                    + html.escape(", ".join(str(m) for m in gmiss))
+                    + "</div>"
+                )
+            gcls = "blocked" if gkind == "blocked" else "review"
+            st.markdown(
+                f'<div class="fte-agent-tutor fte-agent-tutor-{gcls}">'
+                f'<div class="fte-agent-tutor-title">{gtitle}</div>'
+                f'<div class="fte-agent-tutor-line"><b>What happened:</b> {gwhat}</div>'
+                f'<div class="fte-agent-tutor-line"><b>Why it matters:</b> {gwhy}</div>'
+                f'<div class="fte-agent-tutor-line"><b>What you can do:</b> {gnext}</div>'
+                f'{miss_html}</div>',
+                unsafe_allow_html=True,
+            )
+        elif gkind in ("blocked", "review"):
             st.warning(guidance.get("message"))
         if guidance.get("conflicts"):
             st.warning(guidance.get("conflict_message"))
@@ -4283,7 +4314,6 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
             }
         _render_agent_stage_content(view.get("stage"), view.get("content") or {}, workspace, rows, facts_src, demo)
         st.markdown("---")
-        _render_agent_choices(view.get("stage"), view.get("choices") or [], workspace)
         _render_agent_next_step(state, workspace, requirements_text)
         _render_agent_controls(workspace)
 
