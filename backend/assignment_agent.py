@@ -471,6 +471,28 @@ _INSTRUCTION_WORDS = frozenset({
     "please", "the", "also", "then", "and", "over", "for", "of",
 })
 
+# Words that introduce a company name in assignment prose ("Analyze company
+# XYZ...", "the firm MSFT..."). An uppercase token directly after one of
+# these is the company the assignment is about — never a metric requirement
+# (Sprint 12.1: a WhatsApp-style brief that names the company must produce a
+# clean requirement confirmation, not an "is XYZ a requirement?" prompt).
+_COMPANY_WORDS = frozenset({
+    "company", "firm", "corporation", "corp", "inc", "ltd", "llc", "plc",
+    "limited", "holdings", "holding", "group", "conglomerate",
+    "enterprise", "enterprises", "industries", "partners", "solutions",
+    "technologies", "co", "business", "businesses",
+})
+
+
+def _follows_company_word(text: str, pos: int) -> bool:
+    """True when the word immediately before `pos` in `text` is a
+    company-name introducer (word-boundary safe: "company's ROE" is not
+    treated as a company reference)."""
+    m = re.search(r"([A-Za-z]+)[^A-Za-z]*$", text[:pos])
+    if not m:
+        return False
+    return m.group(1).lower() in _COMPANY_WORDS
+
 
 def _uncertain_tokens(requirements_text: str, confirmed: List[str]) -> List[str]:
     """Deterministic detection of metric-like assignment tokens that were
@@ -512,6 +534,11 @@ def _uncertain_tokens(requirements_text: str, confirmed: List[str]) -> List[str]
 
     # 1) uppercase acronyms in the original (case-preserved) text
     for m in _ACRONYM_RE.finditer(text):
+        # "Analyze company XYZ ..." — an acronym that directly follows a
+        # company-name word is the company, not a metric requirement. It is
+        # never surfaced for confirmation (Sprint 12.1 WhatsApp copy).
+        if _follows_company_word(text, m.start()):
+            continue
         add(m.group(1))
     # 2) metric-suffix phrases (e.g. "quick ratio", "inventory turnover").
     #    The regex can capture leading instruction words ("Calculate

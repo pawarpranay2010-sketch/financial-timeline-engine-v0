@@ -184,14 +184,23 @@ _FORMULA_INPUT_CANONICAL = {
 # "Debt-like" etc. from partial-word matching.
 _HYPHEN_RE = re.compile(r"[\u2010\u2011\u2012\u2013\u2014\u2212-]")
 
+# Invisible formatting characters that paste artifacts into WhatsApp-imported
+# text (zero-width space / joiner / non-joiner, word joiner, BOM). Each is
+# replaced with a single space so copy-paste line/word breaks resolve exactly
+# like typed text: "Profit\u200bMargin" -> "Profit Margin" (Sprint 12.1:
+# accidental formatting characters must never break metric detection).
+_INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+
 
 def _norm_label(label: Any) -> str:
     """Lower-case, strip and collapse whitespace for matching. Hyphen-like
     punctuation is normalized to a space so compound labels match
-    canonically (Sprint 11.1)."""
+    canonically (Sprint 11.1); invisible formatting characters are replaced
+    with spaces so pasted text resolves the same as typed text."""
     if label is None:
         return ""
     s = _HYPHEN_RE.sub(" ", str(label))
+    s = _INVISIBLE_CHARS_RE.sub(" ", s)
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
