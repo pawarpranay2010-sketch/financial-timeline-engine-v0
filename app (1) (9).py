@@ -3631,6 +3631,20 @@ def _render_memo_block(rows, memo_text, facts_src, workspace) -> None:
         _memo_metric_dialog(facts_src, [])
 
 
+def _fte_page_display(page) -> str:
+    """Presentation-only page normalization for dataframe columns: integer 40 becomes 40; missing or None becomes the dash character. The provenance model is never modified."""
+    if page is None:
+        return "—"
+    if isinstance(page, (int, float)) and not isinstance(page, bool):
+        if float(page).is_integer():
+            return str(int(page))
+        return str(page)
+    s = str(page)
+    if not s.strip() or s.strip().lower() in ("none", "null", "nan"):
+        return "—"
+    return s
+
+
 def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo) -> None:
     """Render the structured payload of one Assignment Agent stage."""
     c = content or {}
@@ -3902,7 +3916,7 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                     "Catalyst": q.get("catalyst"),
                     "Relationship": q.get("relationship_label"),
                     "Source": q.get("source"),
-                    "Page": q.get("page"),
+                    "Page": _fte_page_display(q.get("page")),
                 }
                 for q in qrows
             ]), use_container_width=True, hide_index=True)
@@ -4535,7 +4549,7 @@ def _render_student_assignment_workspace_legacy(module3_result, demo=False) -> N
                     "Relationship": q.get("relationship_label"),
                     "Evidence": q.get("evidence"),
                     "Source": q.get("source"),
-                    "Page": q.get("page"),
+                    "Page": _fte_page_display(q.get("page")),
                     "Confidence": q.get("confidence"),
                 }
                 for q in qrows
