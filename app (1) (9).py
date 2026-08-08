@@ -1965,6 +1965,7 @@ def _init_terminal_state() -> None:
         ("fte_assignment_workspace_open", False),
         ("fte_assignment_nonce", None),
         ("fte_demo_mode", False),
+        ("fte_ws_active", False),
         ("fte_demo_chat_messages", []),
         # Sprint 12 - Assignment Agent (progressive guided workspace).
         ("fte_agent_state", None),
@@ -3125,6 +3126,21 @@ def _fte_set_workspace(kind: str) -> None:
     st.session_state["fte_workspace"] = kind
     st.session_state["fte_page"] = "Financial Grid"
     st.session_state["fte_route"] = "workspace"
+    st.session_state["fte_ws_active"] = True
+
+
+def _restore_workspace_route() -> str:
+    """Sprint 12.2 - never strand a student mid-workspace at the start
+    screen. If the routing state fell back to the 'entrance' default while
+    an in-progress workspace session is still present (the explicit
+    fte_ws_active sentinel), restore the workspace route deterministically.
+    Fresh visitors and explicit sign-out/exit-demo (which clear the
+    sentinel) are unaffected."""
+    route = st.session_state.get("fte_route", "entrance")
+    if route == "entrance" and st.session_state.get("fte_ws_active"):
+        route = "demo" if st.session_state.get("fte_demo_mode") else "workspace"
+        st.session_state["fte_route"] = route
+    return route
 
 
 def _fte_display_name(email: str) -> str:
@@ -3283,6 +3299,7 @@ def _render_account_popover() -> None:
         if st.button("Sign out", key="fte_btn_signout", use_container_width=True):
             st.session_state["fte_route"] = "entrance"
             st.session_state["fte_workspace"] = None
+            st.session_state["fte_ws_active"] = False
             st.session_state["fte_user_name"] = ""
             st.session_state["fte_user_email"] = ""
             st.rerun()
@@ -3563,9 +3580,20 @@ def _agent_step_html(step) -> str:
 
 
 def _agent_quiet_link(choice_id, label) -> str:
-    """A quiet secondary action rendered as a real link (no button grid)."""
+    """A quiet secondary action rendered as a real link (no button grid).
+
+    Sprint 12.2: demo workspace links carry the fte_demo=1 marker so a
+    full-page navigation can rebuild demo routing state in environments
+    that do not preserve session state across reloads. Real-workspace
+    links keep the established query format; _reconstruct_demo_from_query
+    recognizes their fte_agent_action param as a workspace signal and
+    restores the workspace route on a full reload.
+    """
     cid = html.escape(str(choice_id or ""))
     lab = html.escape(str(label or "Open"))
+    if st.session_state.get("fte_demo_mode"):
+        prefix = "?fte_demo=1&fte_page=Assignment&"
+        return f'<a class="fte-agent-quiet" href="{prefix}fte_agent_action={cid}">{lab}</a>'
     return f'<a class="fte-agent-quiet" href="?fte_agent_action={cid}">{lab}</a>'
 
 
@@ -5577,38 +5605,69 @@ def _fte_goto_demo() -> None:
     """Enter Static Demo Mode (frontend routing state only)."""
     st.session_state["fte_route"] = "demo"
     st.session_state["fte_demo_mode"] = True
+    st.session_state["fte_ws_active"] = True
     st.session_state["fte_page"] = "Financial Grid"
     st.session_state["fte_memo_view_open"] = False
     st.session_state["fte_memo_metric_click"] = None
 
 
 def _reconstruct_demo_from_query() -> None:
-    """Reconstruct Demo-Mode session state when a demo metric click arrives
-    via the URL (?fte_demo=1&fte_metric=...) after a full page navigation.
+    """Rebuild routing state after a full-page navigation driven by a
+    workspace-generated link.
 
     Hosted/preview environments do not always restore session state on a
     full reload, so fte_route would otherwise fall back to the 'entrance'
-    default before main() routes — sending the user to the start screen.
-    This runs BEFORE any routing: it rebuilds the demo route, memo view and
-    static memo, transfers fte_metric into fte_memo_metric_click (the ONLY
-    role of that param), then consumes both params. It never touches real
-    (non-demo) sessions because their memo links never carry fte_demo=1.
+    default before main() routes — sending the student to the start screen
+    mid-workspace. Workspace links therefore carry explicit markers:
+
+      demo workspace links   ?fte_demo=1&fte_page=Assignment&...
+      real workspace links   ?fte_route=workspace&fte_page=Assignment&...
+      demo memo links        ?fte_demo=1&fte_metric=...
+
+    This runs BEFORE any routing: it rebuilds the route/page/memo state and
+    consumes the markers. The real-workspace marker only restores the route
+    when the session would otherwise fall back to the entrance default, so a
+    live session is never overridden. Demo reconstruction never touches real
+    (non-demo) sessions because their links never carry fte_demo=1.
     """
-    if not st.query_params.get("fte_demo"):
+    qp = st.query_params
+    if qp.get("fte_demo"):
+        st.session_state["fte_route"] = "demo"
+        st.session_state["fte_demo_mode"] = True
+        st.session_state["fte_memo_draft"] = _FTE_DEMO_MEMO
+        st.session_state["fte_memo_status"] = "ready"
+        qpage = qp.get("fte_page")
+        st.session_state["fte_page"] = str(qpage) if qpage else "Intelligence"
+        st.session_state["fte_memo_view_open"] = (
+            st.session_state.get("fte_page") == "Intelligence"
+        )
+        qm = qp.get("fte_metric")
+        if qm:
+            st.session_state["fte_memo_metric_click"] = str(qm)
+        for _p in ("fte_demo", "fte_metric", "fte_page"):
+            if _p in qp:
+                del qp[_p]
         return
-    st.session_state["fte_route"] = "demo"
-    st.session_state["fte_demo_mode"] = True
-    st.session_state["fte_page"] = "Intelligence"
-    st.session_state["fte_memo_view_open"] = True
-    st.session_state["fte_memo_draft"] = _FTE_DEMO_MEMO
-    st.session_state["fte_memo_status"] = "ready"
-    qm = st.query_params.get("fte_metric")
-    if qm:
-        st.session_state["fte_memo_metric_click"] = str(qm)
-    # Consume the URL trigger after transferring it — never reset the route.
-    for _p in ("fte_demo", "fte_metric"):
-        if _p in st.query_params:
-            del st.query_params[_p]
+    # Real-workspace signals: fte_agent_action / fte_metric are only ever
+    # generated inside the workspace, so their presence on a reload means
+    # the student was mid-workspace — restore the route instead of falling
+    # back to the entrance default. The params themselves are left in place
+    # for the workspace / memo handlers to consume.
+    if st.session_state.get("fte_route", "entrance") in (None, "entrance"):
+        if qp.get("fte_agent_action"):
+            st.session_state["fte_route"] = "workspace"
+            st.session_state["fte_page"] = "Assignment"
+        elif qp.get("fte_metric"):
+            st.session_state["fte_route"] = "workspace"
+    qr = qp.get("fte_route")
+    if qr and st.session_state.get("fte_route", "entrance") in (None, "entrance"):
+        st.session_state["fte_route"] = str(qr)
+        qpage = qp.get("fte_page")
+        if qpage:
+            st.session_state["fte_page"] = str(qpage)
+    for _p in ("fte_route", "fte_page"):
+        if _p in qp:
+            del qp[_p]
 
 
 def _demo_formula_target(q: str):
@@ -5779,10 +5838,12 @@ def _render_demo_workspace() -> None:
     ONLY the static pre-analyzed sample. No uploads, no ingestion, no AI,
     no user storage — every presentation component is the existing one."""
     st.session_state["fte_demo_mode"] = True
+    st.session_state["fte_ws_active"] = True
     if st.query_params.get("fte_exit_demo"):
         st.session_state["fte_demo_mode"] = False
         st.session_state["fte_route"] = "entrance"
         st.session_state["fte_workspace"] = None
+        st.session_state["fte_ws_active"] = False
         del st.query_params["fte_exit_demo"]
         st.rerun()
         return
@@ -5853,7 +5914,9 @@ def main():
     _init_terminal_state()
 
     # FT-E entrance flow (UI only — no real auth/storage in this phase).
-    route = st.session_state.get("fte_route", "entrance")
+    # Sprint 12.2: a workspace action must never strand the student at the
+    # start screen — restore the route when workspace state is still live.
+    route = _restore_workspace_route()
     if route == "entrance":
         _render_entrance()
         return
