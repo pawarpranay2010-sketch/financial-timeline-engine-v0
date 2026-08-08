@@ -30,6 +30,9 @@ PURE module — no Streamlit, no AI. Deterministic.
 from __future__ import annotations
 
 import io
+import re
+import zipfile
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import Workbook
@@ -351,6 +354,45 @@ def _qualitative_drivers_sheet(ws, workspace: Dict[str, Any]) -> None:
     _set_widths(ws, [16, 14, 12, 12, 10, 22, 22, 22, 46, 26, 8, 26, 12, 60])
 
 
+# Deterministic serialization: openpyxl stamps the current UTC time into
+# docProps/core.xml and into every ZIP entry header, which makes the byte
+# stream vary from run to run. Pin a fixed timestamp and re-serialize the
+# archive with stable entry times so generation is byte-identical. Sheet
+# content, formulas, and values are untouched.
+_FIXED_TS = (1980, 1, 1, 0, 0, 0)
+_FIXED_ISO = "1980-01-01T00:00:00Z"
+# Matches the W3CDTF timestamps openpyxl writes into docProps/core.xml.
+_CORE_TS_RE = re.compile(rb">\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z</dcterms:(created|modified)>")
+
+
+def _pin_document_properties(wb: Workbook) -> None:
+    """Pin docProps created to a fixed timestamp (deterministic). openpyxl's
+    writer re-stamps `modified` at save time, so that field is normalized in
+    the archive rewrite below."""
+    wb.properties.created = datetime(*_FIXED_TS)
+
+
+def _deterministic_zip(data: bytes) -> bytes:
+    """Re-serialize the xlsx container with fixed per-entry timestamps and a
+    fixed docProps/core.xml created/modified value so the byte stream is
+    identical across runs."""
+    out_bio = io.BytesIO()
+    with zipfile.ZipFile(out_bio, "w", zipfile.ZIP_DEFLATED) as out:
+        with zipfile.ZipFile(io.BytesIO(data), "r") as src:
+            for info in src.infolist():
+                raw = src.read(info.filename)
+                if info.filename == "docProps/core.xml":
+                    raw = _CORE_TS_RE.sub(
+                        lambda m: b">" + _FIXED_ISO.encode("utf-8") + b"</dcterms:" + m.group(1) + b">",
+                        raw,
+                    )
+                zinfo = zipfile.ZipInfo(info.filename, date_time=_FIXED_TS)
+                zinfo.compress_type = zipfile.ZIP_DEFLATED
+                zinfo.external_attr = info.external_attr
+                out.writestr(zinfo, raw)
+    return out_bio.getvalue()
+
+
 def build_excel_working_model(workspace: Dict[str, Any]) -> bytes:
     """Build the complete 7-sheet working model and return the raw .xlsx
     bytes (safe for st.download_button / file write)."""
@@ -377,7 +419,8 @@ def build_excel_working_model(workspace: Dict[str, Any]) -> bytes:
     ws7 = wb.create_sheet("Qualitative Drivers")
     _qualitative_drivers_sheet(ws7, workspace)
 
+    _pin_document_properties(wb)
     bio = io.BytesIO()
     wb.save(bio)
     bio.seek(0)
-    return bio.getvalue()
+    return _deterministic_zip(bio.getvalue())
