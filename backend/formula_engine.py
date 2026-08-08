@@ -50,6 +50,19 @@ from backend.evidence_resolver import (
 )
 from backend.formula_engine_cpp import cpp_calculate
 
+# Sprint 12A - optional delegation to the deterministic maths engine
+# (backend/maths). Additive only: the legacy formulas and every existing
+# behavior below are untouched. The import is guarded so a maths-engine
+# problem can never break the existing Formula Engine.
+try:  # pragma: no cover - defensive import guard
+    from backend.maths.adapter import (
+        can_solve_with_graph,
+        calculate_with_graph,
+    )
+    _MATHS_DELEGATION_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _MATHS_DELEGATION_AVAILABLE = False
+
 
 # ---------------------------------------------------------------
 # Status model (adapted from the existing FT-E classification)
@@ -486,8 +499,18 @@ def calculate_metric(
 
     # -----------------------------------------------------------
     # Step 2 — formula lookup; unsupported metrics stay UNANALYZED.
+    # Sprint 12A: NEW-registry concepts explicitly registered with the
+    # maths engine are delegated to the deterministic graph engine
+    # (additive - the existing 9 formulas and the UNANALYZED behavior for
+    # every unregistered metric are unchanged).
     # -----------------------------------------------------------
     if reg is None:
+        if _MATHS_DELEGATION_AVAILABLE and can_solve_with_graph(metric_key):
+            delegated = calculate_with_graph(
+                metric_key, financial_data, context
+            )
+            if delegated is not None:
+                return delegated
         return {
             "metric_key": metric_key,
             "display_name": metric_key,

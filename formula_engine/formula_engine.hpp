@@ -19,6 +19,14 @@
 // policy is applied ONLY at the output layer. Full precision is preserved
 // in `value`. No AI-generated formulas are ever executed — the Formula
 // Registry contains only explicitly approved formulas.
+//
+// Sprint 12A — extended registry (backward compatible):
+//   The legacy 9 formulas are UNCHANGED. A second, additive registry of
+//   declarative (op-driven) formulas (Profit, Loss, Gross Profit, Working
+//   Capital, Asset Turnover, Equity Multiplier, Profit Margin) is provided
+//   ALONGSIDE the legacy registry, together with a reverse-solving entry
+//   point (solve_metric). `--registry` keeps returning exactly the legacy
+//   9 formulas; `--registry-ext` lists the extended ones.
 // ============================================================================
 #ifndef FTE_FORMULA_ENGINE_HPP
 #define FTE_FORMULA_ENGINE_HPP
@@ -81,17 +89,34 @@ struct FormulaDef {
     std::string display_name;
     std::vector<std::string> required_inputs;
     std::string formula;           // human-readable representation
-    std::string kind;              // "percent" | "ratio"
+    std::string kind;              // "percent" | "ratio" | "amount"
     int precision;                 // display rounding digits
     std::string period_mode;       // "same" | "different" | "span"
     std::vector<std::string> denominator_inputs;
+    // Sprint 12A - optional declarative operator for the extended
+    // registry. Empty for the legacy formulas (which keep their
+    // dedicated compute branches). "sub" | "add" | "mul" | "div"
+    // with target = inputs[0] <op> inputs[1]. Reverse solving uses the
+    // matching algebraic inverse.
+    std::string op;
+    // Sprint 12A - canonical target CONCEPT name (the key under which the
+    // formula's output fact appears). Empty for legacy formulas where
+    // key == concept.
+    std::string target;
 };
 
 // The approved formulas ONLY (ROE, ROA, Profit Margin, Operating Margin,
 // Current Ratio, Debt to Equity, Revenue Growth, EPS Growth, CAGR).
+// This view is UNCHANGED by Sprint 12A - it is the legacy compatibility
+// surface (the existing `--registry` contract stays at 9 formulas).
 const std::vector<FormulaDef>& registry();
 
-// Look up a formula by canonical key; nullptr when unknown.
+// Sprint 12A - extended registry: new declarative (op-driven) formulas
+// added ALONGSIDE the legacy 9. Never modifies the legacy registry.
+const std::vector<FormulaDef>& extended_registry();
+
+// Look up a formula by canonical key (legacy registry only); nullptr when
+// unknown.
 const FormulaDef* registry_lookup(const std::string& metric_key);
 
 // ---------------------------------------------------------------------------
@@ -102,6 +127,13 @@ const FormulaDef* registry_lookup(const std::string& metric_key);
 // ---------------------------------------------------------------------------
 Result calculate_metric(const std::string& metric_key,
                         const std::map<std::string, Fact>& facts);
+
+// Sprint 12A - reverse solving: solve one variable of a registered
+// op-driven formula from the other variables. Only mathematically valid,
+// unambiguous inverses are supported; anything else is BLOCKED.
+Result solve_metric(const std::string& metric_key,
+                    const std::string& solve_for,
+                    const std::map<std::string, Fact>& facts);
 
 // ---------------------------------------------------------------------------
 // CLI helpers (JSON stdin -> JSON stdout).

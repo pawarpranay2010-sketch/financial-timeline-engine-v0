@@ -7,8 +7,18 @@
 // web and never decides source trustworthiness — that is Sprint 6.5's job.
 //
 // Interface: a CLI reading one JSON document on stdin and writing one JSON
-// document on stdout. Also supports `--registry` (formula metadata as JSON)
-// and `--selftest` (built-in assertions; exit code 0 on success).
+// document on stdout. Also supports `--registry` (legacy formula metadata),
+// `--registry-ext` (Sprint 12A extended formula metadata), `--selftest`
+// (built-in assertions; exit code 0 on success) and `--version`.
+//
+// Sprint 12A additions (backward compatible):
+//   * extended_registry() — additive declarative (op-driven) formulas
+//     (Profit, Loss, Gross Profit, Working Capital, Asset Turnover,
+//     Equity Multiplier, Profit Margin). The legacy 9 are untouched and
+//     `--registry` keeps returning exactly 9 entries.
+//   * solve_metric() — reverse solving for op-driven formulas using the
+//     algebraic inverse, only where a unique solution exists.
+//   * run_cli accepts an optional "solve_for" field.
 // ============================================================================
 #include "formula_engine.hpp"
 
@@ -300,7 +310,7 @@ static std::string format_fixed(long double value, int precision) {
     return buf;
 }
 
-// Display policy: percent-kind metrics show "36.61%", ratio-kind "1.40".
+// Display policy: percent-kind metrics show "36.61%", ratio/amount plain.
 static std::string display_value(long double raw_value, const FormulaDef& def) {
     long double shown = raw_value;
     if (def.kind == "percent") shown *= 100.0L;
@@ -309,7 +319,7 @@ static std::string display_value(long double raw_value, const FormulaDef& def) {
 }
 
 // ---------------------------------------------------------------------------
-// Formula Registry — the approved formulas ONLY.
+// Formula Registry — the approved formulas ONLY (legacy 9, unchanged).
 // ---------------------------------------------------------------------------
 
 static std::vector<FormulaDef> build_registry() {
@@ -348,6 +358,61 @@ const std::vector<FormulaDef>& registry() { return registry_storage(); }
 const FormulaDef* registry_lookup(const std::string& metric_key) {
     for (const auto& def : registry_storage()) {
         if (def.key == metric_key) return &def;
+    }
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 12A — extended registry (additive; op-driven declarative formulas).
+// The legacy registry above is untouched.
+// ---------------------------------------------------------------------------
+// op semantics (required_inputs[0] <op> required_inputs[1]):
+//   sub  target = a - b    inverses: a = target + b ; b = a - target
+//   add  target = a + b    inverses: a = target - b ; b = target - a
+//   mul  target = a * b    inverses: a = target / b ; b = target / a
+//   div  target = a / b    inverses: a = target * b ; b = a / target
+// `required_inputs` follows the ORDER OF THE EXPRESSION (left operand
+// first), so "Expenses - Revenue" is stored as {"Expenses", "Revenue"}.
+// ---------------------------------------------------------------------------
+
+static std::vector<FormulaDef> build_extended_registry() {
+    // FormulaDef layout: {key, display_name, required_inputs, formula,
+    // kind, precision, period_mode, denominator_inputs, op, target}.
+    // `target` is the canonical CONCEPT name (the key under which the
+    // formula's output fact appears in the pipeline fact map), which
+    // differs from the formula `key` (e.g. PROFIT -> "Profit").
+    return {
+        {"PROFIT", "Profit", {"Revenue", "Expenses"},
+         "Revenue − Expenses", "amount", 2, "same", {}, "sub", "Profit"},
+        {"LOSS", "Loss", {"Expenses", "Revenue"},
+         "Expenses − Revenue", "amount", 2, "same", {}, "sub", "Loss"},
+        {"GROSS_PROFIT", "Gross Profit", {"Revenue", "Cost of Sales"},
+         "Revenue − Cost of Sales", "amount", 2, "same", {}, "sub", "Gross Profit"},
+        {"WORKING_CAPITAL", "Working Capital", {"Current Assets", "Current Liabilities"},
+         "Current Assets − Current Liabilities", "amount", 2, "same", {}, "sub", "Working Capital"},
+        {"ASSET_TURNOVER", "Asset Turnover", {"Revenue", "Assets"},
+         "Revenue ÷ Assets", "ratio", 2, "same", {"Assets"}, "div", "Asset Turnover"},
+        {"EQUITY_MULTIPLIER", "Equity Multiplier", {"Assets", "Equity"},
+         "Assets ÷ Equity", "ratio", 2, "same", {"Equity"}, "div", "Equity Multiplier"},
+        {"PROFIT_MARGIN", "Profit Margin (P&L)", {"Profit", "Revenue"},
+         "Profit ÷ Revenue", "percent", 2, "same", {"Revenue"}, "div", "Profit Margin"},
+    };
+}
+
+static const std::vector<FormulaDef>& extended_registry_storage() {
+    static const std::vector<FormulaDef> kExtended = build_extended_registry();
+    return kExtended;
+}
+
+const std::vector<FormulaDef>& extended_registry() { return extended_registry_storage(); }
+
+// Look up legacy first, then extended (additive; legacy wins on key
+// collisions so existing behavior is never shadowed).
+static const FormulaDef* lookup_any(const std::string& metric_key) {
+    const FormulaDef* def = registry_lookup(metric_key);
+    if (def != nullptr) return def;
+    for (const auto& d : extended_registry_storage()) {
+        if (d.key == metric_key) return &d;
     }
     return nullptr;
 }
@@ -475,8 +540,42 @@ static Result validate(const FormulaDef& def,
 // Deterministic arithmetic (long double; display rounding at output only)
 // ---------------------------------------------------------------------------
 
+// Sprint 12A — generic op-driven arithmetic for the extended registry.
+static Result compute_generic(const FormulaDef& def,
+                              const std::map<std::string, Fact>& facts) {
+    auto val = [&facts](const std::string& k) {
+        return facts.at(k).value;
+    };
+    const std::string& a = def.required_inputs[0];
+    const std::string& b = def.required_inputs[1];
+    long double raw = 0.0L;
+    if (def.op == "sub") {
+        raw = val(a) - val(b);
+    } else if (def.op == "add") {
+        raw = val(a) + val(b);
+    } else if (def.op == "mul") {
+        raw = val(a) * val(b);
+    } else if (def.op == "div") {
+        raw = val(a) / val(b);  // zero denominator already rejected in validate()
+    } else {
+        return blocked("unsupported operation: " + def.op);
+    }
+    Result r;
+    r.status = Status::DERIVED_VERIFIED;
+    r.value = raw;
+    r.has_value = true;
+    r.display_value = display_value(raw, def);
+    r.calculation_steps.push_back(def.display_name + " = " + def.formula);
+    r.calculation_steps.push_back(def.display_name + " = " + r.display_value);
+    return r;
+}
+
 static Result compute(const FormulaDef& def,
                       const std::map<std::string, Fact>& facts) {
+    // Sprint 12A — op-driven formulas take the generic arithmetic path.
+    if (!def.op.empty()) {
+        return compute_generic(def, facts);
+    }
     auto val = [&facts](const std::string& k) {
         return facts.at(k).value;
     };
@@ -571,7 +670,9 @@ static std::string build_lineage(const FormulaDef& def,
 
 Result calculate_metric(const std::string& metric_key,
                         const std::map<std::string, Fact>& facts) {
-    const FormulaDef* def = registry_lookup(metric_key);
+    // Sprint 12A — extended formulas are reachable through the same entry
+    // point; the legacy 9 keep their dedicated path (additive only).
+    const FormulaDef* def = lookup_any(metric_key);
     if (def == nullptr) {
         Result r;
         r.status = Status::UNANALYZED;
@@ -594,6 +695,123 @@ Result calculate_metric(const std::string& metric_key,
     c.status = external ? Status::EXTERNAL_DERIVED : Status::DERIVED_VERIFIED;
     c.lineage = build_lineage(*def, facts, c.display_value);
     return c;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 12A — reverse solving for op-driven formulas.
+// Only mathematically valid, unambiguous algebraic inverses are applied;
+// anything else is BLOCKED. Percent-kind formulas store their target as a
+// percentage number, so the inverse converts it back to a fraction
+// (target_value / 100) before it is used as a factor.
+// ---------------------------------------------------------------------------
+
+Result solve_metric(const std::string& metric_key,
+                    const std::string& solve_for,
+                    const std::map<std::string, Fact>& facts) {
+    const FormulaDef* def = lookup_any(metric_key);
+    if (def == nullptr) {
+        Result r;
+        r.status = Status::UNANALYZED;
+        return r;
+    }
+    if (def->op.empty()) {
+        return blocked("No registered inverse relationship for " + solve_for +
+                       " in " + metric_key + ".");
+    }
+    // The formula's target CONCEPT (key under which the pipeline stores
+    // the output fact) - falls back to the formula key for formulas that
+    // did not declare a distinct target.
+    const std::string target_key = def->target.empty() ? def->key : def->target;
+    const std::string& a = def->required_inputs[0];
+    const std::string& b = def->required_inputs[1];
+
+    auto need = [&facts](const std::string& k) -> bool {
+        auto it = facts.find(k);
+        return it != facts.end() && it->second.has_value;
+    };
+    auto val = [&facts](const std::string& k) -> long double {
+        return facts.at(k).value;
+    };
+
+    // Forward direction: solving for the formula's own target concept
+    // (matched by concept name when declared, else by formula key).
+    if (solve_for == def->key || solve_for == target_key) {
+        if (!need(a) || !need(b)) {
+            return blocked(target_key + " is unavailable from permitted evidence sources.");
+        }
+        return compute_generic(*def, facts);
+    }
+
+    // Target value, converted to a fraction for percent-kind formulas.
+    auto target_value = [&]() -> long double {
+        long double tv = val(target_key);
+        if (def->kind == "percent") tv /= 100.0L;
+        return tv;
+    };
+
+    long double result = 0.0L;
+    if (solve_for == a) {
+        if (!need(target_key) || !need(b)) {
+            return blocked("Cannot solve for " + solve_for + ": required input is unavailable from permitted evidence sources.");
+        }
+        if (def->op == "sub") {
+            result = target_value() + val(b);
+        } else if (def->op == "add") {
+            result = target_value() - val(b);
+        } else if (def->op == "mul") {
+            if (val(b) == 0.0L) {
+                return blocked(b + " is zero — cannot solve for " + a + ".");
+            }
+            result = target_value() / val(b);
+        } else if (def->op == "div") {
+            result = target_value() * val(b);
+        } else {
+            return blocked("unsupported operation: " + def->op);
+        }
+    } else if (solve_for == b) {
+        if (!need(target_key) || !need(a)) {
+            return blocked("Cannot solve for " + solve_for + ": required input is unavailable from permitted evidence sources.");
+        }
+        if (def->op == "sub") {
+            result = val(a) - target_value();
+        } else if (def->op == "add") {
+            result = target_value() - val(a);
+        } else if (def->op == "mul") {
+            if (val(a) == 0.0L) {
+                return blocked(a + " is zero — cannot solve for " + b + ".");
+            }
+            result = target_value() / val(a);
+        } else if (def->op == "div") {
+            if (target_value() == 0.0L) {
+                return blocked(target_key + " is zero — cannot solve for " + b + ".");
+            }
+            result = val(a) / target_value();
+        } else {
+            return blocked("unsupported operation: " + def->op);
+        }
+    } else {
+        return blocked(solve_for + " is not a variable of " + metric_key + ".");
+    }
+
+    Result r;
+    r.status = Status::DERIVED_VERIFIED;
+    r.value = result;
+    r.has_value = true;
+    // Solved variables are plain amounts/ratios — never percent display.
+    r.display_value = format_fixed(result, def->precision);
+    r.calculation_steps.push_back("solve " + solve_for + " from " +
+                                  def->display_name + " = " + def->formula);
+    r.calculation_steps.push_back(solve_for + " = " + r.display_value);
+    std::ostringstream os;
+    os << solve_for << " (solved from " << def->display_name << " = "
+       << def->formula << ")\n";
+    for (const auto& kv : facts) {
+        os << "├── " << kv.first << " = "
+           << format_fixed(kv.second.value, 2) << "\n";
+    }
+    os << "└── Result: " << r.display_value << "\n";
+    r.lineage = os.str();
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +851,11 @@ std::string run_cli(const std::string& stdin_json) {
     }
     std::string metric_key = metric_v->str;
 
+    std::string solve_for;
+    if (const json::Value* s = root.get("solve_for")) {
+        if (s->type == json::Value::STR) solve_for = s->str;
+    }
+
     std::map<std::string, Fact> facts;
     if (const json::Value* inputs = root.get("inputs")) {
         if (inputs->type == json::Value::OBJ) {
@@ -644,7 +867,9 @@ std::string run_cli(const std::string& stdin_json) {
         }
     }
 
-    Result r = calculate_metric(metric_key, facts);
+    Result r = solve_for.empty()
+        ? calculate_metric(metric_key, facts)
+        : solve_metric(metric_key, solve_for, facts);
 
     json::Value out = json::object();
     out.obj["status"] = json::string(status_name(r.status));
@@ -666,7 +891,7 @@ std::string run_cli(const std::string& stdin_json) {
     return json::stringify(out);
 }
 
-// `--registry`: formula metadata as JSON (keys, required inputs, formula).
+// `--registry`: legacy formula metadata as JSON (exactly the legacy 9).
 static std::string registry_json() {
     json::Value arr = json::array();
     for (const auto& def : registry()) {
@@ -677,6 +902,26 @@ static std::string registry_json() {
         o.obj["unit"] = json::string(def.kind);
         o.obj["precision"] = json::number(def.precision);
         o.obj["period_mode"] = json::string(def.period_mode);
+        json::Value req = json::array();
+        for (const auto& k : def.required_inputs) req.arr.push_back(json::string(k));
+        o.obj["required_inputs"] = req;
+        arr.arr.push_back(o);
+    }
+    return json::stringify(arr);
+}
+
+// `--registry-ext`: Sprint 12A extended formula metadata as JSON.
+static std::string extended_registry_json() {
+    json::Value arr = json::array();
+    for (const auto& def : extended_registry()) {
+        json::Value o = json::object();
+        o.obj["metric_key"] = json::string(def.key);
+        o.obj["display_name"] = json::string(def.display_name);
+        o.obj["formula"] = json::string(def.formula);
+        o.obj["unit"] = json::string(def.kind);
+        o.obj["precision"] = json::number(def.precision);
+        o.obj["period_mode"] = json::string(def.period_mode);
+        o.obj["op"] = json::string(def.op);
         json::Value req = json::array();
         for (const auto& k : def.required_inputs) req.arr.push_back(json::string(k));
         o.obj["required_inputs"] = req;
@@ -745,6 +990,49 @@ static int selftest() {
 
     expect(calculate_metric("DCF", base).status == Status::UNANALYZED, "unknown -> UNANALYZED");
 
+    // ---- Sprint 12A — extended registry + reverse solving (additive) ----
+    std::map<std::string, Fact> pnl = facts_of({
+        {"Revenue", 1000.0L}, {"Expenses", 800.0L},
+        {"Profit", 200.0L}, {"Loss", 0.0L},
+    });
+    expect(calculate_metric("PROFIT", pnl).display_value == "200.00", "PROFIT forward");
+    expect(solve_metric("PROFIT", "Expenses", pnl).display_value == "800.00", "PROFIT reverse Expenses");
+    expect(solve_metric("PROFIT", "Revenue", pnl).display_value == "1000.00", "PROFIT reverse Revenue");
+
+    std::map<std::string, Fact> lossf = facts_of({
+        {"Revenue", 1000.0L}, {"Expenses", 1200.0L}, {"Loss", 200.0L},
+    });
+    expect(calculate_metric("LOSS", lossf).display_value == "200.00", "LOSS forward");
+    expect(solve_metric("LOSS", "Expenses", lossf).display_value == "1200.00", "LOSS reverse Expenses (Revenue + Loss)");
+    expect(solve_metric("LOSS", "Revenue", lossf).display_value == "1000.00", "LOSS reverse Revenue");
+
+    std::map<std::string, Fact> at = facts_of({
+        {"Revenue", 1000.0L}, {"Assets", 2000.0L}, {"Asset Turnover", 0.5L},
+    });
+    expect(calculate_metric("ASSET_TURNOVER", at).display_value == "0.50", "Asset Turnover forward");
+    expect(solve_metric("ASSET_TURNOVER", "Revenue", at).display_value == "1000.00", "AT reverse Revenue");
+    expect(solve_metric("ASSET_TURNOVER", "Assets", at).display_value == "2000.00", "AT reverse Assets");
+
+    std::map<std::string, Fact> em = facts_of({
+        {"Assets", 2000.0L}, {"Equity", 500.0L}, {"Equity Multiplier", 4.0L},
+    });
+    expect(calculate_metric("EQUITY_MULTIPLIER", em).display_value == "4.00", "Equity Multiplier forward");
+
+    std::map<std::string, Fact> pm = facts_of({
+        {"Profit", 200.0L}, {"Revenue", 1000.0L}, {"Profit Margin", 20.0L},
+    });
+    expect(calculate_metric("PROFIT_MARGIN", pm).display_value == "20.00%", "Profit Margin forward");
+    expect(solve_metric("PROFIT_MARGIN", "Profit", pm).display_value == "200.00", "PM reverse Profit");
+    expect(solve_metric("PROFIT_MARGIN", "Revenue", pm).display_value == "1000.00", "PM reverse Revenue");
+
+    std::map<std::string, Fact> zero_assets = facts_of({
+        {"Revenue", 1000.0L}, {"Assets", 0.0L},
+    });
+    expect(calculate_metric("ASSET_TURNOVER", zero_assets).status == Status::BLOCKED,
+            "extended zero denom -> BLOCKED");
+    expect(solve_metric("PROFIT", "DCF", pnl).status == Status::BLOCKED,
+            "solve for non-variable -> BLOCKED");
+
     if (failures == 0) {
         std::cout << "SELFTEST: ALL OK\n";
     } else {
@@ -760,11 +1048,15 @@ int main(int argc, char** argv) {
         std::cout << fte::registry_json() << "\n";
         return 0;
     }
+    if (argc > 1 && std::strcmp(argv[1], "--registry-ext") == 0) {
+        std::cout << fte::extended_registry_json() << "\n";
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0) {
         return fte::selftest();
     }
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
-        std::cout << "fte-formula-engine 1.0.0 (Sprint 7 C++ deterministic engine)\n";
+        std::cout << "fte-formula-engine 1.0.0 (Sprint 7 C++ deterministic engine + Sprint 12A extended registry)\n";
         return 0;
     }
     // Default: read one JSON document from stdin, write one to stdout.

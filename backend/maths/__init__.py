@@ -135,6 +135,89 @@ from backend.maths.adjustments import (
     resolve_with_adjustments,
 )
 
+# ---------------------------------------------------------------------------
+# Sprint 12C - Evidence-Aware Decision Graph & Production Integration
+# ---------------------------------------------------------------------------
+# Deterministic evidence/provenance/decision/Excel layer on top of the 12A
+# graph and 12B reasoning. Additive only: no 12A/12B behavior is changed;
+# the C++ deterministic engine remains the mathematical authority.
+from backend.maths.evidence import (
+    ALLOWED_SOURCE_TIERS,
+    EvidenceRef,
+    EvidenceTrace,
+    ExternalEvidenceRecord,
+    FORBIDDEN_SOURCE_TIERS,
+    TIER_1_DOCUMENT,
+    TIER_2_APPENDIX,
+    TIER_3_REGULATORY_API,
+    TIER_4_FORBIDDEN,
+    describe_hierarchy,
+    external_record_from_fact,
+    is_allowed_source,
+    render_evidence_tree,
+    tier_of,
+    trace_leaves,
+)
+from backend.maths.provenance import (
+    GATE_BLOCKED,
+    GATE_PASS,
+    GATE_REVIEW,
+    ProvenanceCheck,
+    ProvenanceGate,
+    ProvenanceVerdict,
+    validate_provenance,
+)
+from backend.maths.extended_registry import (
+    CAGR,
+    CAGR_BEGINNING,
+    CAGR_ENDING,
+    CAGR_SPAN,
+    CURRENT_RATIO,
+    DEBT,
+    DEBT_TO_EQUITY,
+    EBITDA,
+    EBITDA_MARGIN,
+    EPS,
+    EXTENDED_FORMULA_METADATA,
+    EXTENDED_REGISTRY,
+    GROSS_MARGIN,
+    GROSS_PROFIT,
+    OPERATING_MARGIN,
+    OPERATING_PROFIT,
+    ROA,
+    ROE,
+    SHARES_OUTSTANDING,
+    build_extended_registry,
+    cagr_span_from_facts,
+    derive_cagr_span,
+    excel_template_for,
+    extended_registry,
+    metadata_for,
+)
+from backend.maths.excel_compiler import (
+    ExcelFormula,
+    ExcelLineageCompiler,
+    compile_excel_formula,
+    render_excel_lineage_text,
+    resolve_cell_reference,
+)
+from backend.maths.decision_graph import (
+    ADJUSTMENT_REQUIRED,
+    DECISION_STATES,
+    DecisionGraph,
+    DecisionNode,
+    EVIDENCE_CONFLICT,
+    INSUFFICIENT_EVIDENCE,
+    METRIC_AVAILABLE,
+    METRIC_BLOCKED,
+    METRIC_DERIVED,
+    METRIC_RECONCILED,
+    METRIC_STUDENT_INPUT,
+    RECONCILIATION_REQUIRED,
+    decide_state,
+    evaluate_metric,
+)
+
 __all__ = [
     # exceptions
     "MathsEngineError", "RegistrationError", "UnregisteredFormulaError",
@@ -176,4 +259,32 @@ __all__ = [
     "UNEXPECTED_SIGN", "MISSING_DEPENDENCY", "ZERO_DENOMINATOR",
     "SCALE_MISMATCH", "UNSUPPORTED_LABEL", "CONFLICTING_PROVENANCE",
     "KNOWN_CONCEPTS", "NON_NEGATIVE_CONCEPTS",
+    # ---- Sprint 12C evidence-aware decision graph ----
+    # evidence / hierarchy
+    "EvidenceRef", "EvidenceTrace", "ExternalEvidenceRecord",
+    "ALLOWED_SOURCE_TIERS", "FORBIDDEN_SOURCE_TIERS", "tier_of",
+    "is_allowed_source", "describe_hierarchy", "trace_leaves",
+    "render_evidence_tree", "external_record_from_fact",
+    "TIER_1_DOCUMENT", "TIER_2_APPENDIX", "TIER_3_REGULATORY_API",
+    "TIER_4_FORBIDDEN",
+    # provenance gate
+    "ProvenanceGate", "ProvenanceVerdict", "ProvenanceCheck",
+    "validate_provenance", "GATE_PASS", "GATE_REVIEW", "GATE_BLOCKED",
+    # extended registry
+    "EXTENDED_REGISTRY", "EXTENDED_FORMULA_METADATA",
+    "build_extended_registry", "extended_registry", "metadata_for",
+    "excel_template_for", "derive_cagr_span", "cagr_span_from_facts",
+    "ROE", "ROA", "CURRENT_RATIO", "DEBT_TO_EQUITY", "GROSS_MARGIN",
+    "OPERATING_MARGIN", "EBITDA_MARGIN", "CAGR", "EPS", "DEBT",
+    "EBITDA", "SHARES_OUTSTANDING", "CAGR_BEGINNING", "CAGR_ENDING",
+    "CAGR_SPAN", "GROSS_PROFIT", "OPERATING_PROFIT",
+    # excel compiler
+    "ExcelLineageCompiler", "ExcelFormula", "compile_excel_formula",
+    "resolve_cell_reference", "render_excel_lineage_text",
+    # decision graph
+    "DecisionGraph", "DecisionNode", "evaluate_metric", "decide_state",
+    "DECISION_STATES", "METRIC_AVAILABLE", "METRIC_DERIVED",
+    "METRIC_RECONCILED", "METRIC_STUDENT_INPUT", "EVIDENCE_CONFLICT",
+    "RECONCILIATION_REQUIRED", "ADJUSTMENT_REQUIRED", "METRIC_BLOCKED",
+    "INSUFFICIENT_EVIDENCE",
 ]

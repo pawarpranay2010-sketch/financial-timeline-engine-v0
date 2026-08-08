@@ -124,3 +124,53 @@ def cpp_calculate(
         "lineage": out.get("lineage") or "",
         "block_reason": out.get("block_reason"),
     }
+
+
+def cpp_solve_metric(
+    metric_key: str,
+    solve_for: str,
+    resolved_facts: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Sprint 12A - invoke the C++ engine to REVERSE-SOLVE one variable of
+    a registered op-driven formula (e.g. solve Expenses from Revenue +
+    Profit). Returns the same normalized result shape as cpp_calculate
+    (status, value, display_value, steps, lineage, block_reason), or None
+    when the binary is unavailable / the call failed (the caller falls
+    back to the Python deterministic path)."""
+    bin_path = binary_path()
+    if bin_path is None:
+        return None
+    payload = {
+        "metric": metric_key,
+        "solve_for": solve_for,
+        "inputs": {k: _fact_json(f) for k, f in (resolved_facts or {}).items()},
+    }
+    try:
+        proc = subprocess.run(
+            [bin_path],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        out = json.loads(proc.stdout)
+    except ValueError:
+        return None
+    if not isinstance(out, dict) or out.get("error"):
+        return None
+    status = _STATUS_MAP.get(str(out.get("status") or ""))
+    if status is None:
+        return None
+    return {
+        "status": status,
+        "value": out.get("value"),
+        "display_value": out.get("display_value") or "",
+        "steps": out.get("calculation_steps") or [],
+        "lineage": out.get("lineage") or "",
+        "block_reason": out.get("block_reason"),
+    }
