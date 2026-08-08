@@ -474,6 +474,209 @@ check("matrix · unknown id is fail-closed (no crash, no navigation)",
       apply_choice(_state, "totally.unknown.action", ws_demo)["stage"] == _state["stage"])
 
 # ---------------------------------------------------------------------------
+# 17 · Duplicate-widget-key regression (StreamlitDuplicateElementKey)
+# ---------------------------------------------------------------------------
+class _RecordingStreamlit(types.ModuleType):
+    """Recording stub: captures every widget key registered during a render so
+    we can assert exactly one workspace instance renders per page/path (no
+    StreamlitDuplicateElementKey). Layout/non-keyed calls are no-ops."""
+
+    def __init__(self, ss):
+        super().__init__("streamlit")
+        self._ss = ss
+        self.query_params = _QP()
+        self.registered_keys = []
+
+    # -- keyed widget surface used by the workspace renderers --
+    def selectbox(self, label, options, key=None, **kw):
+        self.registered_keys.append(key)
+        return options[0] if options else None
+
+    def text_input(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return ""
+
+    def text_area(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return ""
+
+    def multiselect(self, label, options, key=None, **kw):
+        self.registered_keys.append(key)
+        return []
+
+    def radio(self, label, options, key=None, **kw):
+        self.registered_keys.append(key)
+        return options[0] if options else None
+
+    def button(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return False
+
+    def download_button(self, label, data=None, key=None, **kw):
+        self.registered_keys.append(key)
+        return False
+
+    def checkbox(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return False
+
+    def number_input(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return 0.0
+
+    def slider(self, label, key=None, **kw):
+        self.registered_keys.append(key)
+        return 0
+
+    # -- layout / non-keyed surface --
+    def markdown(self, *a, **kw):
+        return None
+
+    def caption(self, *a, **kw):
+        return None
+
+    def dataframe(self, *a, **kw):
+        return None
+
+    def success(self, *a, **kw):
+        return None
+
+    def warning(self, *a, **kw):
+        return None
+
+    def info(self, *a, **kw):
+        return None
+
+    def error(self, *a, **kw):
+        return None
+
+    def divider(self, *a, **kw):
+        return None
+
+    def progress(self, *a, **kw):
+        return None
+
+    def spinner(self, *a, **kw):
+        class _Spinner:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *e):
+                return False
+        return _Spinner()
+
+    def columns(self, spec, **kw):
+        n = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+        return [_RecordingCtx(self) for _ in range(n)]
+
+    def expander(self, *a, **kw):
+        return _RecordingCtx(self)
+
+    def container(self, *a, **kw):
+        return _RecordingCtx(self)
+
+    def form(self, *a, **kw):
+        return _RecordingCtx(self)
+
+    def tabs(self, labels, **kw):
+        return [_RecordingCtx(self) for _ in range(len(labels))]
+
+    def rerun(self):
+        pass
+
+    def switch_page(self, *a, **kw):
+        pass
+
+    def __getattr__(self, name):
+        if name == "session_state":
+            return self._ss
+        return _Passthrough()
+
+
+class _RecordingCtx:
+    """Context-manager wrapper that delegates widget calls to the recorder."""
+
+    def __init__(self, rec):
+        self._rec = rec
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._rec, name)
+
+
+def _render_workspace_recording(demo, explore):
+    """Render the Student Assignment Workspace under the recording stub and
+    return (registered widget keys, mutated session)."""
+    ss = _fresh_session(
+        fte_route="demo" if demo else "workspace",
+        fte_page="Assignment",
+        fte_demo_mode=demo,
+        fte_ws_active=True,
+        fte_agent_explore=explore,
+    )
+    rec = _RecordingStreamlit(ss)
+    old_st = app.st
+    app.st = rec
+    try:
+        module3 = app._demo_module3_result() if demo else _real_module3()
+        app._render_student_assignment_workspace(module3, demo=demo)
+    finally:
+        app.st = old_st
+    return rec.registered_keys, ss
+
+
+# Demo path: guided render (explore off) — only the guided setup panel
+# registers fte_assignment_type; the legacy view is never invoked.
+_keys_demo_guided, _ = _render_workspace_recording(demo=True, explore=False)
+check("dupkey · demo guided render registers fte_assignment_type exactly once",
+      _keys_demo_guided.count("fte_assignment_type") == 1)
+check("dupkey · demo guided render has no duplicate widget keys",
+      len(_keys_demo_guided) == len(set(_keys_demo_guided)))
+check("dupkey · demo guided render never invokes the legacy view",
+      "fte_extvar_name" not in _keys_demo_guided)
+
+# Demo path: explore render (explore on) — ONLY the legacy view renders,
+# still exactly one fte_assignment_type (no duplicate key crash).
+_keys_demo_explore, _ = _render_workspace_recording(demo=True, explore=True)
+check("dupkey · demo explore render registers fte_assignment_type exactly once",
+      _keys_demo_explore.count("fte_assignment_type") == 1)
+check("dupkey · demo explore render has no duplicate widget keys",
+      len(_keys_demo_explore) == len(set(_keys_demo_explore)))
+
+# API/real path: same two modes.
+_keys_real_guided, _ = _render_workspace_recording(demo=False, explore=False)
+check("dupkey · real guided render registers fte_assignment_type exactly once",
+      _keys_real_guided.count("fte_assignment_type") == 1)
+check("dupkey · real guided render has no duplicate widget keys",
+      len(_keys_real_guided) == len(set(_keys_real_guided)))
+
+_keys_real_explore, _ = _render_workspace_recording(demo=False, explore=True)
+check("dupkey · real explore render registers fte_assignment_type exactly once",
+      _keys_real_explore.count("fte_assignment_type") == 1)
+check("dupkey · real explore render has no duplicate widget keys",
+      len(_keys_real_explore) == len(set(_keys_real_explore)))
+
+# Source-level guards: the explore branch precedes the guided setup panel,
+# and the old trailing explore branch is gone.
+_gstart = _APP_SRC.index("def _render_student_assignment_workspace(")
+_gend = _APP_SRC.index("def _render_student_assignment_workspace_legacy(")
+_guided_src = _APP_SRC[_gstart:_gend]
+check("dupkey · explore branch precedes the guided setup widgets",
+      _guided_src.index('if st.session_state.get("fte_agent_explore"):') <
+      _guided_src.index('st.selectbox("Assignment type", assignment_types, key="fte_assignment_type")'))
+check("dupkey · legacy call site lives only in the top explore branch",
+      _guided_src.count("_render_student_assignment_workspace_legacy(") == 1 and
+      _guided_src.index("_render_student_assignment_workspace_legacy(") <
+      _guided_src.index('st.selectbox("Assignment type", assignment_types, key="fte_assignment_type")'))
+check("dupkey · old trailing explore branch removed",
+      "# Explore workspace: the full deterministic view, one click away." not in _APP_SRC)
+
+# ---------------------------------------------------------------------------
 # Source-level guards
 # ---------------------------------------------------------------------------
 check("src · restore guard and sentinel present",

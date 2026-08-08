@@ -4162,6 +4162,19 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     """Sprint 12 - Student Assignment Agent: a guided, progressively disclosed
     workspace shared by the real (API) pipeline and Demo Mode. The full
     deterministic workspace stays one click away via Explore workspace."""
+    # Sprint 12.2 - "Explore workspace" renders the Sprint 10 deterministic
+    # view INSTEAD of the guided Agent. This branch must run BEFORE any widget
+    # is registered: the guided setup panel and the legacy view share the same
+    # widget keys (fte_assignment_type, fte_assignment_company, ...), so
+    # rendering both in one rerun raises StreamlitDuplicateElementKey. Exactly
+    # one workspace instance renders per page/path.
+    if st.session_state.get("fte_agent_explore"):
+        if st.button("← Back to Assignment Agent", key="fte_agent_exit_explore"):
+            st.session_state["fte_agent_explore"] = False
+            st.rerun()
+        _render_student_assignment_workspace_legacy(module3_result, demo)
+        return
+
     # Quiet secondary actions arrive as links (?fte_agent_action=...) and run
     # the exact same deterministic state machine as the buttons below.
     q_action = st.query_params.get("fte_agent_action")
@@ -4283,14 +4296,6 @@ def _render_student_assignment_workspace(module3_result, demo=False) -> None:
     if st.session_state.get("fte_agent_pending"):
         pending = st.session_state.pop("fte_agent_pending")
         _agent_apply(pending, workspace, requirements_text)
-
-    # Explore workspace: the full deterministic view, one click away.
-    if st.session_state.get("fte_agent_explore"):
-        if st.button("← Back to Assignment Agent", key="fte_agent_exit_explore"):
-            st.session_state["fte_agent_explore"] = False
-            st.rerun()
-        _render_student_assignment_workspace_legacy(module3_result, demo)
-        return
 
     state = st.session_state["fte_agent_state"]
     view = agent_session(
