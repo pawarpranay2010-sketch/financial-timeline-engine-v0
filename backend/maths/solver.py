@@ -58,6 +58,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from backend.maths.fact_model import FactGraph, FactNode, to_decimal
 from backend.maths.exceptions import (
+    CppAuthorityError,
+    CppUnsupportedError,
     DomainError,
     PeriodMismatchError,
     UnitMismatchError,
@@ -99,10 +101,19 @@ from backend.maths.units import (
 # ---------------------------------------------------------------------------
 
 try:  # pragma: no cover - import guard keeps the package importable
-    from backend.formula_engine_cpp import cpp_calculate, cpp_solve_metric
+    from backend.formula_engine_cpp import (
+        CPP_KEY_ALIASES,
+        cpp_available,
+        cpp_calculate,
+        cpp_solve_metric,
+        is_cpp_covered,
+    )
 except Exception:  # pragma: no cover
+    CPP_KEY_ALIASES = {}
+    cpp_available = lambda: False  # type: ignore
     cpp_calculate = None  # type: ignore
     cpp_solve_metric = None  # type: ignore
+    is_cpp_covered = lambda _fid: False  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +237,12 @@ def _last_ident(expr: str) -> Optional[str]:
 
 class _SolveContext:
     def __init__(self, registry: FormulaRegistry, facts: FactGraph,
-                 prefer_cpp: bool, precision: int) -> None:
+                 prefer_cpp: bool, cpp_authority: bool,
+                 precision: int) -> None:
         self.registry = registry
         self.facts = facts
         self.prefer_cpp = prefer_cpp
+        self.cpp_authority = cpp_authority
         self.precision = precision
         self.memo: Dict[str, Solution] = {}
         self.stack: Set[str] = set()
@@ -357,7 +370,8 @@ class _SolveContext:
 
     def _blocked(self, concept: str, reason: str,
                  missing: Optional[List[str]] = None,
-                 blocked_inputs: Optional[List[str]] = None) -> Solution:
+                 blocked_inputs: Optional[List[str]] = None,
+                 sufficiency_state: str = "BLOCKED") -> Solution:
         return Solution(
             target=concept,
             value=None,
@@ -369,7 +383,7 @@ class _SolveContext:
             missing=missing or [],
             blocked_inputs=blocked_inputs or [],
             traversal_path=[concept],
-            sufficiency_state="BLOCKED",
+            sufficiency_state=sufficiency_state,
         )
 
     # ------------------------------------------------------------------
@@ -379,17 +393,39 @@ class _SolveContext:
         derivations are evaluated in registry order."""
         results: List[Solution] = []
         values: List[Decimal] = []
+        failures: List[Solution] = []
         for d in derivations:
             sol = self._solve_derivation(concept, d)
             if sol.value is not None:
                 results.append(sol)
                 values.append(sol.value)
+            else:
+                failures.append(sol)
         distinct: List[Decimal] = []
         for v in values:
             if not any(v == x for x in distinct):
                 distinct.append(v)
         if len(distinct) <= 1:
-            return results[0] if results else self._blocked(
+            if results:
+                return results[0]
+            # Sprint 12F: every derivation failed - propagate the
+            # strongest authority failure (ENGINE_UNAVAILABLE over
+            # UNSUPPORTED) instead of collapsing to a generic BLOCKED.
+            for preferred in ("ENGINE_UNAVAILABLE", "UNSUPPORTED"):
+                for f in failures:
+                    if f.sufficiency_state == preferred:
+                        return f
+            # otherwise preserve the most informative deterministic
+            # failure reason (e.g. a period/unit/domain gate) rather
+            # than discarding it.
+            if failures:
+                return self._blocked(
+                    concept,
+                    reason=failures[0].reason
+                    or f"No usable derivation for {concept}.",
+                    missing=[concept],
+                )
+            return self._blocked(
                 concept, reason=f"No usable derivation for {concept}.",
                 missing=[concept],
             )
@@ -443,6 +479,15 @@ class _SolveContext:
                 for i, dep in enumerate(d.dependencies)
             }
             value = self._compute_forward(formula, normalized, dep_solutions)
+        except CppUnsupportedError as exc:
+            return self._blocked(
+                concept, reason=str(exc), sufficiency_state="UNSUPPORTED",
+            )
+        except CppAuthorityError as exc:
+            return self._blocked(
+                concept, reason=str(exc),
+                sufficiency_state="ENGINE_UNAVAILABLE",
+            )
         except (DomainError, UnitMismatchError, PeriodMismatchError,
                 ValueError, InvalidOperation) as exc:
             return self._blocked(
@@ -508,6 +553,15 @@ class _SolveContext:
             }
             value = self._compute_reverse(
                 formula, variable, normalized, inputs_solutions
+            )
+        except CppUnsupportedError as exc:
+            return self._blocked(
+                concept, reason=str(exc), sufficiency_state="UNSUPPORTED",
+            )
+        except CppAuthorityError as exc:
+            return self._blocked(
+                concept, reason=str(exc),
+                sufficiency_state="ENGINE_UNAVAILABLE",
             )
         except (DomainError, UnitMismatchError, PeriodMismatchError,
                 ValueError, InvalidOperation) as exc:
@@ -621,6 +675,27 @@ class _SolveContext:
                 )
                 if reason:
                     raise PeriodMismatchError(reason)
+        # identity isolation (Sprint 12D/12F): facts combined into ONE
+        # formula step must share the strict analytical dimensions that
+        # are not formula-driven. Entity and period-type mismatches are
+        # never silently merged; `period` itself is governed by
+        # period_mode above and `statement` legitimately differs (e.g.
+        # income statement + balance sheet inputs for ROE).
+        for dim in ("entity", "period_type"):
+            values: Set[str] = set()
+            for v in deps:
+                f = facts_meta.get(v)
+                val = str(getattr(f, dim, None) or "").strip()
+                if val:
+                    values.add(val.upper())
+            if len(values) > 1:
+                label = dim.replace("_", " ").title()
+                raise PeriodMismatchError(
+                    f"{label} mismatch between inputs "
+                    f"({', '.join(sorted(values))}) - facts with "
+                    "different analytical identity are never merged "
+                    "silently."
+                )
         # denominator constraints
         for den in formula.denominator_constraints:
             if normalized.get(den) == 0:
@@ -646,6 +721,8 @@ class _SolveContext:
         authoritative. Precision is never silently degraded by the
         bridge - results are byte-identical on every run."""
         self._validate_step(formula, normalized)
+        if self.cpp_authority:
+            return self._authority_forward(formula, normalized)
         exact, _used = eval_expression(formula.expression, normalized)
         cpp_value = self._cpp_forward(formula, normalized)
         value = exact if cpp_value is None else cpp_value
@@ -665,6 +742,8 @@ class _SolveContext:
                 f"No registered inverse relationship for {variable} in "
                 f"{formula.formula_id}."
             )
+        if self.cpp_authority:
+            return self._authority_reverse(formula, variable, normalized)
         exact, _used = eval_expression(inv_expr, normalized)
         cpp_value = self._cpp_reverse(formula, variable, normalized)
         if cpp_value is None or cpp_value != exact:
@@ -743,6 +822,94 @@ class _SolveContext:
         return facts
 
     # ------------------------------------------------------------------
+    # Sprint 12F - strict C++ mathematical authority (no Python fallback)
+    # ------------------------------------------------------------------
+    def _authority_preconditions(self, formula: FormulaDefinition) -> None:
+        """Sprint 12F strict gate. Python NEVER computes a financial
+        result as a fallback: binary missing -> ENGINE_UNAVAILABLE, formula
+        not covered by the C++ registry -> UNSUPPORTED."""
+        if cpp_calculate is None or cpp_solve_metric is None \
+                or not cpp_available():
+            raise CppAuthorityError(
+                "C++ mathematical authority is unavailable (no compiled "
+                "formula engine binary). Production calculation is "
+                "BLOCKED - no Python fallback is performed."
+            )
+        if not is_cpp_covered(formula.formula_id):
+            raise CppUnsupportedError(
+                f"{formula.formula_id} is not covered by the C++ "
+                "mathematical authority - UNSUPPORTED (never silently "
+                "computed in Python)."
+            )
+
+    def _authority_forward(self, formula: FormulaDefinition,
+                           normalized: Dict[str, Decimal]) -> Decimal:
+        """Sprint 12F strict forward: the financial result MUST come from
+        the C++ engine. Python validates (orchestration), passes inputs
+        and converts the C++ fraction to the percent-number display
+        convention - it never performs the arithmetic."""
+        self._authority_preconditions(formula)
+        facts = self._cpp_facts(formula, normalized)
+        out = cpp_calculate(
+            CPP_KEY_ALIASES.get(formula.formula_id, formula.formula_id),
+            facts,
+        )
+        if out is None:
+            raise CppAuthorityError(
+                "C++ engine call failed (missing binary, non-zero exit or "
+                "malformed response). Production calculation is BLOCKED - "
+                "no Python fallback is performed."
+            )
+        if str(out.get("status")) == "blocked":
+            raise DomainError(
+                out.get("block_reason")
+                or "C++ mathematical authority blocked the calculation."
+            )
+        if out.get("value") is None:
+            raise CppAuthorityError(
+                "C++ mathematical authority returned no value. Production "
+                "calculation is BLOCKED - no Python fallback is performed."
+            )
+        value = to_decimal(out.get("value"))
+        if formula.unit_kind == "percent":
+            value = value * Decimal(100)  # display convention only
+        return value
+
+    def _authority_reverse(self, formula: FormulaDefinition, variable: str,
+                           normalized: Dict[str, Decimal]) -> Decimal:
+        """Sprint 12F strict reverse: only REGISTERED inverse relationships
+        are executed, and they are executed by the C++ authority."""
+        if formula.inverses.get(variable) is None:
+            raise CppUnsupportedError(
+                f"No registered inverse relationship for {variable} in "
+                f"{formula.formula_id} - UNSUPPORTED (never invented)."
+            )
+        self._authority_preconditions(formula)
+        facts = self._cpp_facts(formula, normalized)
+        out = cpp_solve_metric(
+            CPP_KEY_ALIASES.get(formula.formula_id, formula.formula_id),
+            variable, facts,
+        )
+        if out is None:
+            raise CppAuthorityError(
+                "C++ engine call failed (missing binary, non-zero exit or "
+                "malformed response). Production calculation is BLOCKED - "
+                "no Python fallback is performed."
+            )
+        if str(out.get("status")) == "blocked":
+            raise DomainError(
+                out.get("block_reason")
+                or "C++ mathematical authority blocked the reverse "
+                "calculation."
+            )
+        if out.get("value") is None:
+            raise CppAuthorityError(
+                "C++ mathematical authority returned no value. Production "
+                "calculation is BLOCKED - no Python fallback is performed."
+            )
+        return to_decimal(out.get("value"))
+
+    # ------------------------------------------------------------------
     def _lineage_inputs(self, solutions: List[Solution]) -> List[LineageInput]:
         return [
             LineageInput(
@@ -778,11 +945,16 @@ class Solver:
     """Deterministic formula application engine over a registry."""
 
     def __init__(self, registry: Optional[FormulaRegistry] = None,
-                 prefer_cpp: bool = True) -> None:
+                 prefer_cpp: bool = True,
+                 cpp_authority: bool = False) -> None:
         # Default to the shared Phase-1 registry (deterministic); callers
         # may pass their own extensible registry instance.
         self.registry = registry if registry is not None else default_registry()
         self.prefer_cpp = prefer_cpp
+        # Sprint 12F: when True every atomic financial step MUST be
+        # computed by the C++ engine (no Python fallback). Default False
+        # preserves the exact 12A-12E additive behavior.
+        self.cpp_authority = cpp_authority
 
     def solve(self, target: str, facts: FactGraph,
               display_precision: int = 2) -> Solution:
@@ -798,7 +970,8 @@ class Solver:
                 "(build one with build_fact_graph())."
             )
         ctx = _SolveContext(
-            self.registry, facts, self.prefer_cpp, display_precision
+            self.registry, facts, self.prefer_cpp, self.cpp_authority,
+            display_precision,
         )
         sol = ctx.solve_concept(target)
         # Assemble the complete lineage: one step per node along the
@@ -845,6 +1018,9 @@ class Solver:
 
 def solve_with_registry(target: str, facts: FactGraph,
                         registry: FormulaRegistry,
-                        prefer_cpp: bool = True) -> Solution:
+                        prefer_cpp: bool = True,
+                        cpp_authority: bool = False) -> Solution:
     """Module-level convenience."""
-    return Solver(registry, prefer_cpp=prefer_cpp).solve(target, facts)
+    return Solver(
+        registry, prefer_cpp=prefer_cpp, cpp_authority=cpp_authority,
+    ).solve(target, facts)

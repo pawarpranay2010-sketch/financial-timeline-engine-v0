@@ -367,9 +367,11 @@ class DuPontEngine:
     """Deterministic DuPont resolver over the Sprint 12A machinery."""
 
     def __init__(self, registry: Optional[FormulaRegistry] = None,
-                 prefer_cpp: bool = True) -> None:
+                 prefer_cpp: bool = True,
+                 cpp_authority: bool = False) -> None:
         self.registry = registry if registry is not None else DUPONT_REGISTRY
         self.prefer_cpp = prefer_cpp
+        self.cpp_authority = cpp_authority
 
     # ------------------------------------------------------------------
     def _component_from_solution(self, concept: str,
@@ -403,7 +405,8 @@ class DuPontEngine:
         downstream node; REVIEW_REQUIRED never silently becomes VERIFIED.
         """
         graph = _build_period_graph(facts or {})
-        solver = Solver(self.registry, prefer_cpp=self.prefer_cpp)
+        solver = Solver(self.registry, prefer_cpp=self.prefer_cpp,
+                        cpp_authority=self.cpp_authority)
         roe_sol = solver.solve(RETURN_ON_EQUITY, graph)
         component_solutions: Dict[str, Solution] = {}
         for concept in DUPONT_COMPONENTS:
@@ -566,6 +569,9 @@ class DuPontEngine:
 
 
 def analyze_dupont(facts_by_period: Dict[str, Dict[str, Any]],
-                   prefer_cpp: bool = True) -> DuPontAnalysis:
+                   prefer_cpp: bool = True,
+                   cpp_authority: bool = False) -> DuPontAnalysis:
     """Convenience entry point."""
-    return DuPontEngine(prefer_cpp=prefer_cpp).analyze(facts_by_period)
+    return DuPontEngine(
+        prefer_cpp=prefer_cpp, cpp_authority=cpp_authority,
+    ).analyze(facts_by_period)

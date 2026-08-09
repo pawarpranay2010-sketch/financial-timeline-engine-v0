@@ -396,6 +396,71 @@ static std::vector<FormulaDef> build_extended_registry() {
          "Assets ÷ Equity", "ratio", 2, "same", {"Equity"}, "div", "Equity Multiplier"},
         {"PROFIT_MARGIN", "Profit Margin (P&L)", {"Profit", "Revenue"},
          "Profit ÷ Revenue", "percent", 2, "same", {"Revenue"}, "div", "Profit Margin"},
+        // ---- Sprint 12F — production coverage extension (additive) ----
+        // ROA over Total Assets (the 12C/12D registry vocabulary; the
+        // legacy ROA above uses "Assets" and is left untouched).
+        {"ROA_TOTAL_ASSETS", "ROA", {"Net Profit", "Total Assets"},
+         "Net Profit ÷ Total Assets × 100", "percent", 2, "same",
+         {"Total Assets"}, "div", "ROA"},
+        {"GROSS_MARGIN", "Gross Margin", {"Gross Profit", "Revenue"},
+         "Gross Profit ÷ Revenue × 100", "percent", 2, "same",
+         {"Revenue"}, "div", "Gross Margin"},
+        {"EBITDA_MARGIN", "EBITDA Margin", {"EBITDA", "Revenue"},
+         "EBITDA ÷ Revenue × 100", "percent", 2, "same",
+         {"Revenue"}, "div", "EBITDA Margin"},
+        {"NET_MARGIN", "Net Margin", {"Net Profit", "Revenue"},
+         "Net Profit ÷ Revenue × 100", "percent", 2, "same",
+         {"Revenue"}, "div", "Net Margin"},
+        {"EPS", "EPS", {"Net Profit", "Shares Outstanding"},
+         "Net Profit ÷ Shares Outstanding", "amount", 2, "same",
+         {"Shares Outstanding"}, "div", "EPS"},
+        {"DEBT_TO_ASSETS", "Debt to Assets", {"Debt", "Total Assets"},
+         "Debt ÷ Total Assets", "ratio", 2, "same",
+         {"Total Assets"}, "div", "Debt to Assets"},
+        {"INTEREST_COVERAGE", "Interest Coverage",
+         {"Operating Profit", "Interest Expense"},
+         "Operating Profit ÷ Interest Expense", "ratio", 2, "same",
+         {"Interest Expense"}, "div", "Interest Coverage"},
+        {"INVENTORY_TURNOVER", "Inventory Turnover",
+         {"Cost of Sales", "Average Inventory"},
+         "Cost of Sales ÷ Average Inventory", "ratio", 2, "same",
+         {"Average Inventory"}, "div", "Inventory Turnover"},
+        {"RECEIVABLES_TURNOVER", "Receivables Turnover",
+         {"Revenue", "Average Receivables"},
+         "Revenue ÷ Average Receivables", "ratio", 2, "same",
+         {"Average Receivables"}, "div", "Receivables Turnover"},
+        {"PAYABLES_TURNOVER", "Payables Turnover",
+         {"Cost of Sales", "Average Payables"},
+         "Cost of Sales ÷ Average Payables", "ratio", 2, "same",
+         {"Average Payables"}, "div", "Payables Turnover"},
+        // Quick Ratio = (Current Assets - Inventory) / Current Liabilities.
+        // No binary op (3 inputs); dedicated compute + registered-inverse
+        // branches (Current Assets and Current Liabilities only).
+        {"QUICK_RATIO", "Quick Ratio",
+         {"Current Assets", "Inventory", "Current Liabilities"},
+         "(Current Assets − Inventory) ÷ Current Liabilities", "ratio", 2,
+         "same", {"Current Liabilities"}, "", "Quick Ratio"},
+        // DuPont chain (12B registry vocabulary: Total Assets).
+        {"DUPONT_PROFIT_MARGIN", "Profit Margin", {"Net Profit", "Revenue"},
+         "Net Profit ÷ Revenue (fraction)", "ratio", 2, "same",
+         {"Revenue"}, "div", "Profit Margin"},
+        {"DUPONT_ASSET_TURNOVER", "Asset Turnover",
+         {"Revenue", "Total Assets"},
+         "Revenue ÷ Total Assets", "ratio", 2, "same",
+         {"Total Assets"}, "div", "Asset Turnover"},
+        {"DUPONT_EQUITY_MULTIPLIER", "Equity Multiplier",
+         {"Total Assets", "Equity"},
+         "Total Assets ÷ Equity", "ratio", 2, "same",
+         {"Equity"}, "div", "Equity Multiplier"},
+        {"DUPONT_ROE", "Return on Equity",
+         {"Profit Margin", "Asset Turnover", "Equity Multiplier"},
+         "Profit Margin × Asset Turnover × Equity Multiplier", "percent",
+         2, "same", {}, "", "Return on Equity"},
+        // Registered algebraic opposites (12D): Profit = -Loss, Loss = -Profit.
+        {"PROFIT_LOSS_OPPOSITE", "Profit", {"Loss"},
+         "− Loss", "amount", 2, "same", {}, "neg", "Profit"},
+        {"LOSS_PROFIT_OPPOSITE", "Loss", {"Profit"},
+         "− Profit", "amount", 2, "same", {}, "neg", "Loss"},
     };
 }
 
@@ -441,7 +506,17 @@ static Result blocked(std::string reason) {
 // ---------------------------------------------------------------------------
 
 // Returns the CAGR span n (end_year - begin_year) or -1 when unusable.
+// Sprint 12F: an explicit "CAGR Span Years" fact wins when present and
+// valid (never guessed); otherwise the span is derived from the two
+// reporting periods (existing behavior, unchanged).
 static int cagr_span(const std::map<std::string, Fact>& facts) {
+    auto it_s = facts.find("CAGR Span Years");
+    if (it_s != facts.end() && it_s->second.has_value
+        && it_s->second.value >= 1.0L
+        && it_s->second.value == std::floor(it_s->second.value)
+        && it_s->second.value <= 1000.0L) {
+        return static_cast<int>(it_s->second.value);
+    }
     auto it_b = facts.find("CAGR Beginning Value");
     auto it_e = facts.find("CAGR Ending Value");
     if (it_b == facts.end() || it_e == facts.end()) return -1;
@@ -541,22 +616,28 @@ static Result validate(const FormulaDef& def,
 // ---------------------------------------------------------------------------
 
 // Sprint 12A — generic op-driven arithmetic for the extended registry.
+// Sprint 12F: supports unary "neg" and N-input "mul" (for the DuPont
+// 3-factor chain) in addition to the binary sub/add/div.
 static Result compute_generic(const FormulaDef& def,
                               const std::map<std::string, Fact>& facts) {
     auto val = [&facts](const std::string& k) {
         return facts.at(k).value;
     };
-    const std::string& a = def.required_inputs[0];
-    const std::string& b = def.required_inputs[1];
     long double raw = 0.0L;
-    if (def.op == "sub") {
-        raw = val(a) - val(b);
+    if (def.op == "neg") {
+        raw = -val(def.required_inputs[0]);
+    } else if (def.op == "sub") {
+        raw = val(def.required_inputs[0]) - val(def.required_inputs[1]);
     } else if (def.op == "add") {
-        raw = val(a) + val(b);
+        raw = val(def.required_inputs[0]) + val(def.required_inputs[1]);
     } else if (def.op == "mul") {
-        raw = val(a) * val(b);
+        raw = val(def.required_inputs[0]);
+        for (size_t i = 1; i < def.required_inputs.size(); ++i) {
+            raw *= val(def.required_inputs[i]);
+        }
     } else if (def.op == "div") {
-        raw = val(a) / val(b);  // zero denominator already rejected in validate()
+        raw = val(def.required_inputs[0]) / val(def.required_inputs[1]);
+        // zero denominator already rejected in validate()
     } else {
         return blocked("unsupported operation: " + def.op);
     }
@@ -604,6 +685,18 @@ static Result compute(const FormulaDef& def,
         const std::string& num = def.required_inputs[0];
         const std::string& den = def.required_inputs[1];
         raw = val(num) / val(den);
+        steps.push_back(def.display_name + " = " + def.formula);
+        steps.push_back(def.display_name + " = " + display_value(raw, def));
+    } else if (def.key == "QUICK_RATIO") {
+        // Quick Ratio = (Current Assets - Inventory) / Current Liabilities
+        raw = (val("Current Assets") - val("Inventory"))
+            / val("Current Liabilities");
+        steps.push_back(def.display_name + " = " + def.formula);
+        steps.push_back(def.display_name + " = " + display_value(raw, def));
+    } else if (def.key == "DUPONT_ROE") {
+        // DuPont ROE = Profit Margin x Asset Turnover x Equity Multiplier
+        raw = val("Profit Margin") * val("Asset Turnover")
+            * val("Equity Multiplier");
         steps.push_back(def.display_name + " = " + def.formula);
         steps.push_back(def.display_name + " = " + display_value(raw, def));
     } else {  // ratio-kind: Current Ratio, Debt to Equity
@@ -714,16 +807,10 @@ Result solve_metric(const std::string& metric_key,
         r.status = Status::UNANALYZED;
         return r;
     }
-    if (def->op.empty()) {
-        return blocked("No registered inverse relationship for " + solve_for +
-                       " in " + metric_key + ".");
-    }
     // The formula's target CONCEPT (key under which the pipeline stores
     // the output fact) - falls back to the formula key for formulas that
     // did not declare a distinct target.
     const std::string target_key = def->target.empty() ? def->key : def->target;
-    const std::string& a = def->required_inputs[0];
-    const std::string& b = def->required_inputs[1];
 
     auto need = [&facts](const std::string& k) -> bool {
         auto it = facts.find(k);
@@ -732,6 +819,181 @@ Result solve_metric(const std::string& metric_key,
     auto val = [&facts](const std::string& k) -> long double {
         return facts.at(k).value;
     };
+    // Target value, converted to a fraction for percent-kind formulas.
+    auto target_value = [&]() -> long double {
+        long double tv = val(target_key);
+        if (def->kind == "percent") tv /= 100.0L;
+        return tv;
+    };
+
+    if (def->op.empty()) {
+        // Legacy 2-input percent/ratio formulas whose inverse
+        // relationships ARE registered in the Python registry (ROE, ROA,
+        // Profit Margin, Operating Margin, Current Ratio, Debt to Equity):
+        // the C++ authority executes those inverses. Growth/CAGR formulas
+        // are excluded - their inverse is not the plain a/b form and no
+        // inverse is registered for them.
+        {
+            static const std::set<std::string> kLegacyInvertible = {
+                "ROE", "ROA", "Profit Margin", "Operating Margin",
+                "Current Ratio", "Debt to Equity",
+            };
+            if (kLegacyInvertible.count(def->key) > 0
+                && def->required_inputs.size() == 2) {
+                const std::string& a = def->required_inputs[0];
+                const std::string& b = def->required_inputs[1];
+                if (solve_for == def->key || solve_for == target_key) {
+                    if (!need(a) || !need(b)) {
+                        return blocked(target_key + " is unavailable from "
+                                       "permitted evidence sources.");
+                    }
+                    return compute(*def, facts);
+                }
+                if (solve_for == a) {
+                    if (!need(target_key) || !need(b)) {
+                        return blocked("Cannot solve for " + solve_for +
+                                       ": required input is unavailable "
+                                       "from permitted evidence sources.");
+                    }
+                    if (val(b) == 0.0L) {
+                        return blocked(b + " is zero - cannot solve for " +
+                                       a + ".");
+                    }
+                    Result r;
+                    r.status = Status::DERIVED_VERIFIED;
+                    r.value = target_value() * val(b);
+                    r.has_value = true;
+                    r.display_value = format_fixed(r.value, def->precision);
+                    r.calculation_steps.push_back(
+                        "solve " + solve_for + " from " + def->display_name +
+                        " = " + def->formula);
+                    r.calculation_steps.push_back(solve_for + " = " +
+                                                  r.display_value);
+                    return r;
+                }
+                if (solve_for == b) {
+                    if (!need(target_key) || !need(a)) {
+                        return blocked("Cannot solve for " + solve_for +
+                                       ": required input is unavailable "
+                                       "from permitted evidence sources.");
+                    }
+                    if (target_value() == 0.0L) {
+                        return blocked(target_key + " is zero - cannot "
+                                       "solve for " + b + ".");
+                    }
+                    Result r;
+                    r.status = Status::DERIVED_VERIFIED;
+                    r.value = val(a) / target_value();
+                    r.has_value = true;
+                    r.display_value = format_fixed(r.value, def->precision);
+                    r.calculation_steps.push_back(
+                        "solve " + solve_for + " from " + def->display_name +
+                        " = " + def->formula);
+                    r.calculation_steps.push_back(solve_for + " = " +
+                                                  r.display_value);
+                    return r;
+                }
+                return blocked(solve_for + " is not a variable of " +
+                               metric_key + ".");
+            }
+        }
+        // Sprint 12F - QUICK_RATIO carries REGISTERED inverse
+        // relationships (Current Assets, Current Liabilities) even though
+        // it is not a binary op; every other op-less formula (e.g.
+        // DUPONT_ROE) has no registered inverse and fails closed.
+        if (def->key == "QUICK_RATIO") {
+            const std::string qr_target = "Quick Ratio";
+            if (solve_for == def->key || solve_for == qr_target) {
+                Result fwd = compute(*def, facts);
+                return fwd.has_value ? fwd
+                    : blocked(qr_target + " is unavailable from permitted "
+                              "evidence sources.");
+            }
+            if (solve_for == "Current Assets") {
+                if (!need(qr_target) || !need("Current Liabilities")
+                    || !need("Inventory")) {
+                    return blocked("Cannot solve for Current Assets: required "
+                                   "input is unavailable from permitted "
+                                   "evidence sources.");
+                }
+                Result r;
+                r.status = Status::DERIVED_VERIFIED;
+                r.value = val(qr_target) * val("Current Liabilities")
+                    + val("Inventory");
+                r.has_value = true;
+                r.display_value = format_fixed(r.value, def->precision);
+                r.calculation_steps.push_back(
+                    "solve Current Assets from Quick Ratio = "
+                    "(Current Assets - Inventory) / Current Liabilities");
+                r.calculation_steps.push_back(
+                    "Current Assets = " + r.display_value);
+                return r;
+            }
+            if (solve_for == "Current Liabilities") {
+                if (!need(qr_target) || !need("Current Assets")
+                    || !need("Inventory")) {
+                    return blocked("Cannot solve for Current Liabilities: "
+                                   "required input is unavailable from "
+                                   "permitted evidence sources.");
+                }
+                if (val(qr_target) == 0.0L) {
+                    return blocked("Quick Ratio is zero - cannot solve for "
+                                   "Current Liabilities.");
+                }
+                Result r;
+                r.status = Status::DERIVED_VERIFIED;
+                r.value = (val("Current Assets") - val("Inventory"))
+                    / val(qr_target);
+                r.has_value = true;
+                r.display_value = format_fixed(r.value, def->precision);
+                r.calculation_steps.push_back(
+                    "solve Current Liabilities from Quick Ratio = "
+                    "(Current Assets - Inventory) / Current Liabilities");
+                r.calculation_steps.push_back(
+                    "Current Liabilities = " + r.display_value);
+                return r;
+            }
+            return blocked(solve_for + " is not a variable of Quick Ratio.");
+        }
+        return blocked("No registered inverse relationship for " + solve_for +
+                       " in " + metric_key + ".");
+    }
+
+    // Unary opposites (Sprint 12F): Profit = -Loss and Loss = -Profit have
+    // one input and the registered inverse input = -target.
+    if (def->op == "neg") {
+        const std::string& only = def->required_inputs[0];
+        if (solve_for == def->key || solve_for == target_key) {
+            if (!need(only)) {
+                return blocked(target_key + " is unavailable from permitted "
+                               "evidence sources.");
+            }
+            return compute_generic(*def, facts);
+        }
+        if (solve_for == only) {
+            if (!need(target_key)) {
+                return blocked("Cannot solve for " + solve_for + ": required "
+                               "input is unavailable from permitted evidence "
+                               "sources.");
+            }
+            Result r;
+            r.status = Status::DERIVED_VERIFIED;
+            r.value = -val(target_key);
+            r.has_value = true;
+            r.display_value = format_fixed(r.value, def->precision);
+            r.calculation_steps.push_back(
+                "solve " + solve_for + " from " + def->display_name + " = " +
+                def->formula);
+            r.calculation_steps.push_back(solve_for + " = " + r.display_value);
+            r.lineage = solve_for + " (solved from " + def->display_name +
+                        " = " + def->formula + ")";
+            return r;
+        }
+        return blocked(solve_for + " is not a variable of " + metric_key + ".");
+    }
+
+    const std::string& a = def->required_inputs[0];
+    const std::string& b = def->required_inputs[1];
 
     // Forward direction: solving for the formula's own target concept
     // (matched by concept name when declared, else by formula key).
@@ -741,13 +1003,6 @@ Result solve_metric(const std::string& metric_key,
         }
         return compute_generic(*def, facts);
     }
-
-    // Target value, converted to a fraction for percent-kind formulas.
-    auto target_value = [&]() -> long double {
-        long double tv = val(target_key);
-        if (def->kind == "percent") tv /= 100.0L;
-        return tv;
-    };
 
     long double result = 0.0L;
     if (solve_for == a) {
@@ -760,7 +1015,7 @@ Result solve_metric(const std::string& metric_key,
             result = target_value() - val(b);
         } else if (def->op == "mul") {
             if (val(b) == 0.0L) {
-                return blocked(b + " is zero — cannot solve for " + a + ".");
+                return blocked(b + " is zero - cannot solve for " + a + ".");
             }
             result = target_value() / val(b);
         } else if (def->op == "div") {
@@ -778,12 +1033,12 @@ Result solve_metric(const std::string& metric_key,
             result = target_value() - val(a);
         } else if (def->op == "mul") {
             if (val(a) == 0.0L) {
-                return blocked(a + " is zero — cannot solve for " + b + ".");
+                return blocked(a + " is zero - cannot solve for " + b + ".");
             }
             result = target_value() / val(a);
         } else if (def->op == "div") {
             if (target_value() == 0.0L) {
-                return blocked(target_key + " is zero — cannot solve for " + b + ".");
+                return blocked(target_key + " is zero - cannot solve for " + b + ".");
             }
             result = val(a) / target_value();
         } else {
@@ -1032,6 +1287,93 @@ static int selftest() {
             "extended zero denom -> BLOCKED");
     expect(solve_metric("PROFIT", "DCF", pnl).status == Status::BLOCKED,
             "solve for non-variable -> BLOCKED");
+
+    // ---- Sprint 12F — extended production coverage (additive) ----
+    std::map<std::string, Fact> epsf = facts_of({
+        {"Net Profit", 200.0L}, {"Shares Outstanding", 100.0L}, {"EPS", 2.0L},
+    });
+    expect(calculate_metric("EPS", epsf).display_value == "2.00", "EPS forward");
+    expect(solve_metric("EPS", "Net Profit", epsf).display_value == "200.00",
+            "EPS reverse Net Profit");
+    expect(solve_metric("EPS", "Shares Outstanding", epsf).display_value == "100.00",
+            "EPS reverse Shares");
+
+    std::map<std::string, Fact> nmf = facts_of({
+        {"Net Profit", 200.0L}, {"Revenue", 1000.0L}, {"Net Margin", 20.0L},
+    });
+    expect(calculate_metric("NET_MARGIN", nmf).display_value == "20.00%",
+            "Net Margin forward");
+    expect(solve_metric("NET_MARGIN", "Net Profit", nmf).display_value == "200.00",
+            "Net Margin reverse Profit");
+    expect(solve_metric("NET_MARGIN", "Revenue", nmf).display_value == "1000.00",
+            "Net Margin reverse Revenue");
+
+    std::map<std::string, Fact> qrf = facts_of({
+        {"Current Assets", 500.0L}, {"Inventory", 100.0L},
+        {"Current Liabilities", 200.0L}, {"Quick Ratio", 2.0L},
+    });
+    expect(calculate_metric("QUICK_RATIO", qrf).display_value == "2.00",
+            "Quick Ratio forward");
+    expect(solve_metric("QUICK_RATIO", "Current Assets", qrf).display_value == "500.00",
+            "QR reverse Current Assets");
+    expect(solve_metric("QUICK_RATIO", "Current Liabilities", qrf).display_value == "200.00",
+            "QR reverse Current Liabilities");
+    expect(solve_metric("QUICK_RATIO", "Inventory", qrf).status == Status::BLOCKED,
+            "QR reverse Inventory -> BLOCKED (not registered)");
+
+    std::map<std::string, Fact> dupf = facts_of({
+        {"Net Profit", 200.0L}, {"Revenue", 1000.0L}, {"Total Assets", 2000.0L},
+        {"Equity", 1000.0L},
+    });
+    expect(calculate_metric("DUPONT_PROFIT_MARGIN", dupf).display_value == "0.20",
+            "DuPont Profit Margin (fraction)");
+    expect(calculate_metric("DUPONT_ASSET_TURNOVER", dupf).display_value == "0.50",
+            "DuPont Asset Turnover");
+    expect(calculate_metric("DUPONT_EQUITY_MULTIPLIER", dupf).display_value == "2.00",
+            "DuPont Equity Multiplier");
+    std::map<std::string, Fact> duproe = facts_of({
+        {"Profit Margin", 0.2L}, {"Asset Turnover", 0.5L},
+        {"Equity Multiplier", 2.0L},
+    });
+    expect(calculate_metric("DUPONT_ROE", duproe).display_value == "20.00%",
+            "DuPont ROE = PM x AT x EM");
+    expect(solve_metric("DUPONT_ROE", "Profit Margin", duproe).status == Status::BLOCKED,
+            "DuPont ROE reverse -> BLOCKED (no registered inverse)");
+
+    std::map<std::string, Fact> roa_ta = facts_of({
+        {"Net Profit", 200.0L}, {"Total Assets", 1000.0L},
+    });
+    expect(calculate_metric("ROA_TOTAL_ASSETS", roa_ta).display_value == "20.00%",
+            "ROA (Total Assets vocabulary)");
+
+    std::map<std::string, Fact> da = facts_of({
+        {"Debt", 500.0L}, {"Total Assets", 2000.0L}, {"Debt to Assets", 0.25L},
+    });
+    expect(calculate_metric("DEBT_TO_ASSETS", da).display_value == "0.25",
+            "Debt to Assets forward");
+    expect(solve_metric("DEBT_TO_ASSETS", "Debt", da).display_value == "500.00",
+            "Debt to Assets reverse Debt");
+
+    std::map<std::string, Fact> ic = facts_of({
+        {"Operating Profit", 300.0L}, {"Interest Expense", 100.0L},
+    });
+    expect(calculate_metric("INTEREST_COVERAGE", ic).display_value == "3.00",
+            "Interest Coverage forward");
+
+    std::map<std::string, Fact> oppf = facts_of({
+        {"Revenue", 1000.0L}, {"Loss", 200.0L}, {"Profit", -200.0L},
+    });
+    expect(calculate_metric("PROFIT_LOSS_OPPOSITE", oppf).display_value == "-200.00",
+            "Profit = -Loss");
+    expect(solve_metric("PROFIT_LOSS_OPPOSITE", "Loss", oppf).display_value == "200.00",
+            "Loss = -Profit (reverse)");
+
+    std::map<std::string, Fact> cagr_fact_span = facts_of({
+        {"CAGR Beginning Value", 100.0L}, {"CAGR Ending Value", 121.0L},
+        {"CAGR Span Years", 2.0L},
+    });
+    expect(calculate_metric("CAGR", cagr_fact_span).display_value == "10.00%",
+            "CAGR explicit span fact");
 
     if (failures == 0) {
         std::cout << "SELFTEST: ALL OK\n";

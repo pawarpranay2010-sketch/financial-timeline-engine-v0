@@ -455,6 +455,7 @@ class DecisionGraph:
 
     def __init__(self, registry: Optional[FormulaRegistry] = None,
                  prefer_cpp: bool = True,
+                 cpp_authority: bool = False,
                  excel_compiler: Optional[ExcelLineageCompiler] = None,
                  gate: Optional[ProvenanceGate] = None) -> None:
         from backend.maths.extended_registry import EXTENDED_REGISTRY
@@ -462,6 +463,7 @@ class DecisionGraph:
             registry if registry is not None else EXTENDED_REGISTRY
         )
         self.prefer_cpp = prefer_cpp
+        self.cpp_authority = cpp_authority
         self.compiler = (
             excel_compiler if excel_compiler is not None
             else ExcelLineageCompiler(self.registry)
@@ -487,7 +489,8 @@ class DecisionGraph:
         provenance_verdict = self.gate.validate_facts(
             graph, reference, target
         )
-        solver = Solver(self.registry, prefer_cpp=self.prefer_cpp)
+        solver = Solver(self.registry, prefer_cpp=self.prefer_cpp,
+                        cpp_authority=self.cpp_authority)
         solution = solver.solve(target, graph)
 
         # -- anomaly / reconciliation context --------------------------
@@ -635,10 +638,12 @@ def evaluate_metric(target: str, facts: Any,
                     reference: Optional[Dict[str, Any]] = None,
                     anomalies: Optional[List[Any]] = None,
                     reconciliation_results: Optional[List[Any]] = None,
-                    prefer_cpp: bool = True) -> DecisionNode:
+                    prefer_cpp: bool = True,
+                    cpp_authority: bool = False) -> DecisionNode:
     """Convenience entry point returning a DecisionNode."""
     return DecisionGraph(
-        registry=registry, prefer_cpp=prefer_cpp
+        registry=registry, prefer_cpp=prefer_cpp,
+        cpp_authority=cpp_authority,
     ).evaluate(
         target, facts,
         coordinate_map=coordinate_map,

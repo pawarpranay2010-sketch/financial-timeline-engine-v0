@@ -53,6 +53,50 @@ def cpp_available() -> bool:
     return binary_path() is not None
 
 
+# ---------------------------------------------------------------------------
+# Sprint 12F - C++ mathematical authority coverage contract
+# ---------------------------------------------------------------------------
+# Every formula the production calculation path may route to the C++
+# engine. A formula NOT in this set is UNSUPPORTED by the authority
+# (never silently computed in Python). Keys must match the C++ registry
+# (`--registry` + `--registry-ext`); scripts/fte_maths_student_production_gate_test.py
+# cross-checks this set against the compiled binary so it cannot drift.
+CPP_COVERED_KEYS = frozenset({
+    # legacy registry (9)
+    "ROE", "ROA", "Profit Margin", "Operating Margin", "Current Ratio",
+    "Debt to Equity", "Revenue Growth", "EPS Growth", "CAGR",
+    # extended registry (24, Sprint 12A + Sprint 12F additive coverage)
+    "PROFIT", "LOSS", "GROSS_PROFIT", "WORKING_CAPITAL", "ASSET_TURNOVER",
+    "EQUITY_MULTIPLIER", "PROFIT_MARGIN", "ROA_TOTAL_ASSETS",
+    "GROSS_MARGIN", "EBITDA_MARGIN", "NET_MARGIN", "EPS", "DEBT_TO_ASSETS",
+    "INTEREST_COVERAGE", "INVENTORY_TURNOVER", "RECEIVABLES_TURNOVER",
+    "PAYABLES_TURNOVER", "QUICK_RATIO", "DUPONT_PROFIT_MARGIN",
+    "DUPONT_ASSET_TURNOVER", "DUPONT_EQUITY_MULTIPLIER", "DUPONT_ROE",
+    "PROFIT_LOSS_OPPOSITE", "LOSS_PROFIT_OPPOSITE",
+})
+
+# Deterministic formula_id -> C++ registry key mapping. The Python 12C/12D
+# registry expresses ROA over Total Assets while the legacy C++ ROA uses
+# "Assets"; the strict path routes to the dedicated Total-Assets variant.
+CPP_KEY_ALIASES = {
+    "ROA": "ROA_TOTAL_ASSETS",
+    "CURRENT_RATIO": "Current Ratio",
+    "DEBT_TO_EQUITY": "Debt to Equity",
+    "OPERATING_MARGIN": "Operating Margin",
+}
+
+
+def cpp_coverage() -> frozenset:
+    """Formulas the C++ mathematical authority can compute."""
+    return CPP_COVERED_KEYS
+
+
+def is_cpp_covered(formula_id: str) -> bool:
+    """True when the C++ authority can compute this formula."""
+    key = CPP_KEY_ALIASES.get(formula_id, formula_id)
+    return key in CPP_COVERED_KEYS
+
+
 def _fact_json(fact: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize one verified fact for the C++ engine. Only real fields are
     sent; nothing is fabricated. Missing metadata stays absent."""

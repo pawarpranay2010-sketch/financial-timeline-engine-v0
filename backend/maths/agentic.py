@@ -591,14 +591,16 @@ class AgenticOrchestrator:
     def __init__(self, registry: Optional[FormulaRegistry] = None,
                  prefer_cpp: bool = True,
                  gate: Optional[ProvenanceGate] = None,
-                 max_rounds: int = 3) -> None:
+                 max_rounds: int = 3,
+                 cpp_authority: bool = False) -> None:
         self.registry = registry if registry is not None else EXTENDED_REGISTRY
         self.prefer_cpp = prefer_cpp
+        self.cpp_authority = cpp_authority
         self.gate = gate if gate is not None else ProvenanceGate()
         self.loop = AgenticRetrievalLoop(max_rounds=max_rounds)
         self.graph = DecisionGraph(
             registry=self.registry, prefer_cpp=self.prefer_cpp,
-            gate=self.gate,
+            gate=self.gate, cpp_authority=self.cpp_authority,
         )
 
     # ------------------------------------------------------------------
@@ -764,6 +766,9 @@ class AgenticOrchestrator:
             node.decision, BLOCKED_STATE,
         )
         analysis.node_payload = node.to_payload()
+        # Sprint 12F - additive hook: retain the evaluated DecisionNode so
+        # the student sandbox can build the audit trail (deterministic).
+        self._last_node = node
 
         # -- agent explanation ----------------------------------------
         t0 = time.perf_counter()

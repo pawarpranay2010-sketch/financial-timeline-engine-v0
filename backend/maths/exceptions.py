@@ -79,3 +79,15 @@ class UnderdeterminedEquationError(MathsEngineError):
 
 class NullValueError(MathsEngineError):
     """A dependency is present but carries a null / non-numeric value."""
+
+
+class CppAuthorityError(MathsEngineError):
+    """Sprint 12F - the C++ mathematical authority is unavailable (no
+    compiled binary, or the engine call failed). Production calculation is
+    BLOCKED - there is NO Python calculation fallback."""
+
+
+class CppUnsupportedError(MathsEngineError):
+    """Sprint 12F - a registered formula is not covered by the C++
+    mathematical authority. The engine returns UNSUPPORTED instead of
+    silently calculating the financial result in Python."""

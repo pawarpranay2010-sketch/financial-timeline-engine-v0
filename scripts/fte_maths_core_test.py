@@ -1083,7 +1083,10 @@ def test_l_cpp():
         print("  (C++ binary unavailable - skipping C++ checks)")
         return
 
-    # L1: registry contracts (legacy unchanged at 9; extended additive at 7)
+    # L1: registry contracts (legacy unchanged at 9; extended is the
+    # Sprint 12F production coverage set - 24 additive formulas covering
+    # EPS, margins, turnover ratios, Quick Ratio, the DuPont chain and
+    # the registered +/-Loss opposites, plus ROA over Total Assets).
     bin_path = binary_path()
     out = subprocess.run([bin_path, "--registry"], capture_output=True,
                          text=True, timeout=30)
@@ -1093,12 +1096,20 @@ def test_l_cpp():
     out = subprocess.run([bin_path, "--registry-ext"], capture_output=True,
                          text=True, timeout=30)
     ext = json.loads(out.stdout)
-    check("L1b. --registry-ext returns 7 formulas",
-          len(ext) == 7, str(len(ext)))
+    check("L1b. --registry-ext returns 24 formulas (Sprint 12F coverage)",
+          len(ext) == 24, str(len(ext)))
     keys = {e["metric_key"] for e in ext}
-    check("L1c. extended registry keys",
+    check("L1c. extended registry keys (Sprint 12F coverage set)",
           keys == {"PROFIT", "LOSS", "GROSS_PROFIT", "WORKING_CAPITAL",
-                   "ASSET_TURNOVER", "EQUITY_MULTIPLIER", "PROFIT_MARGIN"},
+                   "ASSET_TURNOVER", "EQUITY_MULTIPLIER", "PROFIT_MARGIN",
+                   "ROA_TOTAL_ASSETS", "GROSS_MARGIN", "EBITDA_MARGIN",
+                   "NET_MARGIN", "EPS", "DEBT_TO_ASSETS",
+                   "INTEREST_COVERAGE", "INVENTORY_TURNOVER",
+                   "RECEIVABLES_TURNOVER", "PAYABLES_TURNOVER",
+                   "QUICK_RATIO", "DUPONT_PROFIT_MARGIN",
+                   "DUPONT_ASSET_TURNOVER", "DUPONT_EQUITY_MULTIPLIER",
+                   "DUPONT_ROE", "PROFIT_LOSS_OPPOSITE",
+                   "LOSS_PROFIT_OPPOSITE"},
           str(sorted(keys)))
 
     # L2: C++ forward calculation through the Python bridge

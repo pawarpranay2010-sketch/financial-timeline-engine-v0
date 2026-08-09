@@ -319,6 +319,37 @@ from backend.maths.agent_explainer import (
     explain_unsupported,
 )
 
+# ---------------------------------------------------------------------------
+# Sprint 12F - C++ Mathematical Authority & Student Production Sandbox
+# ---------------------------------------------------------------------------
+# The compiled C++ engine is the SOLE production mathematical authority.
+# The authority gate enforces: C++ available -> C++ result; C++ unavailable
+# -> BLOCKED/ENGINE_UNAVAILABLE; C++ unsupported -> UNSUPPORTED; NEVER a
+# silent Python calculation fallback. The student sandbox exposes the real
+# production pipeline (strict C++ authority) with student-understandable
+# outcomes and refusal UX. Additive only - every 12A-12E default is
+# untouched.
+from backend.maths.authority import (
+    AUTHORITY_CPP,
+    AUTHORITY_UNAVAILABLE,
+    AUTHORITY_UNSUPPORTED,
+    PRODUCTION_FORMULA_IDS,
+    authority_state,
+    coverage,
+    cpp_covered_formulas,
+    engine_available,
+    production_analyze,
+    production_dupont,
+    production_solve,
+    unsupported_formulas,
+)
+from backend.maths.student_sandbox import (
+    STUDENT_CHECKLIST,
+    run_student_dupont,
+    run_student_metric,
+    student_checklist,
+)
+
 __all__ = [
     # exceptions
     "MathsEngineError", "RegistrationError", "UnregisteredFormulaError",
@@ -422,4 +453,11 @@ __all__ = [
     "EVIDENCE_CONFLICT_STATE", "AGENTIC_UNSUPPORTED", "RETRIEVAL_FAILED",
     "WORKFLOW_STATE_BY_DECISION", "explain_decision_node",
     "explain_unsupported",
+    # ---- Sprint 12F ----
+    "AUTHORITY_CPP", "AUTHORITY_UNAVAILABLE", "AUTHORITY_UNSUPPORTED",
+    "PRODUCTION_FORMULA_IDS", "authority_state", "coverage",
+    "cpp_covered_formulas", "engine_available", "production_analyze",
+    "production_dupont", "production_solve", "unsupported_formulas",
+    "STUDENT_CHECKLIST", "run_student_dupont", "run_student_metric",
+    "student_checklist",
 ]
