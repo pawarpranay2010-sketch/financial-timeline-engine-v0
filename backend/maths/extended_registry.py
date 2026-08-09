@@ -67,6 +67,15 @@ EBITDA_MARGIN = "EBITDA Margin"
 CAGR = "CAGR"
 EPS = "EPS"
 
+# Sprint 12D additions
+NET_MARGIN = "Net Margin"
+QUICK_RATIO = "Quick Ratio"
+DEBT_TO_ASSETS = "Debt to Assets"
+INTEREST_COVERAGE = "Interest Coverage"
+INVENTORY_TURNOVER = "Inventory Turnover"
+RECEIVABLES_TURNOVER = "Receivables Turnover"
+PAYABLES_TURNOVER = "Payables Turnover"
+
 NET_PROFIT = "Net Profit"
 REVENUE = "Revenue"
 EQUITY = "Equity"
@@ -81,6 +90,28 @@ SHARES_OUTSTANDING = "Shares Outstanding"
 CAGR_BEGINNING = "CAGR Beginning Value"
 CAGR_ENDING = "CAGR Ending Value"
 CAGR_SPAN = "CAGR Span Years"
+
+# ---- Sprint 12D additions (section G) ----------------------------------
+NET_MARGIN = "Net Margin"
+QUICK_RATIO = "Quick Ratio"
+DEBT_TO_ASSETS = "Debt to Assets"
+INTEREST_COVERAGE = "Interest Coverage"
+INVENTORY_TURNOVER = "Inventory Turnover"
+RECEIVABLES_TURNOVER = "Receivables Turnover"
+PAYABLES_TURNOVER = "Payables Turnover"
+INVENTORY = "Inventory"
+RECEIVABLES = "Receivables"
+PAYABLES = "Payables"
+INTEREST_EXPENSE = "Interest Expense"
+EBIT = "EBIT"
+
+# Sprint 12D dependency concepts
+INVENTORY = "Inventory"
+COST_OF_SALES = "Cost of Sales"
+AVERAGE_INVENTORY = "Average Inventory"
+AVERAGE_RECEIVABLES = "Average Receivables"
+AVERAGE_PAYABLES = "Average Payables"
+INTEREST_EXPENSE = "Interest Expense"
 
 # ---------------------------------------------------------------------------
 # CAGR helpers (deterministic; never guessed)
@@ -307,6 +338,155 @@ def build_extended_registry() -> FormulaRegistry:
         source_ref="EPS = Net Profit / Weighted Shares Outstanding",
     ))
 
+    # ---- Sprint 12D additions (declarative; no solver changes) ------
+    reg.register(FormulaDefinition(
+        formula_id="NET_MARGIN",
+        target=NET_MARGIN,
+        description="Net Margin = Net Profit / Revenue (percentage)",
+        expression="Net Profit / Revenue",
+        dependencies=[NET_PROFIT, REVENUE],
+        inverses={
+            NET_PROFIT: "Net Margin * Revenue / 100",
+            REVENUE: "Net Profit / (Net Margin / 100)",
+        },
+        unit_kind="percent",
+        period_mode="same",
+        denominator_constraints=[REVENUE],
+        version="1.0",
+        source_ref="Net Margin = Net Profit / Revenue",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="QUICK_RATIO",
+        target=QUICK_RATIO,
+        description="Quick Ratio = (Current Assets - Inventory) / Current Liabilities",
+        expression="(Current Assets - Inventory) / Current Liabilities",
+        dependencies=[CURRENT_ASSETS, INVENTORY, CURRENT_LIABILITIES],
+        inverses={
+            CURRENT_ASSETS: "Quick Ratio * Current Liabilities + Inventory",
+            CURRENT_LIABILITIES: "(Current Assets - Inventory) / (Quick Ratio)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[CURRENT_LIABILITIES],
+        version="1.0",
+        source_ref="Quick Ratio = (Current Assets - Inventory) / Current Liabilities",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="DEBT_TO_ASSETS",
+        target=DEBT_TO_ASSETS,
+        description="Debt to Assets = Debt / Total Assets",
+        expression="Debt / Total Assets",
+        dependencies=[DEBT, TOTAL_ASSETS],
+        inverses={
+            DEBT: "Debt to Assets * Total Assets",
+            TOTAL_ASSETS: "Debt / (Debt to Assets)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[TOTAL_ASSETS],
+        version="1.0",
+        source_ref="Debt to Assets = Total Debt / Total Assets",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="INTEREST_COVERAGE",
+        target=INTEREST_COVERAGE,
+        description="Interest Coverage = Operating Profit / Interest Expense",
+        expression="Operating Profit / Interest Expense",
+        dependencies=[OPERATING_PROFIT, INTEREST_EXPENSE],
+        inverses={
+            OPERATING_PROFIT: "Interest Coverage * Interest Expense",
+            INTEREST_EXPENSE: "Operating Profit / (Interest Coverage)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[INTEREST_EXPENSE],
+        version="1.0",
+        source_ref="Interest Coverage = EBIT / Interest Expense",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="INVENTORY_TURNOVER",
+        target=INVENTORY_TURNOVER,
+        description="Inventory Turnover = Cost of Sales / Average Inventory",
+        expression="Cost of Sales / Average Inventory",
+        dependencies=[COST_OF_SALES, AVERAGE_INVENTORY],
+        inverses={
+            COST_OF_SALES: "Inventory Turnover * Average Inventory",
+            AVERAGE_INVENTORY: "Cost of Sales / (Inventory Turnover)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[AVERAGE_INVENTORY],
+        version="1.0",
+        source_ref="Inventory Turnover = COGS / Average Inventory",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="RECEIVABLES_TURNOVER",
+        target=RECEIVABLES_TURNOVER,
+        description="Receivables Turnover = Revenue / Average Receivables",
+        expression="Revenue / Average Receivables",
+        dependencies=[REVENUE, AVERAGE_RECEIVABLES],
+        inverses={
+            REVENUE: "Receivables Turnover * Average Receivables",
+            AVERAGE_RECEIVABLES: "Revenue / (Receivables Turnover)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[AVERAGE_RECEIVABLES],
+        version="1.0",
+        source_ref="Receivables Turnover = Revenue / Average Receivables",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="PAYABLES_TURNOVER",
+        target=PAYABLES_TURNOVER,
+        description="Payables Turnover = Cost of Sales / Average Payables",
+        expression="Cost of Sales / Average Payables",
+        dependencies=[COST_OF_SALES, AVERAGE_PAYABLES],
+        inverses={
+            COST_OF_SALES: "Payables Turnover * Average Payables",
+            AVERAGE_PAYABLES: "Cost of Sales / (Payables Turnover)",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[AVERAGE_PAYABLES],
+        version="1.0",
+        source_ref="Payables Turnover = COGS / Average Payables",
+    ))
+
+    # Sprint 12D section F: registered algebraic opposite links so
+    # Revenue + Loss -> Profit and Profit + Revenue -> Loss are solvable
+    # deterministically (never guessed; declared relationships only).
+    reg.register(FormulaDefinition(
+        formula_id="PROFIT_LOSS_OPPOSITE",
+        target="Profit",
+        description="Profit = -Loss (registered algebraic opposite)",
+        expression="- Loss",
+        dependencies=["Loss"],
+        inverses={"Loss": "- Profit"},
+        unit_kind="amount",
+        period_mode="same",
+        version="1.0",
+        source_ref="Loss = Expenses - Revenue = -(Revenue - Expenses) = -Profit",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="LOSS_PROFIT_OPPOSITE",
+        target="Loss",
+        description="Loss = -Profit (registered algebraic opposite)",
+        expression="- Profit",
+        dependencies=["Profit"],
+        inverses={"Profit": "- Loss"},
+        unit_kind="amount",
+        period_mode="same",
+        version="1.0",
+        source_ref="Loss = -(Revenue - Expenses) = -Profit",
+    ))
+
     return reg
 
 
@@ -405,6 +585,81 @@ EXTENDED_FORMULA_METADATA: Dict[str, Dict[str, Any]] = {
         "status_requirement": "weakest-link",
         "lineage_behavior": "full",
         "excel_template": "Net Profit / Shares Outstanding",
+    },
+    # ---- Sprint 12D metadata (aliases + Excel templates) ----
+    "NET_MARGIN": {
+        "name": NET_MARGIN,
+        "aliases": ["Net Profit Margin"],
+        "output_kind": "percent",
+        "expected_input_kinds": {NET_PROFIT: "amount", REVENUE: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Net Profit / Revenue",
+    },
+    "QUICK_RATIO": {
+        "name": QUICK_RATIO,
+        "aliases": ["Acid Test", "Acid-Test Ratio"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {
+            CURRENT_ASSETS: "amount", INVENTORY: "amount",
+            CURRENT_LIABILITIES: "amount",
+        },
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "(Current Assets - Inventory) / Current Liabilities",
+    },
+    "DEBT_TO_ASSETS": {
+        "name": DEBT_TO_ASSETS,
+        "aliases": ["Debt Ratio", "Debt/Assets"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {DEBT: "amount", TOTAL_ASSETS: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Debt / Total Assets",
+    },
+    "INTEREST_COVERAGE": {
+        "name": INTEREST_COVERAGE,
+        "aliases": ["ICR", "Times Interest Earned"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {
+            OPERATING_PROFIT: "amount", INTEREST_EXPENSE: "amount",
+        },
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Operating Profit / Interest Expense",
+    },
+    "INVENTORY_TURNOVER": {
+        "name": INVENTORY_TURNOVER,
+        "aliases": ["Stock Turnover"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {
+            COST_OF_SALES: "amount", AVERAGE_INVENTORY: "amount",
+        },
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Cost of Sales / Average Inventory",
+    },
+    "RECEIVABLES_TURNOVER": {
+        "name": RECEIVABLES_TURNOVER,
+        "aliases": ["Debtors Turnover"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {
+            REVENUE: "amount", AVERAGE_RECEIVABLES: "amount",
+        },
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Revenue / Average Receivables",
+    },
+    "PAYABLES_TURNOVER": {
+        "name": PAYABLES_TURNOVER,
+        "aliases": ["Creditors Turnover"],
+        "output_kind": "ratio",
+        "expected_input_kinds": {
+            COST_OF_SALES: "amount", AVERAGE_PAYABLES: "amount",
+        },
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Cost of Sales / Average Payables",
     },
 }
 

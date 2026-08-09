@@ -44,7 +44,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from backend.maths.evidence import EvidenceTrace, trace_leaves
+from backend.maths.evidence import (
+    EvidenceTrace,
+    TIER_1_DOCUMENT,
+    TIER_2_APPENDIX,
+    TIER_3_REGULATORY_API,
+    tier_of,
+    trace_leaves,
+)
 from backend.maths.excel_compiler import (
     DEFAULT_COMPILER,
     ExcelFormula,
@@ -99,6 +106,63 @@ _CONFLICT_ANOMALY_KINDS = frozenset({
     "CONFLICTING_PROVENANCE",
 })
 
+# Deterministic confidence-state mapping (1:1 with decision - a decision
+# never claims more certainty than its weakest dependency).
+CONFIDENCE_BY_DECISION = {
+    METRIC_AVAILABLE: "verified",
+    METRIC_DERIVED: "derived",
+    METRIC_RECONCILED: "reconciled",
+    METRIC_STUDENT_INPUT: "student_input",
+    EVIDENCE_CONFLICT: "review_required",
+    RECONCILIATION_REQUIRED: "review_required",
+    ADJUSTMENT_REQUIRED: "review_required",
+    METRIC_BLOCKED: "blocked",
+    INSUFFICIENT_EVIDENCE: "insufficient",
+}
+
+# Deterministic next-action mapping.
+NEXT_ACTION_BY_DECISION = {
+    METRIC_AVAILABLE: "none",
+    METRIC_DERIVED: "none",
+    METRIC_RECONCILED: "none",
+    METRIC_STUDENT_INPUT: "none",
+    EVIDENCE_CONFLICT: "review_conflicting_evidence",
+    RECONCILIATION_REQUIRED: "review_reconciliation",
+    ADJUSTMENT_REQUIRED: "decide_adjustment",
+    METRIC_BLOCKED: "provide_missing_evidence",
+    INSUFFICIENT_EVIDENCE: "provide_evidence_or_register_relationship",
+}
+
+_TIER_LABEL_BY_NUMBER = {
+    TIER_1_DOCUMENT: "DOCUMENT",
+    TIER_2_APPENDIX: "APPENDIX",
+    TIER_3_REGULATORY_API: "REGULATORY_API",
+}
+
+
+def confidence_for(decision: str) -> str:
+    """Deterministic confidence state for a decision."""
+    return CONFIDENCE_BY_DECISION.get(decision, "blocked")
+
+
+def next_action_for(decision: str) -> str:
+    """Deterministic next action for a decision."""
+    return NEXT_ACTION_BY_DECISION.get(decision, "none")
+
+
+def source_tier_for(evidence) -> str:
+    """Strongest approved tier present among the evidence leaves
+    (Tier 1 > Tier 2 > Tier 3). '—' when no leaves exist."""
+    if evidence is None or not evidence.leaves:
+        return "—"
+    numbers = [tier_of(l.tier) for l in evidence.leaves]
+    valid = [n for n in numbers
+             if n in (TIER_1_DOCUMENT, TIER_2_APPENDIX,
+                      TIER_3_REGULATORY_API)]
+    if not valid:
+        return "—"
+    return _TIER_LABEL_BY_NUMBER[min(valid)]
+
 
 # ---------------------------------------------------------------------------
 # Decision node
@@ -113,6 +177,7 @@ class DecisionNode:
     target: str
     decision: str = METRIC_BLOCKED
     status: str = BLOCKED
+    confidence_state: str = "blocked"
     value: Optional[Decimal] = None
     display_value: str = "—"
     reason: str = ""
@@ -120,12 +185,18 @@ class DecisionNode:
     formula_id: Optional[str] = None
     formula: str = "—"
     dependencies: List[str] = field(default_factory=list)
+    missing: List[str] = field(default_factory=list)
     sufficiency_state: str = ""
+    source_tier: str = "—"
     provenance_verdict: Optional[ProvenanceVerdict] = None
     evidence: Optional[EvidenceTrace] = None
     excel_formula: Optional[ExcelFormula] = None
+    anomalies: List[Dict[str, Any]] = field(default_factory=list)
+    reconciliation: List[Dict[str, Any]] = field(default_factory=list)
     reconciliation_refs: List[str] = field(default_factory=list)
     adjustment_refs: List[str] = field(default_factory=list)
+    explanation: Dict[str, Any] = field(default_factory=dict)
+    next_action: str = "none"
     lineage_text: str = ""
 
     # ------------------------------------------------------------------
@@ -135,6 +206,7 @@ class DecisionNode:
             "target": self.target,
             "decision": self.decision,
             "status": self.status,
+            "confidence_state": self.confidence_state,
             "value": float(self.value) if self.value is not None else None,
             "display_value": self.display_value,
             "reason": self.reason,
@@ -142,7 +214,9 @@ class DecisionNode:
             "formula_id": self.formula_id,
             "formula": self.formula,
             "dependencies": list(self.dependencies),
+            "missing": list(self.missing),
             "sufficiency_state": self.sufficiency_state,
+            "source_tier": self.source_tier,
             "provenance_verdict": (
                 self.provenance_verdict.to_dict()
                 if self.provenance_verdict else None
@@ -152,8 +226,12 @@ class DecisionNode:
                 self.excel_formula.to_dict()
                 if self.excel_formula else None
             ),
+            "anomalies": list(self.anomalies),
+            "reconciliation": list(self.reconciliation),
             "reconciliation_refs": list(self.reconciliation_refs),
             "adjustment_refs": list(self.adjustment_refs),
+            "explanation": dict(self.explanation),
+            "next_action": self.next_action,
             "lineage_text": self.lineage_text,
         }
 
@@ -171,15 +249,26 @@ class DecisionNode:
         lineage_steps = list(self.evidence.chain) if self.evidence else []
         return {
             "target": self.target,
-            "status": self.status,
-            "decision": self.decision,
             "value": float(self.value) if self.value is not None else None,
             "display_value": self.display_value,
+            "status": self.status,
+            "decision": self.decision,
+            "confidence_state": self.confidence_state,
             "formula": self.formula,
             "formula_id": self.formula_id,
             "dependencies": list(self.dependencies),
+            "missing": list(self.missing),
             "lineage": lineage_steps,
             "evidence": evidence_leaves,
+            "provenance": (
+                self.provenance_verdict.to_dict()
+                if self.provenance_verdict else None
+            ),
+            "anomalies": list(self.anomalies),
+            "reconciliation": list(self.reconciliation),
+            "source_tier": self.source_tier,
+            "explanation": dict(self.explanation),
+            "next_action": self.next_action,
             "blocking_reason": self.blocking_reason,
             "reason": self.reason,
             "sufficiency_state": self.sufficiency_state,
@@ -439,11 +528,20 @@ class DecisionGraph:
             node_status = REVIEW_REQUIRED
         else:
             node_status = solution.status
+        decision = verdict["decision"]
+        next_action = next_action_for(decision)
+        source_tier = source_tier_for(evidence_trace)
+        missing = list(solution.missing or [])
+        explanation = self._explanation(
+            target, solution, verdict, evidence_trace, missing,
+            next_action,
+        )
         return DecisionNode(
             node_id=f"DECISION:{target}",
             target=target,
-            decision=verdict["decision"],
+            decision=decision,
             status=node_status,
+            confidence_state=confidence_for(decision),
             value=solution.value,
             display_value=solution.display_value,
             reason=verdict["reason"],
@@ -451,18 +549,48 @@ class DecisionGraph:
             formula_id=solution.formula_id,
             formula=solution.formula,
             dependencies=[i.concept for i in solution.inputs],
+            missing=missing,
             sufficiency_state=solution.sufficiency_state,
+            source_tier=source_tier,
             provenance_verdict=provenance_verdict,
             evidence=evidence_trace,
             excel_formula=excel_formula,
+            anomalies=[a.to_dict() for a in relevant_anomalies],
+            reconciliation=[r.to_dict() for r in relevant_recons],
             reconciliation_refs=[
                 r.reconciliation_id for r in relevant_recons
             ],
             adjustment_refs=[
                 a.anomaly_id for a in relevant_anomalies
             ],
+            explanation=explanation,
+            next_action=next_action,
             lineage_text=render_excel_lineage_text(solution),
         )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _explanation(target: str, solution: Solution, verdict: Dict[str, Any],
+                     evidence_trace: EvidenceTrace, missing: List[str],
+                     next_action: str) -> Dict[str, Any]:
+        """Deterministic structured explanation: WHAT happened, WHY,
+        WHAT evidence supports it, WHAT dependencies were used, WHAT is
+        missing, WHETHER user action is required."""
+        leaves = evidence_trace.leaves if evidence_trace else []
+        evidence_support = [
+            f"{l.concept} ({l.source}"
+            + (f", p.{l.page}" if l.page not in ("", "—") else "")
+            + ")"
+            for l in leaves
+        ]
+        return {
+            "what": f"{target} {solution.display_value} ({solution.status})",
+            "why": verdict["reason"],
+            "evidence_support": evidence_support,
+            "dependencies_used": [i.concept for i in solution.inputs],
+            "missing": list(missing),
+            "user_action_required": next_action != "none",
+        }
 
     # ------------------------------------------------------------------
     @staticmethod

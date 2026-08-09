@@ -351,11 +351,18 @@ def trace_leaves(solution: Solution, facts: FactGraph) -> EvidenceTrace:
                 continue
             seen_leaf_concepts.add(i.concept)
             leaves.append(_evidence_ref_from_input(i.concept, facts))
-    # Direct facts (no derivation steps at all) are their own leaves.
-    if not steps and solution.value is not None:
+    # Direct facts are their own leaves. This covers both the no-step
+    # case and single-direct-step cases (a directly known fact whose
+    # lineage contains only the direct step).
+    if solution.value is not None:
         fact = facts.get(solution.target)
-        if fact is not None:
-            leaves.append(_evidence_ref_from_fact(solution.target, fact))
+        if (fact is not None and not steps) or (
+            steps and all(s.kind == "direct" for s in steps)
+        ):
+            if fact is not None and solution.target not in seen_leaf_concepts:
+                leaves.append(
+                    _evidence_ref_from_fact(solution.target, fact)
+                )
     return EvidenceTrace(
         target=solution.target,
         status=solution.status,

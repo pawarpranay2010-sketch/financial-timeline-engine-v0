@@ -168,12 +168,17 @@ from backend.maths.provenance import (
     validate_provenance,
 )
 from backend.maths.extended_registry import (
+    AVERAGE_INVENTORY,
+    AVERAGE_PAYABLES,
+    AVERAGE_RECEIVABLES,
     CAGR,
     CAGR_BEGINNING,
     CAGR_ENDING,
     CAGR_SPAN,
+    COST_OF_SALES,
     CURRENT_RATIO,
     DEBT,
+    DEBT_TO_ASSETS,
     DEBT_TO_EQUITY,
     EBITDA,
     EBITDA_MARGIN,
@@ -182,8 +187,16 @@ from backend.maths.extended_registry import (
     EXTENDED_REGISTRY,
     GROSS_MARGIN,
     GROSS_PROFIT,
+    INVENTORY,
+    INVENTORY_TURNOVER,
+    INTEREST_COVERAGE,
+    INTEREST_EXPENSE,
+    NET_MARGIN,
     OPERATING_MARGIN,
     OPERATING_PROFIT,
+    PAYABLES_TURNOVER,
+    QUICK_RATIO,
+    RECEIVABLES_TURNOVER,
     ROA,
     ROE,
     SHARES_OUTSTANDING,
@@ -214,8 +227,65 @@ from backend.maths.decision_graph import (
     METRIC_RECONCILED,
     METRIC_STUDENT_INPUT,
     RECONCILIATION_REQUIRED,
+    confidence_for,
     decide_state,
     evaluate_metric,
+    next_action_for,
+    source_tier_for,
+)
+
+# ---------------------------------------------------------------------------
+# Sprint 12D - Production-Grade Hardening Layer
+# ---------------------------------------------------------------------------
+# Deterministic production hardening around the 12A/12B/12C stack: fact
+# identity isolation, adversarial normalization, restatement handling,
+# tier-ordered evidence recovery, forensic reconciliation, and extended
+# registry formulas. Additive only - the C++ engine remains the
+# mathematical authority.
+from backend.maths.identity import (
+    IDENTITY_DIMENSIONS,
+    IdentityIssue,
+    STRICT_DIMENSIONS,
+    canonical_node_ids,
+    describe_fact_identity,
+    detect_identity_ambiguity,
+    differing_dimensions,
+    group_by_identity,
+    identity_key,
+    same_identity,
+)
+from backend.maths.normalization import (
+    ParseResult,
+    harden_fact_text,
+    normalize_value_text,
+    parse_numeric_text,
+)
+from backend.maths.restatement import (
+    CONFLICT,
+    DIFFERENT_IDENTITY,
+    DUPLICATE,
+    INCOMPATIBLE_PERIODS,
+    RESTATEMENT,
+    AnalyticalFact,
+    RestatementVerdict,
+    classify_pair,
+    classify_restatement_group,
+    resolve_analytical_fact,
+)
+from backend.maths.recovery import (
+    BLOCKED as RECOVERY_BLOCKED,
+    CONFLICT as RECOVERY_CONFLICT,
+    MISSING as RECOVERY_MISSING,
+    RECOVERED,
+    DEFAULT_RECOVERY,
+    EvidenceRecoveryEngine,
+    RecoveryResult,
+    recover_evidence,
+)
+from backend.maths.forensic_reconciliation import (
+    FORENSIC_RECONCILIATION_REGISTRY,
+    ForensicReconciliationEngine,
+    build_forensic_rules,
 )
 
 __all__ = [
@@ -278,6 +348,10 @@ __all__ = [
     "OPERATING_MARGIN", "EBITDA_MARGIN", "CAGR", "EPS", "DEBT",
     "EBITDA", "SHARES_OUTSTANDING", "CAGR_BEGINNING", "CAGR_ENDING",
     "CAGR_SPAN", "GROSS_PROFIT", "OPERATING_PROFIT",
+    "NET_MARGIN", "QUICK_RATIO", "DEBT_TO_ASSETS", "INTEREST_COVERAGE",
+    "INVENTORY_TURNOVER", "RECEIVABLES_TURNOVER", "PAYABLES_TURNOVER",
+    "INVENTORY", "COST_OF_SALES", "AVERAGE_INVENTORY",
+    "AVERAGE_RECEIVABLES", "AVERAGE_PAYABLES", "INTEREST_EXPENSE",
     # excel compiler
     "ExcelLineageCompiler", "ExcelFormula", "compile_excel_formula",
     "resolve_cell_reference", "render_excel_lineage_text",
@@ -286,5 +360,27 @@ __all__ = [
     "DECISION_STATES", "METRIC_AVAILABLE", "METRIC_DERIVED",
     "METRIC_RECONCILED", "METRIC_STUDENT_INPUT", "EVIDENCE_CONFLICT",
     "RECONCILIATION_REQUIRED", "ADJUSTMENT_REQUIRED", "METRIC_BLOCKED",
-    "INSUFFICIENT_EVIDENCE",
+    "INSUFFICIENT_EVIDENCE",    "confidence_for", "next_action_for",
+    "source_tier_for",
+    # ---- Sprint 12D hardening layer ----
+    # fact identity (isolation)
+    "IDENTITY_DIMENSIONS", "STRICT_DIMENSIONS", "IdentityIssue",
+    "identity_key", "same_identity", "differing_dimensions",
+    "group_by_identity", "detect_identity_ambiguity",
+    "canonical_node_ids", "describe_fact_identity",
+    # hardened normalization
+    "ParseResult", "parse_numeric_text", "normalize_value_text",
+    "harden_fact_text",
+    # restatement / amendment handling
+    "RestatementVerdict", "AnalyticalFact", "classify_pair",
+    "resolve_analytical_fact", "classify_restatement_group",
+    "DUPLICATE", "RESTATEMENT", "CONFLICT", "INCOMPATIBLE_PERIODS",
+    "DIFFERENT_IDENTITY",
+    # evidence recovery
+    "EvidenceRecoveryEngine", "RecoveryResult", "recover_evidence",
+    "DEFAULT_RECOVERY", "RECOVERED", "RECOVERY_CONFLICT",
+    "RECOVERY_BLOCKED", "RECOVERY_MISSING",
+    # forensic reconciliation
+    "ForensicReconciliationEngine", "FORENSIC_RECONCILIATION_REGISTRY",
+    "build_forensic_rules",
 ]

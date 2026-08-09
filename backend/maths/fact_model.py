@@ -90,6 +90,16 @@ class FactNode:
     status_reason: Optional[str] = None
     excel_cell_coordinate: Optional[str] = None
     version: Optional[str] = None       # restatement / version info
+    # ---- Sprint 12D fact identity (additive) -------------------------
+    # A fact is NEVER combined with another fact merely because the label
+    # matches: identity distinguishes entity / statement / period / period
+    # type / currency / unit-scale / source / version (see identity.py).
+    entity: Optional[str] = None        # reporting entity (parent / sub /
+                                        # consolidated / standalone)
+    statement: Optional[str] = None     # Income Statement / Balance Sheet /
+                                        # Cash Flow / Notes ...
+    filing_id: Optional[str] = None     # filing identity (restatements /
+                                        # amendments)
     apply_scale: bool = False           # True -> value is a scaled magnitude
                                         #        (e.g. 125.4 with scale
                                         #        "millions") that must be
@@ -128,6 +138,9 @@ class FactNode:
             "status_reason": self.status_reason,
             "excel_cell_coordinate": self.excel_cell_coordinate,
             "version": self.version,
+            "entity": self.entity,
+            "statement": self.statement,
+            "filing_id": self.filing_id,
             "apply_scale": self.apply_scale,
             "lineage": self.lineage,
         }
@@ -143,6 +156,9 @@ _PIPELINE_TIER_KEYS = (
 )
 _PIPELINE_PERIOD_KEYS = ("reporting_period", "period")
 _PIPELINE_CURRENCY_KEYS = ("currency_code", "currency")
+_PIPELINE_ENTITY_KEYS = ("entity", "reporting_entity", "company")
+_PIPELINE_STATEMENT_KEYS = ("statement", "financial_statement")
+_PIPELINE_FILING_KEYS = ("filing_id", "filing", "amendment_id")
 
 
 def from_pipeline_fact(metric: str, fact: Dict[str, Any]) -> FactNode:
@@ -182,6 +198,24 @@ def from_pipeline_fact(metric: str, fact: Dict[str, Any]) -> FactNode:
         u = fact.get("unit")
         if u not in (None, ""):
             currency = str(u)
+    entity = None
+    for k in _PIPELINE_ENTITY_KEYS:
+        v = fact.get(k)
+        if v not in (None, ""):
+            entity = str(v)
+            break
+    statement = None
+    for k in _PIPELINE_STATEMENT_KEYS:
+        v = fact.get(k)
+        if v not in (None, ""):
+            statement = str(v)
+            break
+    filing_id = None
+    for k in _PIPELINE_FILING_KEYS:
+        v = fact.get(k)
+        if v not in (None, ""):
+            filing_id = str(v)
+            break
     status = status_from_provenance(
         tier,
         fact.get("extraction_state"),
@@ -207,6 +241,9 @@ def from_pipeline_fact(metric: str, fact: Dict[str, Any]) -> FactNode:
         status_reason=fact.get("status_reason") or fact.get("reason") or None,
         excel_cell_coordinate=fact.get("excel_cell_coordinate") or None,
         version=fact.get("version") or None,
+        entity=entity,
+        statement=statement,
+        filing_id=filing_id,
         apply_scale=False,
     )
 
