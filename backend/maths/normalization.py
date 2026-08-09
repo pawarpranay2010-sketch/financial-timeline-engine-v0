@@ -53,6 +53,8 @@ _CURRENCY_SYMBOLS: Dict[str, str] = {
     "gbp": "GBP",
     "₹": "INR",
     "inr": "INR",
+    "rs.": "INR",
+    "rs": "INR",
     "¥": "JPY",
     "jpy": "JPY",
     "¥c": "CNY",
@@ -174,21 +176,49 @@ def _clean_number_token(token: str) -> Optional[str]:
         t = t[1:]
         if not t:
             return None
-    cleaned = None
-    # standard: 1,234.56 -> 1234.56
-    if re.fullmatch(r"[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?", t):
-        cleaned = t.replace(",", "")
-    # no grouping: 1234.56 / .5 / 0.5
-    elif re.fullmatch(r"[0-9]+(?:\.[0-9]+)?|\.\d+", t):
-        cleaned = t
-    # 1.234,56 (European): both separators, non-standard role
-    elif "," in t and "." in t:
-        return None  # ambiguous - never guessed
-    # single decimal comma: 1234,56 (ambiguous)
-    elif "," in t:
+
+    # Split an optional decimal fraction off so comma-grouping rules are
+    # applied to the integer part only (e.g. "12,34,567.89").
+    if t.count(".") > 1:
         return None
-    if cleaned is None:
-        return None
+    if "." in t:
+        int_part, frac_part = t.split(".", 1)
+        if not frac_part.isdigit():
+            return None  # ambiguous - never guessed
+    else:
+        int_part, frac_part = t, None
+
+    if "," not in int_part:
+        # no grouping: 1234 / .5 / 0.5
+        if not int_part:
+            if frac_part is not None:
+                int_part = "0"  # ".5" -> "0.5"
+            else:
+                return None
+        if not re.fullmatch(r"[0-9]+", int_part):
+            return None
+        cleaned = int_part
+    else:
+        groups = int_part.split(",")
+        if not groups or any(not g.isdigit() or not g for g in groups):
+            return None
+        last, before = groups[-1], groups[:-1]
+        # Indian lakh/crore grouping: final group of exactly 3 digits,
+        # every earlier group of 1-2 digits (e.g. 5,00,000 -> 500000).
+        indian = (len(last) == 3 and all(len(g) <= 2 for g in before)
+                  and any(len(g) == 2 for g in before))
+        # Western grouping: first group 1-3 digits, all others exactly 3
+        # (e.g. 1,234,567 -> 1234567). The two conventions never overlap
+        # on a well-formed token, so the choice is deterministic.
+        western = (all(len(g) == 3 for g in groups[1:])
+                   and 1 <= len(groups[0]) <= 3)
+        if not (indian or western):
+            # e.g. 1.234,56 (European) or 12,34 (malformed) - never guessed
+            return None
+        cleaned = "".join(groups)
+
+    if frac_part is not None:
+        cleaned = cleaned + "." + frac_part
     return ("-" + cleaned) if neg else cleaned
 
 

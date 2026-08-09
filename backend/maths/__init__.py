@@ -350,6 +350,67 @@ from backend.maths.student_sandbox import (
     student_checklist,
 )
 
+# ---------------------------------------------------------------------------
+# Sprint 13 - FYJC Student Maths & Book-Keeping readiness (additive)
+# ---------------------------------------------------------------------------
+# Pure deterministic verification layer on top of the existing 12A-12F
+# stack. Maths: only the existing registered formulas are supported (the
+# C++ mathematical authority computes every result). Book-Keeping:
+# deterministic golden-rule classification, journal/ledger/trial-balance
+# verification with fail-closed ambiguity handling. No new formulas, no
+# second engine, no LLM calculation, no open-web fallback.
+from backend.maths.fyjc_maths import (
+    FYJC_MATHS_CHECKLIST,
+    is_supported_metric,
+    resolve_metric,
+    solve_strict,
+    supported_metric_names,
+    verify_maths_answer,
+    fyjc_maths_surface,
+)
+from backend.maths.fyjc_accounting import (
+    ACCOUNT_ALIASES,
+    ACCOUNT_ROLES,
+    accounting_calculation,
+    build_trial_balance,
+    canonical_account,
+    classify_transaction,
+    identify_debit_credit,
+    ledger_balance,
+    post_ledger,
+    verify_arithmetic,
+    verify_journal_entry,
+    verify_ledger_balance,
+    verify_trial_balance,
+)
+from backend.maths.fyjc_question import (
+    DOMAIN_BOOKKEEPING,
+    DOMAIN_MATHS,
+    DOMAIN_UNRECOGNISED,
+    KIND_JOURNAL,
+    KIND_LEDGER,
+    KIND_METRIC,
+    KIND_TRANSACTION,
+    KIND_TRIAL_BALANCE,
+    KIND_UNKNOWN,
+    classify_fyjc_question,
+    extract_facts_from_question,
+)
+from backend.maths.fyjc_dataset import (
+    FYJC_ACCEPTANCE_CASES,
+    FYJC_ACCOUNTING_CASES,
+    FYJC_JOURNAL_CASES,
+    FYJC_LEDGER_ENTRIES,
+    FYJC_LEDGER_EXPECT,
+    FYJC_LEDGER_TOTALS,
+    FYJC_LEDGER_VERIFY_CASES,
+    FYJC_MATHS_CASES,
+    FYJC_QUESTION_CASES,
+    FYJC_TB_CASES,
+    FYJC_TB_EXPECT,
+    FYJC_TB_STUDENT_CORRECT,
+)
+
 __all__ = [
     # exceptions
     "MathsEngineError", "RegistrationError", "UnregisteredFormulaError",
@@ -460,4 +521,23 @@ __all__ = [
     "production_dupont", "production_solve", "unsupported_formulas",
     "STUDENT_CHECKLIST", "run_student_dupont", "run_student_metric",
     "student_checklist",
+    # ---- Sprint 13 FYJC student readiness ----
+    "fyjc_maths_surface", "is_supported_metric", "resolve_metric",
+    "supported_metric_names", "solve_strict", "verify_maths_answer",
+    "FYJC_MATHS_CHECKLIST",
+    "classify_transaction", "identify_debit_credit",
+    "verify_journal_entry", "post_ledger", "ledger_balance",
+    "verify_ledger_balance", "build_trial_balance",
+    "verify_trial_balance", "verify_arithmetic", "accounting_calculation",
+    "ACCOUNT_ROLES", "ACCOUNT_ALIASES", "canonical_account",
+    # ---- Sprint 13 FYJC question layer + golden dataset ----
+    "classify_fyjc_question", "extract_facts_from_question",
+    "DOMAIN_MATHS", "DOMAIN_BOOKKEEPING", "DOMAIN_UNRECOGNISED",
+    "KIND_METRIC", "KIND_JOURNAL", "KIND_LEDGER", "KIND_TRANSACTION",
+    "KIND_TRIAL_BALANCE", "KIND_UNKNOWN",
+    "FYJC_MATHS_CASES", "FYJC_ACCOUNTING_CASES", "FYJC_JOURNAL_CASES",
+    "FYJC_LEDGER_ENTRIES", "FYJC_LEDGER_EXPECT", "FYJC_LEDGER_TOTALS",
+    "FYJC_LEDGER_VERIFY_CASES", "FYJC_TB_CASES", "FYJC_TB_EXPECT",
+    "FYJC_TB_STUDENT_CORRECT", "FYJC_QUESTION_CASES",
+    "FYJC_ACCEPTANCE_CASES",
 ]

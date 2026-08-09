@@ -181,8 +181,10 @@ def _attach_document_facts(facts: Dict[str, Any],
         doc_name = str(doc.get("document_name") or "Uploaded document")
         page = doc.get("page")
         tier = str(doc.get("tier") or "DOCUMENT")
-        if tier not in ("DOCUMENT", "APPENDIX"):
-            tier = "DOCUMENT"
+        # An explicit non-approved source (Tier 4 / WEB / anything outside
+        # DOCUMENT | APPENDIX) is NEVER silently upgraded to a primary
+        # document: the tier is preserved so the provenance machinery
+        # fails closed (BLOCKED) for facts that depend on it.
         for concept, value in (doc.get("facts") or {}).items():
             if isinstance(value, dict):
                 fact = dict(value)
@@ -197,10 +199,24 @@ def _attach_document_facts(facts: Dict[str, Any],
             fact.setdefault("evidence", doc.get("evidence") or f"from {doc_name}")
             if concept not in merged:
                 merged[concept] = fact
-            elif not isinstance(merged[concept], dict):
-                merged[concept] = {"value": merged[concept]}
-            # both values are preserved for the conflict machinery: the
-            # orchestrator's retrieval loop sees the source pool.
+            else:
+                if not isinstance(merged[concept], dict):
+                    merged[concept] = {"value": merged[concept]}
+                existing = merged[concept]
+                incoming = fact
+                # Conflicting values from approved sources are preserved
+                # and flagged REVIEW_REQUIRED (never silently chosen; both
+                # values stay separately traceable).
+                if (tier in ("DOCUMENT", "APPENDIX")
+                        and existing.get("value") != incoming.get("value")):
+                    existing.setdefault("extraction_state", "conflict")
+                    existing["conflict_with"] = {
+                        "value": incoming.get("value"),
+                        "document_name": doc_name,
+                        "page": str(page) if page is not None else None,
+                        "source": doc.get("source") or doc_name,
+                        "evidence": incoming.get("evidence"),
+                    }
     return merged
 
 
