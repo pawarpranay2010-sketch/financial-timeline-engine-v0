@@ -2883,6 +2883,33 @@ def _fte_close_overlay() -> None:
     st.session_state["fte_overlay_open"] = False
 
 
+def _metric_audit_trail_html(module3_result, metric) -> str:
+    """Sprint 12E audit moat: deterministic audit trail for the selected
+    metric. Demo mode and un-resolvable metrics render nothing (the UI
+    stays byte-identical); real mode renders the engine's audit trail
+    when the metric and its facts can be mapped. Never raises."""
+    try:
+        if st.session_state.get("fte_demo_mode"):
+            return ""
+        fd = (module3_result or {}).get("financial_data") or {}
+        rt = (module3_result or {}).get("ratios") or {}
+        facts = {}
+        for m, f in (list(fd.items()) + list(rt.items())):
+            if isinstance(f, dict) and f.get("value") not in (None, ""):
+                facts[str(m)] = f
+        if not facts or str(metric) not in facts:
+            return ""
+        from backend.maths.agentic import analyze_request
+        from backend.audit_trail import render_audit_trail_html
+        analysis = analyze_request(str(metric), existing_facts=facts)
+        if not analysis.resolved:
+            return ""
+        payload = analysis.node_payload or {}
+        return render_audit_trail_html(payload)
+    except Exception:
+        return ""
+
+
 @st.dialog("Metric Detail", width="small", dismissible=True, on_dismiss="rerun")
 def _metric_detail_dialog(module3_result) -> None:
     """Native Streamlit dialog for the selected metric detail.
@@ -2904,6 +2931,10 @@ def _metric_detail_dialog(module3_result) -> None:
     _q_rows = [q for q in _q_all if str(q.get("metric") or "") == str(metric)]
     if _q_rows:
         st.markdown(_qualitative_card_block(_q_rows), unsafe_allow_html=True)
+    # Sprint 12E - audit moat (real mode only; demo output unchanged).
+    _audit = _metric_audit_trail_html(module3_result, metric)
+    if _audit:
+        st.markdown(_audit, unsafe_allow_html=True)
     st.button("Close", key="fte_dlg_close", on_click=_fte_close_overlay)
 
 
@@ -5397,6 +5428,10 @@ def _memo_metric_dialog(module3_result, documents=None) -> None:
     _q_rows = [q for q in _q_all if str(q.get("metric") or "") == str(metric)]
     if _q_rows:
         st.markdown(_qualitative_card_block(_q_rows), unsafe_allow_html=True)
+    # Sprint 12E - audit moat (real mode only; demo output unchanged).
+    _audit = _metric_audit_trail_html(module3_result, metric)
+    if _audit:
+        st.markdown(_audit, unsafe_allow_html=True)
     st.button("Close", key="fte_memo_metric_close", on_click=_clear_memo_metric_click)
 
 

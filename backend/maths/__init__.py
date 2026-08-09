@@ -288,6 +288,37 @@ from backend.maths.forensic_reconciliation import (
     build_forensic_rules,
 )
 
+# ---------------------------------------------------------------------------
+# Sprint 12E - Production Integration, Agentic Evidence Retrieval & Audit Loop
+# ---------------------------------------------------------------------------
+# Deterministic agent orchestration over the existing deterministic stack:
+# the Agent plans dependencies, runs the terminating tier-ordered retrieval
+# loop, gates provenance, invokes the 12A solver + 12C decision graph, and
+# explains the result - it never calculates. Additive only.
+from backend.maths.agentic import (
+    BLOCKED_STATE,
+    EVIDENCE_CONFLICT_STATE,
+    PARTIAL,
+    RETRIEVAL_FAILED,
+    REVIEW_REQUIRED_STATE,
+    SUCCESS,
+    UNSUPPORTED as AGENTIC_UNSUPPORTED,
+    WORKFLOW_STATE_BY_DECISION,
+    AgentAnalysis,
+    AgenticOrchestrator,
+    AgenticRetrievalLoop,
+    DEFAULT_ORCHESTRATOR,
+    DependencyPlan,
+    RetrievalAttempt,
+    analyze_request,
+    plan_dependencies,
+    resolve_target,
+)
+from backend.maths.agent_explainer import (
+    explain_decision_node,
+    explain_unsupported,
+)
+
 __all__ = [
     # exceptions
     "MathsEngineError", "RegistrationError", "UnregisteredFormulaError",
@@ -383,4 +414,12 @@ __all__ = [
     # forensic reconciliation
     "ForensicReconciliationEngine", "FORENSIC_RECONCILIATION_REGISTRY",
     "build_forensic_rules",
+    # ---- Sprint 12E agentic orchestration + audit ----
+    "AgenticOrchestrator", "AgenticRetrievalLoop", "AgentAnalysis",
+    "DependencyPlan", "RetrievalAttempt", "DEFAULT_ORCHESTRATOR",
+    "analyze_request", "resolve_target", "plan_dependencies",
+    "SUCCESS", "PARTIAL", "REVIEW_REQUIRED_STATE", "BLOCKED_STATE",
+    "EVIDENCE_CONFLICT_STATE", "AGENTIC_UNSUPPORTED", "RETRIEVAL_FAILED",
+    "WORKFLOW_STATE_BY_DECISION", "explain_decision_node",
+    "explain_unsupported",
 ]
