@@ -268,17 +268,6 @@ _TRANSACTION_PATTERNS: List[Dict[str, Any]] = [
                 "is debited; Cash/Bank decreases - Credit.",
     },
     {
-        "key": "ASSET_PURCHASE_CASH",
-        "when": ("purchased machinery", "purchased furniture",
-                 "purchased building", "bought machinery", "bought furniture",
-                 "bought building", "purchased a machine",
-                 "purchased equipment", "bought equipment"),
-        "debit": ["Machinery", "Furniture", "Building"],
-        "credit": ["Cash", "Bank"],
-        "rule": "Asset purchased: the asset (asset) increases - Debit; "
-                "Cash/Bank (asset) decreases - Credit.",
-    },
-    {
         "key": "SALE_CASH",
         "when": ("sold goods for cash", "sold for cash", "cash sale",
                  "cash sales"),
@@ -297,16 +286,6 @@ _TRANSACTION_PATTERNS: List[Dict[str, Any]] = [
         "rule": "Goods sold on credit: the buyer is debited (personal "
                 "account: debit the receiver); Sales (income) increases - "
                 "Credit.",
-    },
-    {
-        "key": "ASSET_SALE",
-        "when": ("sold machinery", "sold furniture", "sold old machinery",
-                 "sold old furniture", "sold building", "sold vehicle",
-                 "sold equipment"),
-        "debit": ["Cash", "Bank"],
-        "credit": ["Machinery", "Furniture", "Building", "Vehicle"],
-        "rule": "Asset sold: Cash/Bank (asset) increases - Debit; the "
-                "asset (asset) decreases - Credit.",
     },
     {
         "key": "PAID_TO",
@@ -543,6 +522,144 @@ def _purchase_rule(description: str) -> Optional[Dict[str, Any]]:
     }
 
 
+# Asset-word table: description phrase -> the ONE canonical asset
+# account it names. LONGEST phrase first so 'plant and machinery' wins
+# over 'plant'. Only these words may produce a fixed-asset account -
+# a purchase is never routed to Machinery/Building unless the question
+# actually names that asset (Sprint 15B: no invented accounts).
+_ASSET_WORDS: List[Tuple[str, str]] = [
+    ("plant and machinery", "Machinery"),
+    ("office equipment", "Office Equipment"),
+    ("machinery", "Machinery"),
+    ("machine", "Machinery"),
+    ("furniture", "Furniture"),
+    ("fixtures", "Furniture"),
+    ("building", "Building"),
+    ("land", "Land"),
+    ("vehicles", "Vehicle"),
+    ("vehicle", "Vehicle"),
+    ("equipment", "Equipment"),
+    ("computer", "Equipment"),
+]
+
+
+def named_assets(description: str) -> List[str]:
+    """The exact fixed-asset accounts NAMED by the description, in
+    canonical chart spelling. Returns [] when no asset word is present.
+    Never invents an asset the question did not name (Sprint 15B)."""
+    low = " " + str(description or "").lower() + " "
+    found: List[str] = []
+    covered: List[Tuple[int, int]] = []
+    for phrase, account in _ASSET_WORDS:
+        # _ASSET_WORDS is longest-first, so a phrase that falls INSIDE a
+        # span already claimed by a longer phrase ('equipment' inside
+        # 'office equipment') is a sub-match, not a second asset - it must
+        # not produce an invented sibling account (Sprint 15B).
+        m = re.search(r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])",
+                      low)
+        if not m:
+            continue
+        if any(m.start() >= s and m.end() <= e for s, e in covered):
+            continue
+        if account not in found:
+            found.append(account)
+        covered.append((m.start(), m.end()))
+    return found
+
+
+def _asset_purchase_rule(description: str) -> Optional[Dict[str, Any]]:
+    """Deterministic rule for fixed-asset purchases (Sprint 15B).
+
+    'Purchased Furniture for Cash Rs.15,000' must produce EXACTLY
+    Furniture A/c Dr / Cash A/c Cr - never Machinery or Building. The
+    asset account comes only from the asset word actually present; more
+    than one distinct asset in one sentence is ambiguous (refused).
+    Cash vs credit disambiguation mirrors the goods-purchase rule.
+    """
+    low = " " + str(description or "").lower() + " "
+    if not any(k in low for k in ("purchas", "bought")):
+        return None
+    assets = named_assets(description)
+    if not assets:
+        return None  # not an asset purchase -> goods/other rules handle it
+    if len(assets) > 1:
+        return {
+            "key": "ASSET_PURCHASE_AMBIGUOUS",
+            "refuse": True,
+            "rule": (f"The description names more than one fixed asset "
+                     f"({', '.join(assets)}) in one transaction. FT-E never "
+                     "guesses how the amount is split between assets."),
+        }
+    asset = assets[0]
+    if "for cash" in low or "cash purchase" in low \
+            or re.search(r"\bcash\b", low):
+        return {
+            "key": "PURCHASE_ASSET_CASH",
+            "debit": [asset], "credit": ["Cash", "Bank"],
+            "rule": (f"{asset} purchased for cash: {asset} (asset) "
+                     "increases - Debit; Cash/Bank (asset) decreases - "
+                     "Credit."),
+        }
+    if "on credit" in low or "credit purchase" in low \
+            or re.search(r"\bfrom\b", low):
+        return {
+            "key": "PURCHASE_ASSET_CREDIT",
+            "debit": [asset], "credit": [{"party": "giver"}],
+            "rule": (f"{asset} purchased on credit: {asset} (asset) "
+                     "increases - Debit; the seller is credited (personal "
+                     "account: credit the giver)."),
+        }
+    return {
+        "key": "ASSET_PURCHASE_AMBIGUOUS",
+        "refuse": True,
+        "rule": (f"{asset} purchased: state whether the purchase was for "
+                 "cash or on credit."),
+    }
+
+
+def _asset_sale_rule(description: str) -> Optional[Dict[str, Any]]:
+    """Deterministic rule for fixed-asset sales (Sprint 15B). Only the
+    asset actually named is credited - never an invented sibling asset."""
+    low = " " + str(description or "").lower() + " "
+    if not any(k in low for k in ("sold", "sale of")):
+        return None
+    assets = named_assets(description)
+    if not assets:
+        return None  # goods sales -> the pattern table handles them
+    if len(assets) > 1:
+        return {
+            "key": "ASSET_SALE_AMBIGUOUS",
+            "refuse": True,
+            "rule": (f"The description names more than one fixed asset "
+                     f"({', '.join(assets)}) in one transaction. FT-E never "
+                     "guesses how the amount is split."),
+        }
+    asset = assets[0]
+    if "for cash" in low or "cash sale" in low \
+            or re.search(r"\bcash\b", low):
+        return {
+            "key": "SALE_ASSET_CASH",
+            "debit": ["Cash", "Bank"], "credit": [asset],
+            "rule": (f"{asset} sold for cash: Cash/Bank (asset) increases "
+                     "- Debit; {asset} (asset) decreases - Credit."),
+        }
+    if "on credit" in low or "credit sale" in low \
+            or re.search(r"\bto\b", low):
+        return {
+            "key": "SALE_ASSET_CREDIT",
+            "debit": [{"party": "receiver"}], "credit": [asset],
+            "rule": (f"{asset} sold on credit: the buyer is debited "
+                     "(personal account: debit the receiver); {asset} "
+                     "(asset) decreases - Credit."),
+        }
+    return {
+        "key": "ASSET_SALE_AMBIGUOUS",
+        "refuse": True,
+        "rule": (f"{asset} sold: state whether the sale was for cash or "
+                 "on credit."),
+    }
+
+
 def _party_from(description: str, preposition: str) -> Optional[str]:
     """Extract the counterparty name after 'from'/'to' (capitalised)."""
     low = description.lower()
@@ -563,6 +680,23 @@ def _party_from(description: str, preposition: str) -> Optional[str]:
             if m:
                 party = m.group(1).strip()
                 if party:
+                    return party
+    # Sprint 15B generic fallback: a Capitalised proper noun after
+    # 'from' / 'to' / 'by' is a PERSONAL account (covers asset
+    # transactions such as 'Purchased Furniture from Rahul on credit'
+    # and 'Sold Machinery to Sharma for cash'). Lower-case nouns (the
+    # bank, the seller) never match - FT-E never invents a party.
+    for marker in (" from ", " to ", " by "):
+        if marker in low:
+            idx = low.index(marker) + len(marker)
+            rest = description[idx:]
+            m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
+                         r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+and\s+"
+                         r"|\s+₹|\s+Rs|\s+\d|,|$)", rest)
+            if m:
+                party = m.group(1).strip()
+                if party and not party.lower().endswith(
+                        ("a/c", "account", "ltd", "limited")):
                     return party
     return None
 
@@ -613,14 +747,22 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
             amounts.insert(0, parsed.value)
 
     # -- pattern engine ---------------------------------------------------
+    # Sprint 15B: fixed-asset transactions are resolved FIRST so the
+    # exact asset named by the question is used - never an invented
+    # sibling account (Machinery for a Furniture purchase, etc.) and
+    # never a goods 'Purchases' account for a fixed asset.
     pattern = None
     low = desc.lower()
-    for cand in _TRANSACTION_PATTERNS:
-        when = cand["when"]
-        phrases = when if isinstance(when, (tuple, list)) else (when,)
-        if any(phrase in low for phrase in phrases):
-            pattern = cand
-            break
+    pattern = _asset_purchase_rule(desc)
+    if pattern is None:
+        pattern = _asset_sale_rule(desc)
+    if pattern is None:
+        for cand in _TRANSACTION_PATTERNS:
+            when = cand["when"]
+            phrases = when if isinstance(when, (tuple, list)) else (when,)
+            if any(phrase in low for phrase in phrases):
+                pattern = cand
+                break
     if pattern is None:
         pattern = _purchase_rule(desc)
     if pattern is None:
