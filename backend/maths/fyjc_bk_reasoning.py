@@ -558,13 +558,14 @@ def _party_from_text(text: str) -> Optional[str]:
                    "bought goods from ", "bought from ", "sold goods to ",
                    "paid to ", "received from ", "sold to ",
                    "returned goods to ", "returned by ", "goods returned by ",
-                   "received cash from ", "paid cash to ", "from ", " to "):
+                   "received cash from ", "paid cash to ", "paid ",
+                   "from ", " to "):
         if marker in low:
             idx = low.index(marker) + len(marker)
             rest = text[idx:]
             m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
                          r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+and\s+"
-                         r"|\s+₹|\s+Rs|\s+\d|,|$)", rest)
+                         r"|\s+in\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
             if m:
                 party = m.group(1).strip().rstrip(".;,")
                 if party and not party.lower().endswith(
@@ -674,6 +675,22 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         when = cand["when"]
         phrases = when if isinstance(when, (tuple, list)) else (when,)
         if any(phrase in low for phrase in phrases):
+            return dict(cand)
+        # Sprint 15C P0 fallbacks: the amount often sits BETWEEN the verb
+        # and the party ('Paid Rahul Rs.8,000 in cash', 'Paid Rs.8,000 to
+        # Rahul', 'Received Rs.6,000 from Amit in cash'), so the
+        # contiguous 'paid to'/'received from' phrases cannot match.
+        # Deterministic - expense/income/cheque patterns are checked
+        # BEFORE these keys, and a cheque wording never collapses into a
+        # plain cash payment.
+        if cand["key"] == "PAID_TO" and re.search(r"\bpaid\b", low) \
+                and "cheque" not in low and "check" not in low \
+                and (re.search(r"\bpaid\s+[a-z]", low)
+                     or re.search(r"\bpaid\b.*\bto\b", low)):
+            return dict(cand)
+        if cand["key"] == "RECEIVED_FROM" and "received" in low \
+                and "from" in low and "cheque" not in low \
+                and "check" not in low:
             return dict(cand)
     return None
 
@@ -986,9 +1003,42 @@ _AMBIGUOUS_HINTS = (
 
 
 def _split_transactions(question: str) -> List[str]:
-    """Split a multi-transaction description on ';' (deterministic)."""
+    """Split a multi-transaction description on ';' or sentence
+    boundaries ('. ' between a digit/lower-case letter and a Capital
+    letter). Deterministic - abbreviations like 'Rs.9,800' or '& Co. for
+    cash' are never split, and every resulting segment is a standalone
+    transaction sentence ('Started business with cash Rs.1,00,000."
+    "Purchased goods for cash Rs.20,000. Paid rent Rs.5,000.' becomes
+    three independent segments).
+
+    Sprint 15C: a segment that is only a PAYMENT/DISCOUNT step of the
+    PREVIOUS transaction ('paid him Rs.4,000', 'Half the amount was paid
+    immediately with a 2% cash discount') is merged back into the
+    previous segment so the whole transaction resolves through the
+    registered discount pipeline as ONE journal - it is NEVER posted as
+    an independent entry. A step is merged only when it (a) is a payment
+    step, (b) uses 'paid' wording and (c) follows a PURCHASE, so a
+    'Received from <debtor>' settlement of a credit sale stays its own
+    entry."""
     raw = re.split(r";\s*", str(question or ""))
-    return [seg.strip() for seg in raw if seg.strip()]
+    pieces: List[str] = []
+    for part in raw:
+        pieces.extend(
+            re.split(r"(?<=[a-z0-9)])\.\s+(?=[A-Z])", part))
+    segments = [seg.strip() for seg in pieces if seg.strip()]
+    merged: List[str] = []
+    for seg in segments:
+        prior = merged[-1] if merged else None
+        prior_pattern = classify_bk_type(prior) if prior else None
+        is_purchase_prior = bool(prior_pattern) and \
+            "PURCHASE" in prior_pattern["key"]
+        low_seg = " " + seg.lower() + " "
+        if prior and _is_payment_step(seg) and is_purchase_prior \
+                and " paid " in low_seg:
+            merged[-1] = merged[-1] + "; " + seg
+        else:
+            merged.append(seg)
+    return merged
 
 
 _PRONOUN_RE = re.compile(r"\b(him|her|them)\b")
