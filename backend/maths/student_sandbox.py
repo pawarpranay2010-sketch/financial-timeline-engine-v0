@@ -127,12 +127,27 @@ STUDENT_CHECKLIST: List[Dict[str, str]] = [
 # ---------------------------------------------------------------------------
 
 
+# One 'Concept: value' / 'Concept = value' pair. The concept name may
+# NOT contain sentence-final punctuation, a comma or another colon, so
+# 'Calculate the Profit. Revenue: 1,000 Expenses: 600' yields exactly
+# Revenue and Expenses (never 'the Profit'). The negative lookahead
+# rejects a number that continues into more digits/commas/periods
+# (European '1.234,56' is ambiguous and NEVER read as 1.234).
+_PAIR_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9 &\-\/']{1,60}?)\s*[:=]\s*"
+    r"(Rs\.?|₹)?\s*([\d,]+(?:\.[\d]+)?\s*%?)(?![.,\d])",
+    re.IGNORECASE,
+)
+
+
 def _parse_text_facts(text: str, document_name: str = "Student document",
                       page: Optional[str] = None) -> Dict[str, Any]:
-    """Parse 'Concept: value' / 'Concept = value' lines from free text.
+    """Parse 'Concept: value' / 'Concept = value' pairs from free text.
 
-    Only lines with an unambiguous numeric right-hand side become facts;
-    anything ambiguous is silently skipped (the solver reports the missing
+    Matches every unambiguous pair in the text - one per line OR several
+    compact pairs on a single line (e.g. 'Calculate the Commission.
+    Sales: 10,000 Commission Rate: 5'). A pair whose numeric right-hand
+    side is ambiguous is silently skipped (the solver reports the missing
     dependency - never a fabricated value). Provenance is attached as
     Tier 1 (uploaded primary document).
     """
@@ -143,24 +158,33 @@ def _parse_text_facts(text: str, document_name: str = "Student document",
         line = raw_line.strip()
         if not line:
             continue
-        m = re.match(r"^([A-Za-z][A-Za-z0-9 &\-\/']{1,60}?)\s*[:=]\s*(.+)$", line)
-        if not m:
-            continue
-        concept = m.group(1).strip()
-        parsed = parse_numeric_text(m.group(2).strip())
-        if parsed.value is None or parsed.ambiguity:
-            continue  # ambiguous - never guessed
-        out[concept] = harden_fact_text(concept, {
-            "value": parsed.value,
-            "unit": parsed.currency or parsed.unit,
-            "scale": parsed.scale,
-            "reporting_period": "FY2025",
-            "provenance_tier": "DOCUMENT",
-            "document_name": document_name,
-            "page": page,
-            "evidence": raw_line.strip()[:160],
-            "source": document_name,
-        })
+        occupied: List[tuple] = []
+        for m in _PAIR_RE.finditer(line):
+            start, end = m.start(), m.end()
+            if any(start < o_end and end > o_start
+                   for o_start, o_end in occupied):
+                continue  # a longer concept already claimed this span
+            concept = m.group(1).strip()
+            raw_value = m.group(3).strip()
+            parsed = parse_numeric_text(raw_value)
+            if parsed.value is None or parsed.ambiguity:
+                # ambiguous number on this line - never guessed; the
+                # whole line is skipped so a partial interpretation
+                # cannot be mixed with an ambiguous one.
+                occupied = ["ambiguous"]
+                break
+            occupied.append((start, end))
+            out[concept] = harden_fact_text(concept, {
+                "value": parsed.value,
+                "unit": parsed.currency or parsed.unit,
+                "scale": parsed.scale,
+                "reporting_period": "FY2025",
+                "provenance_tier": "DOCUMENT",
+                "document_name": document_name,
+                "page": page,
+                "evidence": raw_line[start:end].strip()[:160],
+                "source": document_name,
+            })
     return out
 
 
@@ -181,13 +205,20 @@ def _known_concept_words() -> List[str]:
     global _CONCEPT_WORDS_CACHE
     if _CONCEPT_WORDS_CACHE is None:
         words = set()
-        for fid in EXTENDED_REGISTRY.all_ids():
-            d = EXTENDED_REGISTRY.get(fid)
-            if d is None:
-                continue
-            if d.target:
-                words.add(str(d.target))
-            words.update(str(x) for x in (d.dependencies or []))
+        registries = [EXTENDED_REGISTRY]
+        try:  # Sprint 15D FYJC commercial arithmetic (additive)
+            from backend.maths.fyjc_canonical import FYJC_FORMULA_REGISTRY
+            registries.append(FYJC_FORMULA_REGISTRY)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        for registry in registries:
+            for fid in registry.all_ids():
+                d = registry.get(fid)
+                if d is None:
+                    continue
+                if d.target:
+                    words.add(str(d.target))
+                words.update(str(x) for x in (d.dependencies or []))
         words = {w for w in words if len(w) >= 3}
         _CONCEPT_WORDS_CACHE = sorted(words, key=lambda w: (-len(w), w))
     return _CONCEPT_WORDS_CACHE

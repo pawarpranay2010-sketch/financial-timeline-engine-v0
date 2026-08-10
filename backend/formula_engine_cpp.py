@@ -85,6 +85,21 @@ CPP_KEY_ALIASES = {
     "OPERATING_MARGIN": "Operating Margin",
 }
 
+# ---------------------------------------------------------------------------
+# Sprint 15D - FYJC commercial-arithmetic coverage contract.
+# These ids live in the C++ FYJC registry (surfaced by `--registry-fyjc`)
+# and are kept SEPARATE from CPP_COVERED_KEYS so the compiled-binary
+# contract (--registry + --registry-ext, checked by the production gate
+# test) stays exactly 9 + 24. is_cpp_covered() consults both sets, so the
+# strict C++-authority solver executes the FYJC formulas through C++ and
+# never falls back to a Python calculation.
+# ---------------------------------------------------------------------------
+FYJC_COVERED_KEYS = frozenset({
+    "COMMISSION", "TRADE_DISCOUNT", "CASH_DISCOUNT",
+    "NET_PRICE", "CASH_PAID", "CREDITOR_BALANCE", "DEBTOR_BALANCE",
+    "SELLING_PRICE", "PROFIT_PERCENT", "LOSS_PERCENT",
+})
+
 
 def cpp_coverage() -> frozenset:
     """Formulas the C++ mathematical authority can compute."""
@@ -92,9 +107,10 @@ def cpp_coverage() -> frozenset:
 
 
 def is_cpp_covered(formula_id: str) -> bool:
-    """True when the C++ authority can compute this formula."""
+    """True when the C++ authority can compute this formula (the legacy +
+    extended contract, or the Sprint 15D FYJC commercial-arithmetic set)."""
     key = CPP_KEY_ALIASES.get(formula_id, formula_id)
-    return key in CPP_COVERED_KEYS
+    return key in CPP_COVERED_KEYS or key in FYJC_COVERED_KEYS
 
 
 def _fact_json(fact: Dict[str, Any]) -> Dict[str, Any]:

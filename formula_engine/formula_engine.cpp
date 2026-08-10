@@ -8,7 +8,8 @@
 //
 // Interface: a CLI reading one JSON document on stdin and writing one JSON
 // document on stdout. Also supports `--registry` (legacy formula metadata),
-// `--registry-ext` (Sprint 12A extended formula metadata), `--selftest`
+// `--registry-ext` (Sprint 12A extended formula metadata),
+// `--registry-fyjc` (Sprint 15D FYJC commercial arithmetic), `--selftest`
 // (built-in assertions; exit code 0 on success) and `--version`.
 //
 // Sprint 12A additions (backward compatible):
@@ -471,15 +472,73 @@ static const std::vector<FormulaDef>& extended_registry_storage() {
 
 const std::vector<FormulaDef>& extended_registry() { return extended_registry_storage(); }
 
-// Look up legacy first, then extended (additive; legacy wins on key
-// collisions so existing behavior is never shadowed).
+// ---------------------------------------------------------------------------
+// Sprint 15D — FYJC commercial-arithmetic registry (additive).
+// `--registry` (9) and `--registry-ext` (24) contracts are UNCHANGED; these
+// FYJC formulas live in their own registry surfaced by `--registry-fyjc`.
+// The op-driven entries reuse the generic arithmetic + registered-inverse
+// machinery; the rate formulas (a × b ÷ 100, where the rate is a
+// percent-number as FYJC textbooks state it) use dedicated compute and
+// inverse branches below.
+// ---------------------------------------------------------------------------
+static std::vector<FormulaDef> build_fyjc_registry() {
+    return {
+        {"COMMISSION", "Commission", {"Sales", "Commission Rate"},
+         "Sales × Commission Rate ÷ 100", "amount", 2, "same", {}, "",
+         "Commission"},
+        {"TRADE_DISCOUNT", "Trade Discount", {"List Price", "Trade Discount Rate"},
+         "List Price × Trade Discount Rate ÷ 100", "amount", 2, "same", {}, "",
+         "Trade Discount"},
+        {"CASH_DISCOUNT", "Cash Discount", {"Paid Amount", "Cash Discount Rate"},
+         "Paid Amount × Cash Discount Rate ÷ 100", "amount", 2, "same", {}, "",
+         "Cash Discount"},
+        {"NET_PRICE", "Net Price", {"List Price", "Trade Discount"},
+         "List Price − Trade Discount", "amount", 2, "same", {}, "sub",
+         "Net Price"},
+        {"CASH_PAID", "Cash Paid", {"Paid Amount", "Cash Discount"},
+         "Paid Amount − Cash Discount", "amount", 2, "same", {}, "sub",
+         "Cash Paid"},
+        {"CREDITOR_BALANCE", "Creditor Balance", {"Net Purchase", "Amount Paid"},
+         "Net Purchase − Amount Paid", "amount", 2, "same", {}, "sub",
+         "Creditor Balance"},
+        {"DEBTOR_BALANCE", "Debtor Balance", {"Net Sale", "Amount Received"},
+         "Net Sale − Amount Received", "amount", 2, "same", {}, "sub",
+         "Debtor Balance"},
+        {"SELLING_PRICE", "Selling Price", {"Cost Price", "Profit"},
+         "Cost Price + Profit", "amount", 2, "same", {}, "add",
+         "Selling Price"},
+        {"PROFIT_PERCENT", "Profit Percent", {"Profit", "Cost Price"},
+         "Profit ÷ Cost Price × 100", "percent", 2, "same", {"Cost Price"},
+         "div", "Profit Percent"},
+        {"LOSS_PERCENT", "Loss Percent", {"Loss", "Cost Price"},
+         "Loss ÷ Cost Price × 100", "percent", 2, "same", {"Cost Price"},
+         "div", "Loss Percent"},
+    };
+}
+
+static const std::vector<FormulaDef>& fyjc_registry_storage() {
+    static const std::vector<FormulaDef> kFyjc = build_fyjc_registry();
+    return kFyjc;
+}
+
+const std::vector<FormulaDef>& fyjc_registry() { return fyjc_registry_storage(); }
+
+static const FormulaDef* fyjc_lookup(const std::string& metric_key) {
+    for (const auto& def : fyjc_registry_storage()) {
+        if (def.key == metric_key) return &def;
+    }
+    return nullptr;
+}
+
+// Look up legacy first, then extended, then FYJC (additive; legacy wins on
+// key collisions so existing behavior is never shadowed).
 static const FormulaDef* lookup_any(const std::string& metric_key) {
     const FormulaDef* def = registry_lookup(metric_key);
     if (def != nullptr) return def;
     for (const auto& d : extended_registry_storage()) {
         if (d.key == metric_key) return &d;
     }
-    return nullptr;
+    return fyjc_lookup(metric_key);
 }
 
 std::string status_name(Status s) {
@@ -697,6 +756,14 @@ static Result compute(const FormulaDef& def,
         // DuPont ROE = Profit Margin x Asset Turnover x Equity Multiplier
         raw = val("Profit Margin") * val("Asset Turnover")
             * val("Equity Multiplier");
+        steps.push_back(def.display_name + " = " + def.formula);
+        steps.push_back(def.display_name + " = " + display_value(raw, def));
+    } else if (def.key == "COMMISSION" || def.key == "TRADE_DISCOUNT"
+               || def.key == "CASH_DISCOUNT") {
+        // Sprint 15D — FYJC rate formula: inputs[0] × inputs[1] ÷ 100
+        // (the rate is a percent-number, e.g. 5 for 5%).
+        raw = val(def.required_inputs[0]) * val(def.required_inputs[1])
+            / 100.0L;
         steps.push_back(def.display_name + " = " + def.formula);
         steps.push_back(def.display_name + " = " + display_value(raw, def));
     } else {  // ratio-kind: Current Ratio, Debt to Equity
@@ -955,6 +1022,68 @@ Result solve_metric(const std::string& metric_key,
             }
             return blocked(solve_for + " is not a variable of Quick Ratio.");
         }
+        // Sprint 15D - FYJC rate formulas (a × b ÷ 100) carry REGISTERED
+        // inverse relationships: a = target × 100 ÷ b ; b = target × 100 ÷ a.
+        // The target is an amount (never percent), so no fraction
+        // conversion is needed.
+        if (def->key == "COMMISSION" || def->key == "TRADE_DISCOUNT"
+            || def->key == "CASH_DISCOUNT") {
+            const std::string& a = def->required_inputs[0];
+            const std::string& b = def->required_inputs[1];
+            if (solve_for == def->key || solve_for == target_key) {
+                if (!need(a) || !need(b)) {
+                    return blocked(target_key + " is unavailable from "
+                                   "permitted evidence sources.");
+                }
+                return compute(*def, facts);
+            }
+            if (solve_for == a) {
+                if (!need(target_key) || !need(b)) {
+                    return blocked("Cannot solve for " + solve_for +
+                                   ": required input is unavailable from "
+                                   "permitted evidence sources.");
+                }
+                if (val(b) == 0.0L) {
+                    return blocked(b + " is zero - cannot solve for " +
+                                   a + ".");
+                }
+                Result r;
+                r.status = Status::DERIVED_VERIFIED;
+                r.value = val(target_key) * 100.0L / val(b);
+                r.has_value = true;
+                r.display_value = format_fixed(r.value, def->precision);
+                r.calculation_steps.push_back(
+                    "solve " + solve_for + " from " + def->display_name +
+                    " = " + def->formula);
+                r.calculation_steps.push_back(solve_for + " = " +
+                                              r.display_value);
+                return r;
+            }
+            if (solve_for == b) {
+                if (!need(target_key) || !need(a)) {
+                    return blocked("Cannot solve for " + solve_for +
+                                   ": required input is unavailable from "
+                                   "permitted evidence sources.");
+                }
+                if (val(a) == 0.0L) {
+                    return blocked(a + " is zero - cannot solve for " +
+                                   b + ".");
+                }
+                Result r;
+                r.status = Status::DERIVED_VERIFIED;
+                r.value = val(target_key) * 100.0L / val(a);
+                r.has_value = true;
+                r.display_value = format_fixed(r.value, def->precision);
+                r.calculation_steps.push_back(
+                    "solve " + solve_for + " from " + def->display_name +
+                    " = " + def->formula);
+                r.calculation_steps.push_back(solve_for + " = " +
+                                              r.display_value);
+                return r;
+            }
+            return blocked(solve_for + " is not a variable of " +
+                           metric_key + ".");
+        }
         return blocked("No registered inverse relationship for " + solve_for +
                        " in " + metric_key + ".");
     }
@@ -1185,6 +1314,26 @@ static std::string extended_registry_json() {
     return json::stringify(arr);
 }
 
+// `--registry-fyjc`: Sprint 15D FYJC commercial-arithmetic metadata as JSON.
+static std::string fyjc_registry_json() {
+    json::Value arr = json::array();
+    for (const auto& def : fyjc_registry()) {
+        json::Value o = json::object();
+        o.obj["metric_key"] = json::string(def.key);
+        o.obj["display_name"] = json::string(def.display_name);
+        o.obj["formula"] = json::string(def.formula);
+        o.obj["unit"] = json::string(def.kind);
+        o.obj["precision"] = json::number(def.precision);
+        o.obj["period_mode"] = json::string(def.period_mode);
+        o.obj["op"] = json::string(def.op);
+        json::Value req = json::array();
+        for (const auto& k : def.required_inputs) req.arr.push_back(json::string(k));
+        o.obj["required_inputs"] = req;
+        arr.arr.push_back(o);
+    }
+    return json::stringify(arr);
+}
+
 // `--selftest`: built-in deterministic assertions; exit code 0 on success.
 static int selftest() {
     auto facts_of = [](const std::map<std::string, long double>& values) {
@@ -1308,6 +1457,70 @@ static int selftest() {
     expect(solve_metric("NET_MARGIN", "Revenue", nmf).display_value == "1000.00",
             "Net Margin reverse Revenue");
 
+    // ---- Sprint 15D — FYJC commercial arithmetic (additive) ----
+    std::map<std::string, Fact> comm = facts_of({
+        {"Sales", 10000.0L}, {"Commission Rate", 5.0L}, {"Commission", 500.0L},
+    });
+    expect(calculate_metric("COMMISSION", comm).display_value == "500.00",
+            "Commission forward");
+    expect(solve_metric("COMMISSION", "Sales", comm).display_value == "10000.00",
+            "Commission reverse Sales");
+    expect(solve_metric("COMMISSION", "Commission Rate", comm).display_value
+           == "5.00", "Commission reverse Rate");
+    expect(solve_metric("COMMISSION", "List Price", comm).status
+           == Status::BLOCKED, "Commission solve non-variable -> BLOCKED");
+
+    std::map<std::string, Fact> spf = facts_of({
+        {"Cost Price", 8000.0L}, {"Profit", 2000.0L},
+        {"Selling Price", 10000.0L},
+    });
+    expect(calculate_metric("SELLING_PRICE", spf).display_value == "10000.00",
+            "Selling Price forward");
+    expect(solve_metric("SELLING_PRICE", "Profit", spf).display_value
+           == "2000.00", "SP reverse Profit");
+    expect(solve_metric("SELLING_PRICE", "Cost Price", spf).display_value
+           == "8000.00", "SP reverse Cost Price");
+
+    std::map<std::string, Fact> ppf = facts_of({
+        {"Profit", 2000.0L}, {"Cost Price", 8000.0L},
+        {"Profit Percent", 25.0L},
+    });
+    expect(calculate_metric("PROFIT_PERCENT", ppf).display_value == "25.00%",
+            "Profit Percent forward");
+    expect(solve_metric("PROFIT_PERCENT", "Profit", ppf).display_value
+           == "2000.00", "PP reverse Profit");
+    expect(solve_metric("PROFIT_PERCENT", "Cost Price", ppf).display_value
+           == "8000.00", "PP reverse Cost Price");
+
+    std::map<std::string, Fact> cbf = facts_of({
+        {"Net Purchase", 9000.0L}, {"Amount Paid", 4410.0L},
+        {"Creditor Balance", 4590.0L},
+    });
+    expect(calculate_metric("CREDITOR_BALANCE", cbf).display_value
+           == "4590.00", "Creditor Balance forward");
+    expect(solve_metric("CREDITOR_BALANCE", "Amount Paid", cbf).display_value
+           == "4410.00", "CB reverse Amount Paid");
+
+    std::map<std::string, Fact> tdf = facts_of({
+        {"List Price", 10000.0L}, {"Trade Discount Rate", 10.0L},
+        {"Trade Discount", 1000.0L},
+    });
+    expect(calculate_metric("TRADE_DISCOUNT", tdf).display_value == "1000.00",
+            "Trade Discount forward");
+    expect(solve_metric("TRADE_DISCOUNT", "List Price", tdf).display_value
+           == "10000.00", "TD reverse List Price");
+    expect(solve_metric("TRADE_DISCOUNT", "Trade Discount Rate", tdf)
+           .display_value == "10.00", "TD reverse Rate");
+
+    std::map<std::string, Fact> cdf = facts_of({
+        {"Paid Amount", 4500.0L}, {"Cash Discount Rate", 2.0L},
+        {"Cash Discount", 90.0L},
+    });
+    expect(calculate_metric("CASH_DISCOUNT", cdf).display_value == "90.00",
+            "Cash Discount forward");
+    expect(solve_metric("CASH_DISCOUNT", "Cash Discount Rate", cdf)
+           .display_value == "2.00", "CD reverse Rate");
+
     std::map<std::string, Fact> qrf = facts_of({
         {"Current Assets", 500.0L}, {"Inventory", 100.0L},
         {"Current Liabilities", 200.0L}, {"Quick Ratio", 2.0L},
@@ -1392,6 +1605,10 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--registry-ext") == 0) {
         std::cout << fte::extended_registry_json() << "\n";
+        return 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "--registry-fyjc") == 0) {
+        std::cout << fte::fyjc_registry_json() << "\n";
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0) {

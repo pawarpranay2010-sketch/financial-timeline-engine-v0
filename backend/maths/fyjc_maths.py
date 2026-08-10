@@ -39,7 +39,12 @@ from typing import Any, Dict, List, Optional
 
 from backend.formula_engine_cpp import cpp_available
 from backend.maths.authority import ENGINE_UNAVAILABLE_REASON
-from backend.maths.extended_registry import EXTENDED_REGISTRY
+from backend.maths.fyjc_canonical import FYJC_FORMULA_REGISTRY
+from backend.maths.fyjc_derivation import (
+    derivation_refusal_outcome,
+    describe_derivation,
+    ensure_derivation_valid,
+)
 from backend.maths.fact_model import build_fact_graph
 from backend.maths.normalization import parse_numeric_text
 from backend.maths.solver import Solution, Solver, format_value
@@ -105,6 +110,22 @@ METRIC_ALIASES: Dict[str, str] = {
     "profit": "Profit",
     "loss": "Loss",
     "return on total assets": "ROA",
+    # Sprint 15D commercial arithmetic (additive)
+    "commission": "Commission",
+    "profit %": "Profit Percent",
+    "profit percentage": "Profit Percent",
+    "profit percent": "Profit Percent",
+    "loss %": "Loss Percent",
+    "loss percentage": "Loss Percent",
+    "loss percent": "Loss Percent",
+    "selling price": "Selling Price",
+    "cost price": "Cost Price",
+    "trade discount": "Trade Discount",
+    "cash discount": "Cash Discount",
+    "net price": "Net Price",
+    "cash paid": "Cash Paid",
+    "creditor balance": "Creditor Balance",
+    "debtor balance": "Debtor Balance",
 }
 
 # ---------------------------------------------------------------------------
@@ -123,8 +144,8 @@ def fyjc_maths_surface() -> Dict[str, Dict[str, Any]]:
     dependencies, unit_kind, description}. Built from EXTENDED_REGISTRY -
     the exact production registry the strict C++ authority uses."""
     surface: Dict[str, Dict[str, Any]] = {}
-    for fid in sorted(EXTENDED_REGISTRY.all_ids()):
-        definition = EXTENDED_REGISTRY.get(fid)
+    for fid in sorted(FYJC_FORMULA_REGISTRY.all_ids()):
+        definition = FYJC_FORMULA_REGISTRY.get(fid)
         if definition is None:
             continue
         concept = definition.target or definition.formula_id
@@ -156,9 +177,9 @@ def _known_concepts() -> frozenset:
     present in the 12A-12F registries."""
     global _KNOWN_CONCEPTS_CACHE
     if _KNOWN_CONCEPTS_CACHE is None:
-        names = set(EXTENDED_REGISTRY.all_ids())
-        for fid in EXTENDED_REGISTRY.all_ids():
-            definition = EXTENDED_REGISTRY.get(fid)
+        names = set(FYJC_FORMULA_REGISTRY.all_ids())
+        for fid in FYJC_FORMULA_REGISTRY.all_ids():
+            definition = FYJC_FORMULA_REGISTRY.get(fid)
             if definition is not None:
                 names.update(definition.dependencies or [])
         _KNOWN_CONCEPTS_CACHE = frozenset({_norm(n) for n in names})
@@ -178,8 +199,8 @@ def known_concept_display(metric: str) -> Optional[str]:
     global _KNOWN_DISPLAY_CACHE
     if _KNOWN_DISPLAY_CACHE is None:
         names: Dict[str, str] = {}
-        for fid in EXTENDED_REGISTRY.all_ids():
-            definition = EXTENDED_REGISTRY.get(fid)
+        for fid in FYJC_FORMULA_REGISTRY.all_ids():
+            definition = FYJC_FORMULA_REGISTRY.get(fid)
             if definition is None:
                 continue
             names[_norm(definition.target)] = definition.target
@@ -256,7 +277,9 @@ def solve_strict(concept: str,
     performs a fallback calculation.
     """
     graph = build_fact_graph(_coerce_facts(facts))
-    solver = Solver(EXTENDED_REGISTRY, prefer_cpp=True, cpp_authority=True)
+    solver = Solver(
+        FYJC_FORMULA_REGISTRY, prefer_cpp=True, cpp_authority=True,
+    )
     return solver.solve(str(concept), graph)
 
 
@@ -432,6 +455,18 @@ def verify_maths_answer(
             "calculates financial results in Python.",
         )
 
+    # Sprint 15D derivation gate: when the requested figure belongs to a
+    # registered canonical FYJC relationship, a validated derivation path
+    # must exist BEFORE any execution. A covered concept with no validated
+    # path is REVIEW_REQUIRED - FT-E never guesses.
+    deriv_ok, _deriv_path, _deriv_reason = ensure_derivation_valid(concept)
+    if not deriv_ok:
+        refusal = derivation_refusal_outcome(metric, concept)
+        refusal["status"] = REVIEW_REQUIRED
+        refusal["status_label"] = STATUS_LABELS.get(
+            REVIEW_REQUIRED, REVIEW_REQUIRED)
+        return refusal
+
     merged = _attach_document_facts(_coerce_facts(facts), documents)
     # narrative prose ('Revenue is Rs.10,000 ...') then the strict
     # 'Concept: value' lines (the canonical format wins on duplicates).
@@ -535,7 +570,10 @@ def verify_maths_answer(
             "inputs": _inputs_rows(sol),
             "where": _inputs_rows(sol),
             "value": None,
-            "display_value": sol.display_value or "—",
+            # Sprint 15D invariant: a refusal never presents a numeric
+            # display. The reported/conflicting value is preserved ONLY in
+            # the reason text and inputs - never echoed as the answer.
+            "display_value": "—",
             "student_answer": student_answer,
             "student_display": str(student_answer) if student_answer is not None
                               else None,
@@ -588,6 +626,7 @@ def verify_maths_answer(
             f"Yes - recompute by hand using the registered formula "
             f"({sol.formula}) and the numbers listed above."
         ),
+        "derivation": describe_derivation(concept, sol),
     }
 
 
