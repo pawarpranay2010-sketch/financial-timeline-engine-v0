@@ -410,6 +410,19 @@ from backend.maths.fyjc_dataset import (
     FYJC_TB_EXPECT,
     FYJC_TB_STUDENT_CORRECT,
 )
+from backend.maths.fyjc_student_flow import (
+    TRADITIONAL_CLASS,
+    build_understanding,
+    fyjc_study_topics,
+    fyjc_traditional_class,
+    parse_trial_balance_lines,
+    run_fyjc_accounting_flow,
+    run_fyjc_maths_flow,
+    run_fyjc_student_flow,
+    verify_student_journal,
+    verify_student_ledger,
+    verify_student_trial_balance,
+)
 
 __all__ = [
     # exceptions
@@ -540,4 +553,10 @@ __all__ = [
     "FYJC_LEDGER_VERIFY_CASES", "FYJC_TB_CASES", "FYJC_TB_EXPECT",
     "FYJC_TB_STUDENT_CORRECT", "FYJC_QUESTION_CASES",
     "FYJC_ACCEPTANCE_CASES",
+    # ---- Sprint 14 FYJC student end-to-end journey orchestration ----
+    "build_understanding", "run_fyjc_student_flow", "run_fyjc_maths_flow",
+    "run_fyjc_accounting_flow", "fyjc_traditional_class",
+    "parse_trial_balance_lines", "verify_student_journal",
+    "verify_student_ledger", "verify_student_trial_balance",
+    "fyjc_study_topics", "TRADITIONAL_CLASS",
 ]

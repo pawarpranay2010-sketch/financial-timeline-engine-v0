@@ -98,11 +98,18 @@ try:
         initial_state as fte_agent_initial_state,
         what_next as fte_agent_what_next,
     )
+    # Sprint 14 - FYJC student Study / Verify UI (renders the Sprint 13
+    # FYJC capability modules; all reasoning stays deterministic).
+    from backend.fyjc_student_ui import render_fyjc_student_ui
 except Exception:
     # Graceful degrade: the Assignment page hides itself if unavailable.
     ASSIGNMENT_TYPES = []
     FTE_ASSIGNMENT_STATUS_LABELS = {}
     build_excel_working_model = None
+
+    def render_fyjc_student_ui(*a, **k):
+        import streamlit as st
+        st.info("🎓 FYJC Study is unavailable in this deployment.")
 
     def add_external_variable(*a, **k):
         return list(a[0] or [])
@@ -4802,7 +4809,8 @@ def _render_workspace_shell(uploaded_files) -> None:
     # so switching pages preserves grid selection, filters, chat and memo.
     st.segmented_control(
         "Workspace",
-        options=["Financial Grid", "Intelligence", "Assignment", "System"],
+        options=["Financial Grid", "Intelligence", "Assignment",
+                 "FYJC Study", "System"],
         key="fte_page",
         label_visibility="collapsed",
     )
@@ -4826,6 +4834,9 @@ def _render_workspace_shell(uploaded_files) -> None:
             _render_memo_generator(document_summaries)
     elif page == "Assignment":
         _render_student_assignment_workspace(module3_result, demo=False)
+    elif page == "FYJC Study":
+        # Sprint 14 - FYJC student Study / Verify (Sprint 13 capability UI).
+        render_fyjc_student_ui(demo=False)
     else:
         _render_system_tab()
 
@@ -5917,7 +5928,8 @@ def _render_demo_workspace() -> None:
 
     st.segmented_control(
         "Workspace",
-        options=["Financial Grid", "Intelligence", "Assignment", "System"],
+        options=["Financial Grid", "Intelligence", "Assignment",
+                 "FYJC Study", "System"],
         key="fte_page",
         label_visibility="collapsed",
     )
@@ -5941,6 +5953,9 @@ def _render_demo_workspace() -> None:
             _render_demo_memo_generator()
     elif page == "Assignment":
         _render_student_assignment_workspace(module3_result, demo=True)
+    elif page == "FYJC Study":
+        # Sprint 14 - FYJC student Study / Verify (demo pre-filled question).
+        render_fyjc_student_ui(demo=True)
     else:
         _render_system_tab()
 
