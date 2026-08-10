@@ -278,7 +278,8 @@ def run_fyjc_maths_flow(metric: str,
         {
             "number": 2,
             "title": "Required",
-            "body": [str(outcome.get("metric") or metric)],
+            "body": [str(outcome.get("concept")
+                          or outcome.get("metric") or metric)],
         },
         {
             "number": 3,
