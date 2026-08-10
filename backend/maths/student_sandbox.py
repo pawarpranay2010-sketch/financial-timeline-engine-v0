@@ -164,6 +164,86 @@ def _parse_text_facts(text: str, document_name: str = "Student document",
     return out
 
 
+_PROSE_LINK_RE = re.compile(
+    r"\s+(?:is|are|was|were|equals?|amounts?\s+to|of|=|:)\s*"
+    r"(?:Rs\.?|₹)?\s*(?P<val>[\d,]+(?:\.[\d]+)?\s*%?)",
+    re.IGNORECASE,
+)
+
+_CONCEPT_WORDS_CACHE: Optional[List[str]] = None
+
+
+def _known_concept_words() -> List[str]:
+    """Registered concept names (formula targets + their dependencies)
+    with their canonical registry spelling, longest first. Used ONLY to
+    anchor deterministic prose extraction - a word that is not a
+    registered concept is never extracted."""
+    global _CONCEPT_WORDS_CACHE
+    if _CONCEPT_WORDS_CACHE is None:
+        words = set()
+        for fid in EXTENDED_REGISTRY.all_ids():
+            d = EXTENDED_REGISTRY.get(fid)
+            if d is None:
+                continue
+            if d.target:
+                words.add(str(d.target))
+            words.update(str(x) for x in (d.dependencies or []))
+        words = {w for w in words if len(w) >= 3}
+        _CONCEPT_WORDS_CACHE = sorted(words, key=lambda w: (-len(w), w))
+    return _CONCEPT_WORDS_CACHE
+
+
+def extract_prose_facts(text: str,
+                        document_name: str = "Student document",
+                        page: Optional[str] = None) -> Dict[str, Any]:
+    """Deterministic extraction of narrative-prose facts.
+
+    Handles the natural question wording that the strict 'Concept: value'
+    normalizer cannot read, e.g. "Revenue is Rs.10,000 and its Expenses
+    are Rs.6,000". ONLY a REGISTERED concept name immediately followed by
+    a linking verb and an explicit numeric value becomes a fact - nothing
+    is guessed, no arithmetic runs here, and a concept without an
+    attached number is left for the solver to report as missing.
+
+    Provenance is Tier 1 (uploaded primary document), matching
+    _parse_text_facts. Longer concepts claim a span before shorter
+    overlapping ones ('Net Profit' beats 'Profit'), so the canonical
+    registry name is used as the fact key.
+    """
+    out: Dict[str, Any] = {}
+    if not text:
+        return out
+    raw = str(text)
+    occupied: List[tuple] = []
+    for name in _known_concept_words():
+        pat = re.compile(
+            r"(?<![a-z])" + re.escape(name) + r"(?![a-z])"
+            + _PROSE_LINK_RE.pattern,
+            re.IGNORECASE,
+        )
+        for m in pat.finditer(raw):
+            start, end = m.start(), m.end()
+            if any(start < o_end and end > o_start
+                   for o_start, o_end in occupied):
+                continue  # a longer concept already claimed this span
+            parsed = parse_numeric_text(m.group("val"))
+            if parsed.value is None or parsed.ambiguity:
+                continue  # ambiguous - never guessed
+            occupied.append((start, end))
+            out[name] = harden_fact_text(name, {
+                "value": parsed.value,
+                "unit": parsed.currency or parsed.unit,
+                "scale": parsed.scale,
+                "reporting_period": "FY2025",
+                "provenance_tier": "DOCUMENT",
+                "document_name": document_name,
+                "page": page,
+                "evidence": raw[start:end].strip()[:160],
+                "source": document_name,
+            })
+    return out
+
+
 def _attach_document_facts(facts: Dict[str, Any],
                            documents: Optional[List[Dict[str, Any]]]
                            ) -> Dict[str, Any]:

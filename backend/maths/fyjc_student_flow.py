@@ -176,17 +176,24 @@ def build_understanding(question: str) -> Dict[str, Any]:
             "transaction wording, not from the numbers alone."
         ))
 
+    requested_uncertain = bool(classification.get("requested_uncertain"))
+    if requested_uncertain:
+        concerns.insert(0, str(classification.get("reason")
+                               or "The requested figure is unclear."))
+
     return {
         "classified": classification.get("domain") != DOMAIN_UNRECOGNISED,
         "domain": classification.get("domain"),
         "kind": classification.get("kind"),
         "metric": classification.get("metric"),
+        "requested": classification.get("metric"),
+        "requested_uncertain": requested_uncertain,
         "reason": classification.get("reason"),
         "facts": fact_rows,
         "interpretation": _interpretation(classification, fact_rows, q),
         "concerns": concerns,
         "status": (
-            REVIEW_REQUIRED if concerns else
+            REVIEW_REQUIRED if (concerns or requested_uncertain) else
             (VERIFIED if classification.get("domain") != DOMAIN_UNRECOGNISED
              else REVIEW_REQUIRED)
         ),
@@ -203,12 +210,17 @@ def _interpretation(classification: Dict[str, Any],
     if domain == DOMAIN_MATHS:
         metric = classification.get("metric")
         if metric:
-            from backend.maths.fyjc_maths import resolve_metric
-            entry = resolve_metric(metric)
-            display = (entry or {}).get("concept") or metric
+            from backend.maths.fyjc_maths import known_concept_display
+            display = known_concept_display(metric) or metric
             return (
                 f"FT-E reads this as a Maths question asking for "
-                f"**{display}**."
+                f"**{display}** (Requested: {display})."
+            )
+        if classification.get("requested_uncertain"):
+            return (
+                "FT-E sees a numerical Maths question, but the requested "
+                "figure is unclear - it will ask which figure to calculate "
+                "rather than guess."
             )
         return (
             "FT-E reads this as a numerical Maths question, but no "
@@ -594,6 +606,32 @@ def run_fyjc_student_flow(question: str,
     if domain == DOMAIN_MATHS:
         metric = understanding.get("metric")
         if not metric:
+            if understanding.get("requested_uncertain"):
+                # Sprint 15: an uncertain requested concept is REVIEW_
+                # REQUIRED - FT-E never guesses which figure is asked for.
+                return {
+                    "flow": "refusal",
+                    "status": REVIEW_REQUIRED,
+                    "status_label": STATUS_WORDS.get(
+                        REVIEW_REQUIRED, REVIEW_REQUIRED),
+                    "authority_state": "review_required",
+                    "understanding": understanding,
+                    "what": (
+                        "FT-E is not certain which figure this question "
+                        "asks for."
+                    ),
+                    "why_not": (
+                        understanding.get("reason")
+                        or "Multiple possible requested figures were found. "
+                        "FT-E does not guess."
+                    ),
+                    "next_action": (
+                        "Re-type the question naming the figure explicitly - "
+                        "e.g. 'Calculate the Profit Margin' or 'Find the "
+                        "missing figure: Expenses'."
+                    ),
+                    "audit": {"authority": "review_required"},
+                }
             return {
                 "flow": "refusal",
                 "status": "UNSUPPORTED",

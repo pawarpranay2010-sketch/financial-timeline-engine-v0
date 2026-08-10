@@ -42,7 +42,7 @@ from backend.maths.authority import ENGINE_UNAVAILABLE_REASON
 from backend.maths.extended_registry import EXTENDED_REGISTRY
 from backend.maths.fact_model import build_fact_graph
 from backend.maths.normalization import parse_numeric_text
-from backend.maths.solver import Solution, Solver
+from backend.maths.solver import Solution, Solver, format_value
 from backend.maths.status import (
     BLOCKED,
     DERIVED,
@@ -56,6 +56,7 @@ from backend.maths.student_sandbox import (
     STATUS_WORDS,
     _attach_document_facts,
     _parse_text_facts,
+    extract_prose_facts,
 )
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,7 @@ def fyjc_maths_surface() -> Dict[str, Dict[str, Any]]:
 
 
 _KNOWN_CONCEPTS_CACHE: Optional[frozenset] = None
+_KNOWN_DISPLAY_CACHE: Optional[Dict[str, str]] = None
 
 
 def _known_concepts() -> frozenset:
@@ -161,6 +163,32 @@ def _known_concepts() -> frozenset:
                 names.update(definition.dependencies or [])
         _KNOWN_CONCEPTS_CACHE = frozenset({_norm(n) for n in names})
     return _KNOWN_CONCEPTS_CACHE
+
+
+def known_concept_names() -> List[str]:
+    """Sorted list of normalized names for every concept the registry
+    can talk about (targets + dependencies). Public counterpart of
+    _known_concepts()."""
+    return sorted(_known_concepts())
+
+
+def known_concept_display(metric: str) -> Optional[str]:
+    """Canonical display name for any concept the registry knows
+    (targets + dependencies), e.g. 'expenses' -> 'Expenses'."""
+    global _KNOWN_DISPLAY_CACHE
+    if _KNOWN_DISPLAY_CACHE is None:
+        names: Dict[str, str] = {}
+        for fid in EXTENDED_REGISTRY.all_ids():
+            definition = EXTENDED_REGISTRY.get(fid)
+            if definition is None:
+                continue
+            names[_norm(definition.target)] = definition.target
+            for dep in definition.dependencies or []:
+                names[_norm(dep)] = dep
+        _KNOWN_DISPLAY_CACHE = names
+    if not metric:
+        return None
+    return _KNOWN_DISPLAY_CACHE.get(_norm(str(metric)))
 
 
 _SURFACE_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
@@ -375,19 +403,27 @@ def verify_maths_answer(
     outcome when the evidence or the registry cannot support the request.
     """
     entry = resolve_metric(metric)
-    concept = entry["concept"] if entry is not None else str(metric)
-    if entry is None and _norm(concept) not in _known_concepts():
-        supported = ", ".join(supported_metric_names()[:12])
-        return _refusal_outcome(
-            metric, AUTHORITY_UNSUPPORTED, UNSUPPORTED,
-            f"'{metric}' is not one of the financial relationships FT-E "
-            f"can compute. Sprint 13 supports ONLY the existing registered "
-            f"formulas - e.g. {supported} and the other 12A-12F "
-            f"relationships. No new formulas were added and no "
-            f"calculation is invented.",
-            "Choose a metric from the supported list (shown in the "
-            "documentation) and re-submit.",
-        )
+    if entry is not None:
+        concept = entry["concept"]
+    else:
+        # Dependency concepts (Expenses, Equity, Shares Outstanding ...)
+        # are resolved to their canonical registry spelling so reverse
+        # questions reach the registered inverse path (registry lookups
+        # are case-sensitive and deterministic).
+        canonical = known_concept_display(metric)
+        concept = canonical if canonical is not None else str(metric)
+        if _norm(concept) not in _known_concepts():
+            supported = ", ".join(supported_metric_names()[:12])
+            return _refusal_outcome(
+                metric, AUTHORITY_UNSUPPORTED, UNSUPPORTED,
+                f"'{metric}' is not one of the financial relationships FT-E "
+                f"can compute. Sprint 13 supports ONLY the existing "
+                f"registered formulas - e.g. {supported} and the other "
+                f"12A-12F relationships. No new formulas were added and no "
+                f"calculation is invented.",
+                "Choose a metric from the supported list (shown in the "
+                "documentation) and re-submit.",
+            )
     if not cpp_available():
         return _refusal_outcome(
             metric, AUTHORITY_UNAVAILABLE, BLOCKED,
@@ -397,6 +433,9 @@ def verify_maths_answer(
         )
 
     merged = _attach_document_facts(_coerce_facts(facts), documents)
+    # narrative prose ('Revenue is Rs.10,000 ...') then the strict
+    # 'Concept: value' lines (the canonical format wins on duplicates).
+    merged.update(extract_prose_facts(text or ""))
     merged.update(_parse_text_facts(text or ""))
     if not merged:
         return _refusal_outcome(
@@ -408,6 +447,63 @@ def verify_maths_answer(
         )
 
     sol = solve_strict(concept, merged)
+
+    # ------------------------------------------------------------------
+    # Sprint 15 (Stage 4) hard invariant: a supplied fact is NEVER
+    # presented as a calculated answer. A 'direct' solve means the
+    # requested concept was itself an input (the solver echoed it with
+    # formula_id=None). The only acceptable resolution is an independent
+    # derivation of the SAME value through a registered formula (which
+    # executes the C++ mathematical authority and carries a formula_id).
+    # Otherwise FT-E refuses - it never echoes, never labels a supplied
+    # value as derived.
+    # ------------------------------------------------------------------
+    if getattr(sol, "kind", "") == "direct" and sol.value is not None:
+        reported = sol.value
+        remaining = {
+            k: v for k, v in merged.items()
+            if _norm(str(k)) != _norm(str(concept))
+        }
+        derived = solve_strict(concept, remaining) if remaining else None
+        if derived is not None and getattr(derived, "kind", "") != "direct" \
+                and derived.value is not None:
+            if derived.value != reported:
+                # registered derivation conflicts with the supplied value:
+                # preserve the reported value, refuse - never silently choose
+                refusal = _refusal_outcome(
+                    metric, AUTHORITY_CPP, REVIEW_REQUIRED,
+                    f"{concept} is supplied as "
+                    f"{format_value(reported, 'amount', 2)}, but the "
+                    f"registered formula {derived.formula_id} derives "
+                    f"{format_value(derived.value, derived.unit_kind, 2)}. "
+                    "The supplied value is preserved - review required, "
+                    "never silently choose between them.",
+                    "Confirm which value is correct, remove the incorrect "
+                    "one, and re-submit so FT-E can calculate the answer "
+                    "through the registered formula.",
+                )
+                refusal["concept"] = concept
+                refusal["formula"] = derived.formula_id
+                refusal["formula_id"] = derived.formula_id
+                refusal["missing"] = []
+                return refusal
+            sol = derived  # independent derivation agrees -> resolved
+        else:
+            refusal = _refusal_outcome(
+                metric, AUTHORITY_CPP, BLOCKED,
+                f"{concept} was supplied as an input, and FT-E found no "
+                "registered formula that can derive it from the other "
+                "inputs. FT-E never presents a supplied value as a "
+                "calculated answer.",
+                f"Remove the supplied '{concept}' value, then provide its "
+                "inputs so the registered formula can derive it (re-type "
+                "the question as 'Calculate <metric>' with the input values "
+                "only).",
+            )
+            refusal["concept"] = concept
+            refusal["missing"] = []
+            return refusal
+
     status = sol.status or BLOCKED
     resolved = sol.value is not None and status not in (
         BLOCKED, REVIEW_REQUIRED, UNSUPPORTED,
