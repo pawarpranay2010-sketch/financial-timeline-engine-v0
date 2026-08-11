@@ -178,3 +178,92 @@ metrics are refused with `formula_id == None`.
 * UI wiring of the new pipeline is out of scope for this sprint; the module
   exposes a single deterministic entry point (`reason_bk_question`) ready
   for the student-flow integration sprint.
+
+---
+
+# SPRINT 15E — FYJC BOOK-KEEPING UNIT-TEST-1 TEXTBOOK COVERAGE
+
+**Sprint:** 15E — Book-Keeping Unit-Test-1 Textbook Coverage
+**Verdict:** ✅ **PASS** — 30/30 gate, 101/101 golden oracles, 0 invented
+accounts, 0 fabricated amounts, deterministic & C++-authoritative
+
+## E.1 Syllabus boundary (verified, not assumed)
+
+The Unit-Test-1 scope is the **first three FYJC Book-Keeping & Accountancy
+chapters** as declared by the golden benchmark
+(`backend/maths/fyjc_bk_15e_benchmark.py`):
+
+| Ch | Chapter | Scope in FT-E |
+|----|---------|---------------|
+| 1 | Introduction to Book-Keeping & Accountancy | business entity, double entry, Real / Personal / Nominal classification |
+| 2 | Basic Accounting Terms / accounting equation | capital, drawings, debtors, creditors, purchases, sales, assets, expenses, incomes, discounts |
+| 3 | Journal | the complete basic transaction family + multi-transaction questions |
+
+Later-year topics are explicitly **outside** the boundary and refused as
+NOT_SUPPORTED: final accounts / trading & profit & loss, balance sheet,
+partnership, depreciation, provisions / RDD, bad debts write-offs beyond
+the basic family, insolvency, consignment, joint venture, issue of shares,
+opening entries for a new year, etc.
+
+## E.2 Unit-Test-1 capability matrix
+
+| Chapter | Concept | Question pattern (supported wording family) | Supported? | Reasoning method | Output type | Refusal condition |
+|---------|---------|--------------------------------------------|:----------:|------------------|-------------|-------------------|
+| 1–2 | Business start | `Started / commenced / began business with cash / bank balance / assets` (incl. `cash + furniture`, `cash + bank`, single asset) | ✅ | START_BUSINESS + `_startup_asset_breakdown` | Cash/Bank/asset Dr · Capital Cr (compound start splits named components) | amount missing → BLOCKED; >1 named asset split never guessed |
+| 1–2 | Additional capital | `Brought in additional capital`, `introduced X as capital`, `brought X into the business` (X = asset or cash) | ✅ | CAPITAL_INTRODUCED / CAPITAL_ASSET_INTRODUCED | exact asset (or cash/bank) Dr · Capital Cr | >1 asset → ASSET_AMBIGUOUS refusal |
+| 2–3 | Drawings | `Withdrew cash for personal/private use`, `withdrew goods worth … for personal use`, `goods taken by the proprietor` | ✅ | DRAWINGS_CASH / GOODS_PERSONAL_USE | Drawings Dr · Cash/Bank Cr; goods → Drawings Dr · Purchases Cr | amount missing → BLOCKED |
+| 3 | Cash purchase | `Purchased/bought goods for cash`, `goods purchased for … in cash`, `purchased goods costing … payment made immediately`, `by cheque` | ✅ | PURCHASE_GOODS_CASH | Purchases Dr · Cash/Bank Cr | amount missing → BLOCKED; cash vs credit ambiguous → REVIEW_REQUIRED |
+| 3 | Credit purchase | `purchased/bought goods from <party> on credit`, `for Rs.X on credit`, `goods worth Rs.X from <party>`, `bought goods on credit from <party>` | ✅ | PURCHASE_GOODS_CREDIT | Purchases Dr · <party> Cr | amount missing → BLOCKED; no party → REVIEW_REQUIRED |
+| 3 | Cash sale | `sold goods for cash`, `sold goods to <party> for cash`, `cash sale of goods`, `goods sold and cash received immediately`, `goods costing … sold … for cash` (cost dropped) | ✅ | SALE_GOODS_CASH | Cash/Bank Dr · Sales Cr (party never becomes debtor) | amount missing → BLOCKED |
+| 3 | Credit sale | `sold goods to <party> on credit`, `sold to <party> for Rs.X on credit`, `goods costing … sold … on credit` | ✅ | SALE_GOODS_CREDIT | <party> Dr · Sales Cr | amount missing → BLOCKED; no party → REVIEW_REQUIRED |
+| 3 | Fixed-asset purchase/sale | `purchased furniture/machinery/building/land for cash/on credit/by cheque`, `sold old furniture for cash`, `sold … received a cheque` | ✅ | PURCHASE_ASSET_* / SALE_ASSET_* (exact asset only) | exact named asset ± Cash/Bank/party | >1 asset → refused; mode unstated → REVIEW_REQUIRED |
+| 3 | Expenses | `paid rent/salary/wages/electricity/insurance/stationery/repairs/postage/legal fees/audit fees/income tax`, `paid for <expense> in cash`, `by cheque`, `paid carriage inward/outward` | ✅ | EXPENSE_PAID (+ `_EXPENSE_ACCOUNT_WORDS`, longest phrase first) | expense A/c Dr · Cash/Bank Cr | amount missing → BLOCKED; unrecognised expense word → REVIEW_REQUIRED |
+| 3 | Incomes | `received commission/interest/rent/dividend`, `commission received in cash`, `interest received by cheque` | ✅ | INCOME_RECEIVED (+ `_INCOME_ACCOUNT_WORDS`) | Cash/Bank Dr · income A/c Cr | amount missing → BLOCKED |
+| 3 | Bank / cash | `deposited cash into bank`, `withdrew cash from bank`, `paid to <party> in cash`, `received from <party> in cash`, cheque payment/receipt | ✅ | CASH_INTO_BANK / CASH_FROM_BANK / PAID_TO / RECEIVED_FROM / CHEQUE_PAID / CHEQUE_RECEIVED | contra (Bank Dr · Cash Cr etc.) or party ± Cash/Bank | amount missing → BLOCKED |
+| 3 | Trade discount | `…for Rs.X at N% trade discount` (netting only, never a cash-discount line) | ✅ | trade-discount pipeline | list price → −N% → net value posted | no amount → BLOCKED |
+| 3 | Cash discount / partial payment | `half the amount paid immediately`, `N% cash discount on the amount paid`, `paid him Rs.X immediately` | ✅ | paid/credit split → cash discount on paid portion only (chronological, traced) | exact cash-paid / discount-received / party-balance lines | fraction or % unreadable → REVIEW_REQUIRED |
+| 3 | Discount settlements | `received from <party> Rs.X, discount allowed Rs.Y`, `paid … discount received … in full settlement of Rs.Z`, `allowed him discount Rs.Y` | ✅ | explicit-discount mapping (positional: cash / discount / party total) | Cash + Discount Allowed Dr · <party> Cr (or mirror) | discount without settlement context → REVIEW_REQUIRED |
+| 3 | Returns | `returned goods to <party>`, `<party> returned goods`, `purchases returns to …`, `sales returns from …`, `returned goods worth … to him` | ✅ | `_returns_rule` (structural) + multi-transaction party inheritance | <party> Dr · Purchase Returns Cr / Sales Returns Dr · <party> Cr | party-less standalone return → REVIEW_REQUIRED |
+| 3 | Multi-transaction | `Start… . Purchased… . Paid… .` / `Sold … . Received from him … discount allowed` | ✅ | `_split_transactions` (sentence + return-boundary splitting) → independent chronological journals → merged ledger/TB | N independent journal entries + one ledger + one trial balance | any segment missing amount → BLOCKED (no partial fabrication) |
+
+## E.3 What changed in the engine (Sprint 15E delta)
+
+* **`classify_bk_type`** — bank-only business start posts to **Bank**;
+  capital-asset introductions (`brought machinery into the business`)
+  debit the exact asset; `goods worth Rs.X from <party>` credit purchases;
+  `paid for <expense>` expenses; `by cheque` / `payment made immediately`
+  full-settlement modes; `goods costing Rs.X sold for cash Rs.Y` keeps the
+  sale price (cost dropped in the amount pipeline); sentence-opening
+  `discount received from <party>` is a DISCOUNT entry.
+* **`_returns_rule`** — goods returns told apart by structure
+  (`…returned … to <party>` = purchase return; `<party> returned goods …` =
+  sales return) instead of enumerating wordings.
+* **`_split_transactions`** — honorific titles (`Mr. Sharma`) no longer
+  split; comma-joined returns become their own transaction; a party-less
+  `returned goods worth Rs.X` inherits the previous segment's party
+  deterministically.
+* **`_detect_explicit_discount`** — positional mapping of cash / discount /
+  party-total figures, settlement phrases (`in full settlement of`, `his
+  account of`, `being`), pronoun-resolved `allowed <party> discount Rs.Y`,
+  and derivation of an unstated discount by subtraction when both figures
+  are stated (never an invented number).
+* **Settlement-mode hardening** — `cash discount of N%` never flips a
+  credit purchase into cash mode, and a PARTIAL payment
+  (`half … paid immediately`) never triggers full-immediate settlement
+  (`_full_immediate_settlement` + cash-discount stripping in
+  `has_cash_mode`).
+
+## E.4 Sprint 15E verification
+
+| Gate | Result |
+|------|--------|
+| Sprint 15E Unit-Test-1 Gate (`scripts/fte_fyjc_bk15e_test.py`) | ✅ **30/30** — 122-case golden benchmark (101 verified oracles, 21 refusals) |
+| Sprint 15B Gate (`scripts/fte_fyjc_bk15b_test.py`) | ✅ **388/388** |
+| Sprint 15C P0 Gate (`scripts/fte_fyjc_bk_p0_test.py`) | ✅ **138/138** |
+| Sprint 15D Derivation Gate (`scripts/fte_fyjc_15d_test.py`) | ✅ **191/191** |
+| Sprint 15 Stage 4 Routing (`scripts/fte_fyjc_routing_regression_test.py`) | ✅ **44/44** |
+
+Hard invariants re-asserted: 0 invented accounts · 0 fabricated amounts ·
+0 unbalanced VERIFIED journals · 0 unbalanced VERIFIED trial balances ·
+0 formula_id=None confident results · C++ authority intact (registered
+metrics only) · identical input → identical output.

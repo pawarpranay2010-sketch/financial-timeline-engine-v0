@@ -272,6 +272,36 @@ def _paid_fraction(text: str) -> Optional[Decimal]:
     return None
 
 
+# Words that mark a PARTIAL payment. When one of these precedes an
+# 'immediately'-style phrase, only part of the amount is settled NOW and
+# the transaction must NOT flip into cash mode - the unpaid balance stays
+# on credit (Sprint 15E: 'Half the amount was paid immediately' stays a
+# credit purchase with a partial cash payment).
+_FRACTION_HINTS = (
+    "half", "quarter", "one-third", "one third", "two-thirds",
+    "two thirds", "three-fourths", "three fourths", "partly",
+    " part ", " portion ", " some of the amount ",
+    "40%", "50%", "25%", "30%", "75%",
+)
+
+
+def _full_immediate_settlement(low: str) -> bool:
+    """True when the wording settles the ENTIRE amount now ('payment made
+    immediately', 'paid the full amount immediately'). A PARTIAL payment
+    ('Half the amount was paid immediately') is never a full settlement -
+    the balance stays on credit, so cash mode must not fire. Deterministic:
+    only an explicit 'full amount' wording overrides a fraction hint."""
+    has_fraction = any(h in low for h in _FRACTION_HINTS)
+    if has_fraction:
+        return "paid the full amount immediately" in low \
+            or "full amount paid immediately" in low
+    return any(k in low for k in (
+        "payment made immediately", "payment was made immediately",
+        "payment made at once", "paid the full amount immediately",
+        "the amount was paid immediately", "payment is made immediately",
+        "paid immediately"))
+
+
 # ---------------------------------------------------------------------------
 # Wording normalization -> canonical transaction type (registry-driven)
 # ---------------------------------------------------------------------------
@@ -287,14 +317,18 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "when": ("started business", "commenced business",
                  "started the business", "began business",
                  "started business with cash"),
-        "debit": ["Cash"], "credit": ["Capital"],
+        # [Cash, Bank] either/or collapses to the named side, so
+        # 'Started business with bank balance Rs.X' posts to BANK, not
+        # Cash (Sprint 15E).
+        "debit": ["Cash", "Bank"], "credit": ["Capital"],
     },
     {
         "key": "CAPITAL_INTRODUCED",
         "label": "Additional capital introduced",
         "when": ("brought in as capital", "brought ... as capital",
                  "additional capital", "introduced capital",
-                 "brought in additional capital"),
+                 "brought in additional capital", "brought into the business",
+                 "into the business as capital", "as capital"),
         "debit": ["Cash", "Bank"], "credit": ["Capital"],
     },
     {
@@ -327,7 +361,11 @@ BK_PATTERNS: List[Dict[str, Any]] = [
                  "bought stock from", "goods purchased on credit",
                  "goods bought on credit", "goods purchased from",
                  "goods bought from", "goods purchased by cheque",
-                 "goods bought by cheque"),
+                 "goods bought by cheque",
+                 # 'worth Rs.X from <party>' is the same credit purchase
+                 # (the amount sits between 'goods' and 'from') (Sprint 15E)
+                 "purchased goods worth", "bought goods worth",
+                 "goods worth", "purchased stock worth", "stock worth"),
         "debit": ["Purchases"], "credit": [{"party": "giver"}],
     },
     {
@@ -362,7 +400,10 @@ BK_PATTERNS: List[Dict[str, Any]] = [
                  "rent paid", "salary paid", "salaries paid", "wages paid",
                  "insurance paid", "purchased stationery",
                  "bought stationery", "stationery purchased",
-                 "paid telephone", "telephone bill paid"),
+                 "paid telephone", "telephone bill paid",
+                 # 'Paid for stationery in cash Rs.500' / 'Paid for repairs'
+                 # - the expense word follows 'paid for' (Sprint 15E)
+                 "paid for "),
         "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
     },
     {
@@ -405,7 +446,8 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "key": "CHEQUE_PAID",
         "label": "Payment by cheque",
         "when": ("paid by cheque", "cheque paid", "issued a cheque",
-                 "gave a cheque", "cheque issued"),
+                 "gave a cheque", "cheque issued", "by cheque", "by check",
+                 "cheque issued to", "cheque paid to", "paid ... by cheque"),
         "debit": [{"party": "giver"}], "credit": ["Bank"],
     },
     {
@@ -419,7 +461,9 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "key": "PURCHASE_RETURN",
         "label": "Goods returned to supplier",
         "when": ("returned goods to", "goods returned to", "returned to",
-                 "purchase return", "returns outward"),
+                 "purchase return", "returns outward", "purchases returns",
+                 "purchases return", "returned goods worth",
+                 "goods returned worth", "returned stock", "stock returned to"),
         "debit": [{"party": "giver"}], "credit": ["Purchase Returns"],
     },
     {
@@ -507,7 +551,15 @@ _EXPENSE_ACCOUNT_WORDS: List[Tuple[str, str]] = [
     ("advertisement", "Advertisement"), ("electricity", "Electricity"),
     ("office expenses", "Office Expenses"), ("office", "Office Expenses"),
     ("general expenses", "General Expenses"), ("commission", "Commission Paid"),
-    ("interest", "Interest Paid"), ("carriage", "Carriage Inward"),
+    ("interest", "Interest Paid"),
+    # longest first: 'carriage outward'/'carriage on sales' must win over
+    # the generic 'carriage' word, otherwise 'Paid carriage outward'
+    # would be posted to the wrong nominal account (Sprint 15E).
+    ("carriage outward", "Carriage Outward"),
+    ("carriage on sales", "Carriage Outward"),
+    ("carriage inward", "Carriage Inward"),
+    ("carriage on purchases", "Carriage Inward"),
+    ("carriage", "Carriage Inward"),
     ("repairs", "Repairs"), ("postage", "Postage"), ("stationery", "Stationery"),
     ("audit fees", "Audit Fees"), ("legal fees", "Legal Fees"),
     ("income tax", "Income Tax"), ("fuel", "Fuel"),
@@ -565,7 +617,7 @@ def _party_from_text(text: str) -> Optional[str]:
             rest = text[idx:]
             m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
                          r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+and\s+"
-                         r"|\s+in\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
+                         r"|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
             if m:
                 party = m.group(1).strip().rstrip(".;,")
                 if party and not party.lower().endswith(
@@ -602,6 +654,59 @@ def _resolve_side_specs(specs: List[Any], text: str,
     return resolved
 
 
+_RETURN_NONPARTY_WORDS = {"goods", "stock", "the", "he", "she", "they",
+                          "returned", "sold"}
+
+
+def _returns_rule(text: str) -> Optional[Dict[str, Any]]:
+    """Goods-return transactions, told apart by STRUCTURE rather than by
+    enumerating wordings (Sprint 15E):
+
+      * 'Purchases returns to Rahul Rs.1,000' / 'returned ... to <party>'
+        -> PURCHASE_RETURN (Dr party / Cr Purchase Returns);
+      * 'Sales returns from Mohan Rs.800' / '<party> returned goods ...'
+        -> SALES_RETURN (Dr Sales Returns / Cr party).
+
+    Returns None when the wording is not a goods return. A party-less
+    'returned goods worth Rs.1,000' stays a party placeholder and is
+    refused unless the multi-transaction layer can inherit the previous
+    segment's party."""
+    low = " " + str(text or "").lower() + " "
+    if "purchases returns" in low or "purchase returns" in low \
+            or "returns outward" in low:
+        return {
+            "key": "PURCHASE_RETURN", "label": "Goods returned to supplier",
+            "debit": [{"party": "giver"}], "credit": ["Purchase Returns"],
+        }
+    if "sales returns" in low or "sales return" in low \
+            or "returns inward" in low:
+        return {
+            "key": "SALES_RETURN", "label": "Goods returned by customer",
+            "debit": ["Sales Returns"], "credit": [{"party": "giver"}],
+        }
+    if "returned" not in low or ("goods" not in low and "stock" not in low):
+        return None
+    # 'returned (goods|stock) ... to <party>' -> the business returns goods
+    # to its supplier: Dr party / Cr Purchase Returns.
+    if re.search(r"\breturned\b.*?\bto\b", low):
+        return {
+            "key": "PURCHASE_RETURN", "label": "Goods returned to supplier",
+            "debit": [{"party": "giver"}], "credit": ["Purchase Returns"],
+        }
+    # '<Party> returned goods ...' -> the customer returns goods to the
+    # business: Dr Sales Returns / Cr party.
+    m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+returned\b",
+                 str(text or ""))
+    if m:
+        name = m.group(1).strip().rstrip(".;,")
+        if name.lower() not in _RETURN_NONPARTY_WORDS:
+            return {
+                "key": "SALES_RETURN", "label": "Goods returned by customer",
+                "debit": ["Sales Returns"], "credit": [name],
+            }
+    return None
+
+
 def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     """The canonical transaction type for a description (first match wins),
     with its resolved debit/credit account specs. None when unrecognised.
@@ -623,24 +728,67 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             return _asset_pattern(text, assets, purchase=True)
         if any(k in low for k in ("sold", "sale of")):
             return _asset_pattern(text, assets, purchase=False)
+        # assets INTRODUCED as capital ('Brought machinery worth Rs.50,000
+        # into the business', 'Brought furniture into the business as
+        # capital Rs.20,000') -> the exact asset debited, Capital credited.
+        # More than one named asset is never split (refused).
+        if any(k in low for k in ("capital", "into the business",
+                                  "introduced", "brought into")):
+            if len(assets) > 1:
+                return {
+                    "key": "ASSET_AMBIGUOUS",
+                    "label": "Ambiguous capital-asset introduction",
+                    "refuse": True, "debit": [], "credit": [],
+                    "why": ("The description names more than one asset for "
+                            "capital. FT-E never guesses the split."),
+                }
+            return {
+                "key": "CAPITAL_ASSET_INTRODUCED",
+                "label": f"{assets[0]} introduced as capital",
+                "debit": assets, "credit": ["Capital"],
+            }
+    # goods-return wording ('returned ... to <party>' = purchase return;
+    # '<party> returned goods' = sales return) - structural, registry-free.
+    returns = _returns_rule(text)
+    if returns is not None:
+        return returns
     # 'for cash' decides the MODE even when a party is named
     # ('Sold goods to Mohan for cash', 'Purchased goods from Amit for
     # cash'). A named party is just the counterparty - the settlement
     # mode comes from the words, so a party never flips a cash
     # transaction into a credit one. Contradictory 'cash ... on credit'
     # wording is ambiguous and stays with the refusal layer below.
-    has_cash_mode = ("for cash" in low or "paid cash" in low
-                     or re.search(r"\bcash\b", low))
+    full_immediate_payment = _full_immediate_settlement(low)
+    payment_by_cheque = any(k in low for k in (
+        "by cheque", "by check", "payment by cheque",
+        "payment made by cheque", "paid by cheque", "paid by check"))
+    # 'cash discount' is a discount ON the cash portion - the word 'cash'
+    # inside it never proves the transaction itself was for cash (Sprint
+    # 15E: '...at 10% trade discount. Half the amount was paid immediately
+    # and a cash discount of 2%...' stays a CREDIT purchase). Strip the
+    # phrase before deciding the settlement mode.
+    _cash_mode_text = re.sub(r"\bcash\s+discount\b", " ", low)
+    has_cash_mode = ("for cash" in _cash_mode_text
+                     or "paid cash" in _cash_mode_text
+                     or re.search(r"\bcash\b", _cash_mode_text)
+                     or full_immediate_payment or payment_by_cheque)
     has_credit_mode = ("credit" in low or "on account" in low)
     goods_purchase_words = (
         "purchased goods", "bought goods", "goods purchased",
         "goods bought", "purchased stock", "bought stock",
         "stock purchased", "stock bought",
+        "purchased goods worth", "bought goods worth", "goods worth",
+        "purchased stock worth", "stock worth",
     )
     goods_sale_words = (
         "sold goods", "goods sold", "sold stock", "stock sold",
-        "sold goods to", "goods sold to",
+        "sold goods to", "goods sold to", "sold goods worth",
+        "sold stock worth",
     )
+    # 'Goods costing Rs.10,000 sold ... for cash Rs.12,000' is a sale; the
+    # COST figure is not the sale value (dropped in the amount pipeline).
+    costing_sale = "costing" in low and any(k in low for k in (
+        "sold", "sale ", "sales"))
     if has_cash_mode and not has_credit_mode:
         if any(k in low for k in goods_purchase_words):
             return {
@@ -648,7 +796,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "label": "Goods purchased for cash",
                 "debit": ["Purchases"], "credit": ["Cash", "Bank"],
             }
-        if any(k in low for k in goods_sale_words):
+        if any(k in low for k in goods_sale_words) or costing_sale:
             return {
                 "key": "SALE_GOODS_CASH",
                 "label": "Goods sold for cash",
@@ -670,6 +818,19 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "key": "GOODS_PERSONAL_USE",
             "label": "Goods taken for personal use",
             "debit": ["Drawings"], "credit": ["Purchases"],
+        }
+    # 'Discount received from Rahul Rs.150' is a DISCOUNT entry (Dr Rahul
+    # / Cr Discount Received) - the generic 'received from' phrase must
+    # not shadow it into a plain cash receipt. Fires ONLY when the discount
+    # phrase OPENS the sentence; a 'Paid to X ..., discount received ...'
+    # or 'Received from X ..., discount received ...' settlement stays
+    # with the explicit-discount machinery (Sprint 15E).
+    _stripped = low.strip()
+    if _stripped.startswith("discount received")             or _stripped.startswith("received discount"):
+        return {
+            "key": "DISCOUNT_RECEIVED",
+            "label": "Cash discount received from supplier",
+            "debit": [{"party": "giver"}], "credit": ["Discount Received"],
         }
     for cand in BK_PATTERNS:
         when = cand["when"]
@@ -709,9 +870,20 @@ def _asset_pattern(text: str, assets: List[str],
         }
     asset = assets[0]
     low = " " + text.lower() + " "
+    # 'payment made immediately' settles in full NOW (cash); 'by cheque' /
+    # 'payment made by cheque' settles through the bank (Sprint 15E). Both
+    # are full settlements - neither creates a creditor.
+    # 'payment made immediately' settles in full NOW (cash); a PARTIAL
+    # payment ('half ... paid immediately') never flips an asset purchase
+    # into cash mode (Sprint 15E).
+    full_immediate = _full_immediate_settlement(low)
+    by_cheque = any(k in low for k in ("by cheque", "by check",
+                                       "payment made by cheque",
+                                       "payment by cheque"))
     if purchase:
         if "for cash" in low or "cash purchase" in low \
-                or re.search(r"\bcash\b", low):
+                or re.search(r"\bcash\b", low) or full_immediate \
+                or by_cheque:
             return {
                 "key": "PURCHASE_ASSET_CASH", "label": f"{asset} purchased "
                 "for cash", "debit": [asset], "credit": ["Cash", "Bank"],
@@ -730,7 +902,7 @@ def _asset_pattern(text: str, assets: List[str],
                     "cash or on credit."),
         }
     if "for cash" in low or "cash sale" in low \
-            or re.search(r"\bcash\b", low):
+            or re.search(r"\bcash\b", low) or by_cheque:
         return {
             "key": "SALE_ASSET_CASH", "label": f"{asset} sold for cash",
             "debit": ["Cash", "Bank"], "credit": [asset],
@@ -759,6 +931,12 @@ def _asset_pattern(text: str, assets: List[str],
 # authority; posting arithmetic is verification/preparation arithmetic).
 
 
+_SETTLEMENT_PHRASES = (
+    "in full settlement of", "full settlement of", "settlement of",
+    "his account of", "her account of", "their account of", "being",
+)
+
+
 def _detect_explicit_discount(question: str,
                               amounts: List[Decimal])\
         -> Optional[Dict[str, Any]]:
@@ -766,10 +944,21 @@ def _detect_explicit_discount(question: str,
 
     Standard FYJC wording - 'Received from Mohan Rs.9,800, discount
     allowed Rs.200' - gives the CASH amount and the DISCOUNT amount; the
-    party account is their SUM. Two-amount form: (cash, discount).
-    Three-amount form (debt stated explicitly): (party_total, cash,
-    discount). Returns {kind, party_total, cash_amount, discount_amount}
-    or None.
+    party account is their SUM.
+
+    Amounts are mapped POSITIONALLY (never positionally guessed):
+      * discount amount  = the figure after 'discount allowed/received';
+      * party total      = the figure after a settlement phrase
+        ('in full settlement of', 'his account of', 'being', ...) or the
+        sum of cash + discount when no settlement figure is stated;
+      * cash amount      = the remaining stated figure.
+
+    When BOTH the cash amount and the party total are stated but no
+    discount word appears ('Received from Mohan Rs.5,000 in full
+    settlement of his account of Rs.5,200'), the discount is DERIVED by
+    subtraction - deterministic arithmetic on stated figures, never an
+    invented number. Returns {kind, party_total, cash_amount,
+    discount_amount} or None (-> the refusal layer, never a guess).
     """
     low = " " + str(question or "").lower() + " "
     # a TRADE discount amount reduces the list price; it is not a cash
@@ -782,17 +971,90 @@ def _detect_explicit_discount(question: str,
                or bool(re.search(r"allowed\s+[A-Za-z][A-Za-z' ]{0,40}?\s+discount",
                                  low)))
     received = "discount received" in low or "received discount" in low
-    if not (allowed or received) or len(amounts) < 2:
+    settlement_only = ("full settlement" in low or "settlement of" in low
+                       or "in settlement of" in low or "account of" in low)
+    if not (allowed or received or settlement_only) or len(amounts) < 2:
         return None
-    kind = "allowed" if allowed else "received"
-    if len(amounts) == 2:
-        cash_amount = amounts[0]
-        discount_amount = amounts[1]
+    kind = "allowed" if allowed else ("received" if received else None)
+    if kind is None and settlement_only:
+        # direction from the wording: 'received ... in full settlement'
+        # discounts the DEBTOR (Discount Allowed); 'paid ...' discounts
+        # the CREDITOR (Discount Received).
+        if "received" in low and "paid" not in low:
+            kind = "allowed"
+        elif "paid" in low:
+            kind = "received"
+    if kind is None:
+        return None
+
+    def _amount_after(phrase: str) -> Optional[Decimal]:
+        m = re.search(
+            re.escape(phrase) + r"\s*(?:rs\.?|₹|inr)?\s*"
+            r"(\d[\d,]*(?:\.\d+)?)", low)
+        if not m:
+            return None
+        # a '%' right after the figure means it is a RATE (e.g. '2% cash
+        # discount'), never a money amount - it must not be read as one.
+        after = low[m.end():m.end() + 2]
+        if after.lstrip().startswith("%"):
+            return None
+        try:
+            return Decimal(m.group(1).replace(",", ""))
+        except (InvalidOperation, ValueError):
+            return None
+
+    discount_amount = None
+    for ph in ("discount allowed", "discount received",
+               "allowed discount", "received discount",
+               "allowed him discount", "allowed her discount",
+               "allowed discount of", "discount of"):
+        v = _amount_after(ph)
+        if v is not None:
+            discount_amount = v
+            break
+    if discount_amount is None:
+        # pronoun-resolved form: 'allowed Mohan discount Rs.200' (the
+        # 'him/her' was substituted with the party name) - the amount
+        # follows the discount word of the allowed/received span.
+        m_span = re.search(
+            r"allowed\s+[A-Za-z][A-Za-z' .]{0,40}?\s+discount\s*"
+            r"(?:rs\.?|₹|inr)?\s*(\d[\d,]*(?:\.\d+)?)", low)
+        if m_span:
+            after = low[m_span.end():m_span.end() + 2]
+            if not after.lstrip().startswith("%"):
+                try:
+                    discount_amount = Decimal(
+                        m_span.group(1).replace(",", ""))
+                except (InvalidOperation, ValueError):
+                    discount_amount = None
+    party_total = None
+    for ph in _SETTLEMENT_PHRASES:
+        v = _amount_after(ph)
+        if v is not None:
+            party_total = v
+            break
+
+    remaining = [a for a in amounts
+                 if a != discount_amount and a != party_total]
+    cash_amount = remaining[0] if len(remaining) == 1 else None
+    if cash_amount is None and len(amounts) == 2 \
+            and discount_amount is not None:
+        cash_amount = (amounts[0] if amounts[0] != discount_amount
+                       else amounts[1])
+    if cash_amount is None:
+        return None
+    if party_total is None and discount_amount is not None:
         party_total = cash_amount + discount_amount
-    else:
-        party_total = amounts[0]
-        cash_amount = amounts[1]
-        discount_amount = amounts[2]
+    if party_total is None:
+        return None
+    if discount_amount is None:
+        # both figures stated, no discount word: derive by subtraction
+        if party_total >= cash_amount:
+            discount_amount = party_total - cash_amount
+        else:
+            return None
+    if party_total != cash_amount + discount_amount:
+        return None
     return {
         "kind": kind, "party_total": party_total,
         "cash_amount": cash_amount, "discount_amount": discount_amount,
@@ -809,6 +1071,21 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     steps: List[Dict[str, Any]] = []
     low = " " + str(question or "").lower() + " "
     amounts, ambiguous = _extract_amounts(question)
+    # 'Goods costing Rs.10,000 sold to Mohan for cash Rs.12,000' - the
+    # figure after 'costing' is the COST PRICE, never the sale value. When
+    # a separate selling price is also stated the cost figure is dropped
+    # (deterministic; the sale amount is what gets posted). With a single
+    # amount ('Purchased goods costing Rs.15,000 ...') the cost IS the
+    # transaction value and is kept.
+    if len(amounts) >= 2 and "costing" in low:
+        m_cost = re.search(r"costing\s*(?:rs\.?|₹|inr)?\s*"
+                           r"(\d[\d,]*(?:\.\d+)?)", low)
+        if m_cost:
+            try:
+                cost_value = Decimal(m_cost.group(1).replace(",", ""))
+                amounts = [a for a in amounts if a != cost_value]
+            except (InvalidOperation, ValueError):
+                pass
     percents = _extract_percents(question)
 
     concerns: List[str] = []
@@ -1020,12 +1297,28 @@ def _split_transactions(question: str) -> List[str]:
     step, (b) uses 'paid' wording and (c) follows a PURCHASE, so a
     'Received from <debtor>' settlement of a credit sale stays its own
     entry."""
-    raw = re.split(r";\s*", str(question or ""))
+    # Protect honorific titles ('Mr. Sharma', 'Mrs. Rao', 'Dr. Desai') so
+    # the '.' after 'Mr' is never treated as a sentence boundary (Sprint
+    # 15E) - restored after splitting.
+    _TITLE_RE = re.compile(r"\b(mr|mrs|ms|dr|prof|rev|st)\.\s+",
+                           re.IGNORECASE)
+    raw = str(question or "")
+    raw = _TITLE_RE.sub(lambda m: m.group(1).lower() + " \x01", raw)
+    raw = re.split(r";\s*", raw)
     pieces: List[str] = []
     for part in raw:
-        pieces.extend(
-            re.split(r"(?<=[a-z0-9)])\.\s+(?=[A-Z])", part))
-    segments = [seg.strip() for seg in pieces if seg.strip()]
+        # sentence boundaries AND comma-joined goods-returns ('Purchased
+        # goods from Rahul on credit Rs.20,000, returned goods worth
+        # Rs.1,000') are split in ONE pass - the return is its own
+        # transaction, never silently swallowed by the purchase (Sprint
+        # 15E: 0 silent substitutions).
+        pieces.extend(re.split(
+            r"(?<=[a-z0-9)])\.\s+(?=[A-Z])|"
+            r",\s+(?=returned (?:goods|stock)|goods returned|"
+            r"purchases returns|purchases return|sales returns|"
+            r"sales return)", part, flags=re.IGNORECASE))
+    segments = [seg.replace("\x01", ". ").strip() for seg in pieces
+                if seg.strip()]
     merged: List[str] = []
     for seg in segments:
         prior = merged[-1] if merged else None
@@ -1041,7 +1334,8 @@ def _split_transactions(question: str) -> List[str]:
     return merged
 
 
-_PRONOUN_RE = re.compile(r"\b(him|her|them)\b")
+_PRONOUN_RE = re.compile(r"\b(him|her|them|he|she|they)\b",
+                    re.IGNORECASE)
 
 
 def _resolve_pronouns(segment: str, prior_party: Optional[str]) -> str:
@@ -1056,14 +1350,15 @@ def _startup_asset_breakdown(text: str) -> Optional[Dict[str, Any]]:
     """'Started business with cash Rs.50,000 and furniture Rs.20,000' ->
     {cash, assets: {Furniture: 20000}, total: 70000}. Each named asset
     takes the amount adjacent to its name; the cash amount follows the
-    word 'cash'. None when the amounts cannot be read deterministically
-    (then the question is refused, never guessed)."""
+    word 'cash'. 'Started business with cash Rs.1,00,000 and bank balance
+    Rs.50,000' additionally captures the BANK component (Sprint 15E).
+    None when the amounts cannot be read deterministically (then the
+    question is refused, never guessed)."""
     low = " " + str(text or "").lower() + " "
-    if not any(k in low for k in ("started business", "commenced business")):
+    if not any(k in low for k in ("started business", "commenced business",
+                                  "started the business")):
         return None
     named = named_assets(text)
-    if not named:
-        return None
     breakdown: Dict[str, Decimal] = {}
     for asset in named:
         m = re.search(
@@ -1078,14 +1373,36 @@ def _startup_asset_breakdown(text: str) -> Optional[Dict[str, Any]]:
     m_cash = re.search(
         r"\bcash\b\s+(?:Rs\.?|₹|INR)?\s*(\d[\d,]*(?:\.\d+)?)",
         text, re.IGNORECASE)
-    if not m_cash:
+    cash_amt: Optional[Decimal] = None
+    if m_cash:
+        parsed_cash = parse_numeric_text(m_cash.group(1).replace(",", ""))
+        if parsed_cash.value is None:
+            return None
+        cash_amt = parsed_cash.value
+    m_bank = re.search(
+        r"\bbank\b(?:\s+balance)?\s*(?:Rs\.?|₹|INR)?\s*"
+        r"(\d[\d,]*(?:\.\d+)?)", text, re.IGNORECASE)
+    bank_amt: Optional[Decimal] = None
+    if m_bank:
+        parsed_bank = parse_numeric_text(m_bank.group(1).replace(",", ""))
+        if parsed_bank.value is None:
+            return None
+        bank_amt = parsed_bank.value
+    if not named and bank_amt is None:
         return None
-    parsed_cash = parse_numeric_text(m_cash.group(1).replace(",", ""))
-    if parsed_cash.value is None:
-        return None
-    cash_amt = parsed_cash.value
-    total = cash_amt + sum(breakdown.values(), Decimal(0))
-    return {"cash": cash_amt, "assets": breakdown, "total": total}
+    components: List[Tuple[str, Decimal]] = []
+    if cash_amt is not None:
+        components.append(("Cash", cash_amt))
+    if bank_amt is not None:
+        components.append(("Bank", bank_amt))
+    for asset, amount in breakdown.items():
+        components.append((asset, amount))
+    total = sum((amount for _, amount in components), Decimal(0))
+    return {
+        "cash": cash_amt if cash_amt is not None else Decimal(0),
+        "assets": breakdown, "total": total, "bank": bank_amt,
+        "components": components,
+    }
 
 
 def generate_journal(question: str) -> Dict[str, Any]:
@@ -1141,20 +1458,28 @@ def generate_journal(question: str) -> Dict[str, Any]:
 
     # full-settlement wording implies a discount that is NOT stated
     # ('received Rs.5,000 in full settlement of Rs.5,200') - FT-E will
-    # not silently invent the Rs.200 discount.
+    # not silently invent the Rs.200 discount. EXCEPTION (Sprint 15E):
+    # when a party is named AND the account total is also stated
+    # ('Received from Mohan Rs.5,000 in full settlement of his account of
+    # Rs.5,200'), the discount is DERIVED deterministically from the two
+    # stated figures - both numbers come from the question, so no value is
+    # fabricated.
     low_check = " " + text.lower() + " "
     if "full settlement" in low_check and "discount" not in low_check:
-        return {
-            "status": REVIEW_REQUIRED,
-            "why_not": ("'Full settlement' wording implies a discount, but "
-                        "no discount amount is stated. FT-E never invents "
-                        "the difference."),
-            "next_action": "State the discount amount explicitly (e.g. "
-                           "'discount allowed Rs.200').",
-            "debit_lines": [], "credit_lines": [], "narration": None,
-            "calculation_records": [], "total_debit": 0,
-            "total_credit": 0, "balanced": True,
-        }
+        _fs_amounts, _ = _extract_amounts(text)
+        _fs_party = _party_from_text(text)
+        if _fs_party is None or len(_fs_amounts) < 2:
+            return {
+                "status": REVIEW_REQUIRED,
+                "why_not": ("'Full settlement' wording implies a discount, "
+                            "but no discount amount is stated. FT-E never "
+                            "invents the difference."),
+                "next_action": "State the discount amount explicitly (e.g. "
+                               "'discount allowed Rs.200').",
+                "debit_lines": [], "credit_lines": [], "narration": None,
+                "calculation_records": [], "total_debit": 0,
+                "total_credit": 0, "balanced": True,
+            }
 
     pattern = classify_bk_type(text)
     if pattern is None:
@@ -1236,7 +1561,8 @@ def generate_journal(question: str) -> Dict[str, Any]:
     # transaction (credit_portion is 0/None) stays a SIMPLE entry.
     purchase = any(k in pattern["key"] for k in
                    ("PURCHASE", "START_BUSINESS", "CAPITAL_INTRODUCED",
-                    "EXPENSE", "INTEREST_ON_CAPITAL"))
+                    "CAPITAL_ASSET_INTRODUCED", "EXPENSE",
+                    "INTEREST_ON_CAPITAL"))
     sale = "SALE" in pattern["key"]
     split = (credit_portion is not None and credit_portion > 0) \
         or (cash_discount is not None and cash_discount > 0)
@@ -1272,9 +1598,10 @@ def generate_journal(question: str) -> Dict[str, Any]:
             if party:
                 debit_lines.append(_line(cash_acct, explicit["cash_amount"],
                                          "debit"))
-                debit_lines.append(_line("Discount Allowed",
-                                         explicit["discount_amount"],
-                                         "debit"))
+                if explicit["discount_amount"] > 0:
+                    debit_lines.append(_line("Discount Allowed",
+                                             explicit["discount_amount"],
+                                             "debit"))
                 credit_lines.append(_line(party, explicit["party_total"],
                                           "credit"))
         else:
@@ -1286,9 +1613,10 @@ def generate_journal(question: str) -> Dict[str, Any]:
                                          "debit"))
                 credit_lines.append(_line(cash_acct, explicit["cash_amount"],
                                           "credit"))
-                credit_lines.append(_line("Discount Received",
-                                          explicit["discount_amount"],
-                                          "credit"))
+                if explicit["discount_amount"] > 0:
+                    credit_lines.append(_line("Discount Received",
+                                              explicit["discount_amount"],
+                                              "credit"))
 
     # --- started business with cash + assets -----------------------------
     # 'Started business with cash Rs.50,000 and furniture Rs.20,000' ->
@@ -1297,9 +1625,13 @@ def generate_journal(question: str) -> Dict[str, Any]:
             and pattern["key"] in ("START_BUSINESS", "CAPITAL_INTRODUCED"):
         startup = _startup_asset_breakdown(text)
         if startup is not None:
-            debit_lines.append(_line("Cash", startup["cash"], "debit"))
-            for asset, amount in startup["assets"].items():
-                debit_lines.append(_line(asset, amount, "debit"))
+            if startup.get("components"):
+                for account, amount in startup["components"]:
+                    debit_lines.append(_line(account, amount, "debit"))
+            else:
+                debit_lines.append(_line("Cash", startup["cash"], "debit"))
+                for asset, amount in startup["assets"].items():
+                    debit_lines.append(_line(asset, amount, "debit"))
             credit_lines.append(_line("Capital", startup["total"],
                                       "credit"))
 
@@ -1664,6 +1996,21 @@ def _reason_multi_transaction(text: str,
 
     for i, raw_segment in enumerate(segments):
         segment = _resolve_pronouns(raw_segment, prior_party)
+        # a party-less goods-return ('Returned goods worth Rs.1,000')
+        # inherits the party of the previous segment: 'to <party>' after a
+        # PURCHASE (we return goods to the supplier), 'by <party>' after a
+        # SALE (the customer returns goods). Deterministic - never invents
+        # a name when no prior party exists (Sprint 15E).
+        low_seg = " " + segment.lower() + " "
+        if prior_party and _party_from_text(segment) is None and (
+                "returned goods" in low_seg or "goods returned" in low_seg
+                or "returned stock" in low_seg or "stock returned" in low_seg):
+            prior_journal = journals[-1] if journals else None
+            is_sale_prior = bool(prior_journal) and any(
+                (line.get("account") or "") == "Sales"
+                for line in (prior_journal.get("credit_lines") or []))
+            joiner = "by" if is_sale_prior else "to"
+            segment = segment.rstrip(". ") + f" {joiner} {prior_party}."
         resolved_segments.append(segment)
         journal = generate_journal(segment)
         if journal["status"] != VERIFIED and i > 0                 and _is_payment_step(raw_segment):
