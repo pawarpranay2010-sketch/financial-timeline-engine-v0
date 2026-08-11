@@ -1311,7 +1311,8 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         elif fraction is not None:
             paid_amount = (net_value * fraction / Decimal(100)).quantize(
                 Decimal("0.01"))
-        elif "on credit" not in low and "credit" not in low:
+        elif ("on credit" not in low and "credit" not in low
+              and "on account" not in low):
             paid_amount = net_value
         if paid_amount is not None:
             credit_amount = net_value - paid_amount

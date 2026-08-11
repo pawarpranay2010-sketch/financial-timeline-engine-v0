@@ -1,5 +1,6 @@
 // ============================================================================
 // FT-E Sprint 7 — C++ Deterministic Formula Engine (implementation)
+// Sprint 15G: added persistent `--worker` mode (see main).
 //
 // Deterministic arithmetic ONLY. The engine consumes already-verified facts
 // from the Python pipeline and returns structured results (value, display
@@ -1599,6 +1600,22 @@ static int selftest() {
 }  // namespace fte
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "--worker") == 0) {
+        // Sprint 15G - persistent worker mode (HFT-style authority transport).
+        // Reads ONE JSON document per line on stdin and writes ONE JSON result
+        // per line on stdout. Every document is executed through the exact same
+        // run_cli() path as the one-shot CLI, so results are byte-identical to
+        // spawning the binary once per request - only the process/JSON-bootstrap
+        // overhead is removed. No persistent state is kept between documents:
+        // each line is a fully independent deterministic execution.
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            if (line.empty() || line == "\r") continue;
+            std::cout << fte::run_cli(line) << "\n";
+            std::cout.flush();
+        }
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--registry") == 0) {
         std::cout << fte::registry_json() << "\n";
         return 0;
