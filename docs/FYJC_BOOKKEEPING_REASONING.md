@@ -267,3 +267,96 @@ Hard invariants re-asserted: 0 invented accounts · 0 fabricated amounts ·
 0 unbalanced VERIFIED journals · 0 unbalanced VERIFIED trial balances ·
 0 formula_id=None confident results · C++ authority intact (registered
 metrics only) · identical input → identical output.
+
+---
+
+# SPRINT 15F — FYJC BOOK-KEEPING CH.1–3 TEXTBOOK PATTERN EXPANSION
+
+**Sprint:** 15F — Book-Keeping Ch.1–3 Reusable Pattern Expansion
+**Verdict:** ✅ **PASS** — 43/43 gate, 162-case hand-verified benchmark
+(150 benchmark + 12 student-error), 100% pattern coverage, 0 safety
+violations, deterministic & C++-authoritative
+
+## F.1 Exact Ch.1–3 boundary (unchanged from 15E — never silently expanded)
+
+| Ch | Chapter | Scope in FT-E |
+|----|---------|---------------|
+| 1 | Introduction to Book-Keeping & Accountancy | business entity, double entry, Real / Personal / Nominal classification |
+| 2 | Basic Accounting Terms / accounting equation | capital, drawings, debtors, creditors, purchases, sales, assets, expenses, incomes, discounts |
+| 3 | Journal | the complete basic transaction family + multi-transaction questions |
+
+Still **NOT_SUPPORTED** (outside the boundary, never answered):
+depreciation, final accounts, Trading/P&L, balance sheet, partnership,
+opening entries, issue of shares, consignment, hire purchase, revaluation,
+provisions/RDD. The 15F gate asserts 12/12 of these refusals.
+
+## F.2 What changed in the engine (Sprint 15F delta)
+
+All changes are registry/rule-driven — no per-sentence handlers were added.
+
+| # | Rule | Fix |
+|---|------|-----|
+| 1 | **`on account` = `on credit`** | A credit-mode branch now classifies `Bought goods on account from Rahul` and `Sold goods on account to Mohan` as credit purchases/sales (the amount may sit between the goods word and the party) |
+| 2 | **Cheque deposit is never cash** | `Cheque deposited into bank` previously posted Bank Dr / **Cash** Cr (a silent substitution). Now: with a named drawer → `CHEQUE_DEPOSITED` (Bank Dr / drawer Cr); without → REVIEW_REQUIRED |
+| 3 | **`the bank` wording variants** | `Deposited cash into the bank`, `Withdrew cash from the bank` etc. now classify as CASH_INTO_BANK / CASH_FROM_BANK |
+| 4 | **`Payment made for <expense>`** | The expense family now covers the payment-noun phrasing (`Payment made for rent in cash`) |
+| 5 | **`cheque in favour of <party>`** | `_party_from_text` extracts the party after `in favour of` / `in favor of` so `Issued a cheque in favour of Amit` posts Amit/Bank |
+| 6 | **Debtor-subject payments** | `Mohan paid Rs.12,000` / `Mohan paid us Rs.4,000` are RECEIPTS (Cash Dr / Mohan Cr) — the party's subject position before `paid` decides direction; `Rahul paid rent` stays an expense |
+| 7 | **Payment-fraction vs discount-rate collision** | `_paid_fraction` no longer reads a `<n>%` trade/cash-discount rate as the paid portion: `at 25% trade discount; paid three-fourths immediately` now pays 75% (word fractions) and `paid 50% immediately` after a 15% trade discount pays 50% (tight ±12-char window) |
+| 8 | **Cheque-receipt typing** | `Cheque received from Mohan` / `Received a cheque from Mohan` both classify `CHEQUE_RECEIVED`; `Interest received by cheque` stays an income |
+| 9 | **Party sale + partial collection** | `Sold goods to Mohan …; received cash for half at once` is a CREDIT sale with partial collection (Mohan stays a debtor) — the `cash` word describes the collection, not the sale mode |
+| 10 | **`Received Rs.5,000.`** | Now REVIEW_REQUIRED (parallel to `Paid Rs.5,000.`) — never NOT_SUPPORTED, never invented context |
+
+## F.3 Reusable pattern library & coverage report (spec §2 / §16)
+
+* `BK_PATTERN_LIBRARY` in `backend/maths/fyjc_bk_15f.py` — one record per
+  canonical pattern: pattern_id, description, example category, required
+  inputs, account structure (Debit/Credit), Golden Rule, journal
+  structure, ledger effect, trial-balance effect, supported wording
+  variants, refusal conditions.
+* `pattern_coverage_report()` + `write_coverage_report()` emit the
+  machine-readable `docs/fyjc_bk_15f_coverage.json` and the
+  human-readable `docs/FYJC_BK_15F_COVERAGE.md`.
+
+**Coverage result: 150/150 cases pass across 29 pattern buckets**
+(25 transaction patterns + MULTI_TRANSACTION + 3 refusal buckets).
+
+## F.4 Student-answer verification (spec §12 — first deterministic mistake)
+
+`verify_student_journal` / `verify_student_final` in
+`backend/maths/fyjc_bk_15f.py`, reusing the existing
+`verify_ledger_balance` / `verify_trial_balance`: the reference comes from
+the FULL pipeline (journal → ledger → trial balance, multi-transaction
+aware) and the ordered checks report the FIRST failure — not merely
+“wrong”: structure → totals balance (exact discrepancy) → debit accounts
+→ credit accounts → per-line amounts → Real/Personal/Nominal
+classification. The 12-case student-error section covers: correct and
+reversed journals, wrong amounts, unbalanced journals, hallucinated
+accounts (Machinery), cash-sale debtor confusion, ledger balances and
+trial-balance rows, and final-answer-only checks (journal total, TB total,
+per-account debit, ledger balance with Dr/Cr side).
+
+## F.5 Sprint 15F verification
+
+| Gate | Result |
+|------|--------|
+| Sprint 15F Ch.1–3 Pattern Gate (`scripts/fte_fyjc_bk15f_test.py`) | ✅ **43/43** — 162-case benchmark (150 oracles + 12 student-error), 150/150 benchmark, 12/12 student checks, 24/24 refusals, exact-account 0 violations, determinism repeatable |
+| Sprint 15E Unit-Test-1 Gate | ✅ **30/30** |
+| Sprint 15D Derivation Gate | ✅ **191/191** |
+| Sprint 15C P0 Gate | ✅ **138/138** |
+| Sprint 15B Gate | ✅ **388/388** |
+| Stage 4 routing | ✅ **44/44** |
+| Sprint 15 Pilot | ✅ PASS (11/11 maths, 9/9 refusals, 20/20 bk, unsafe 0) |
+| Sprint 14 UI gate + UI AppTest | ✅ PASS |
+| Sprint 13 readiness (incl. embedded 12A–12F regression) | ✅ 504/504 |
+| Maths core / 12F production gate / reasoning / decision graph | ✅ 202/202 · PASS · 123/123 · 99/99 |
+| Formula engine Python + C++ bridge / C++ self-test | ✅ ALL CHECKS COMPLETE |
+| Student workspace / AppTest / Demo | ✅ 98/98 · PASS · ALL CHECKS COMPLETE |
+| `py_compile` + `compileall` + `git diff --check` | ✅ clean |
+
+Hard invariants re-asserted: 0 invented accounts · 0 fabricated amounts ·
+0 wrong-concept confident answers · 0 silent substitutions · 0 unbalanced
+VERIFIED journals · 0 unbalanced VERIFIED trial balances · 0
+formula_id=None confident results · 0 C++ authority violations · 0
+confident answers outside the declared syllabus · identical input →
+identical output.

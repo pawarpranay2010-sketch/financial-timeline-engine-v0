@@ -207,10 +207,10 @@ _NUMBER_TOKEN = re.compile(
 _CURRENCY_PREFIX = re.compile(r"^(?:₹|Rs\.?|INR)\s*")
 _PERCENT_TOKEN = re.compile(r"\b(\d+(?:\.\d+)?)\s*%")
 _FRACTION_WORDS = {
-    "half": "50", "one-half": "50", "one half": "50", "50%": "50",
-    "quarter": "25", "one-fourth": "25", "one fourth": "25", "25%": "25",
-    "40%": "40", "30%": "30", "two-thirds": "66.6666666667",
-    "three-fourths": "75", "75%": "75",
+    "half": "50", "one-half": "50", "one half": "50",
+    "quarter": "25", "one-fourth": "25", "one fourth": "25",
+    "two-thirds": "66.6666666667", "two thirds": "66.6666666667",
+    "three-fourths": "75", "three fourths": "75",
 }
 
 
@@ -262,13 +262,36 @@ def _extract_percents(text: str) -> List[Tuple[Decimal, str]]:
 
 def _paid_fraction(text: str) -> Optional[Decimal]:
     """Fraction of the net amount paid immediately, from wording like
-    'paid half immediately', 'half paid', 'paid 40% at once'."""
+    'paid half immediately', 'half paid', 'paid 40% at once'.
+
+    Word fractions ('half', 'quarter', 'three-fourths', ...) can never
+    collide with a discount rate. A '<n>%' token is a payment fraction
+    ONLY when its surrounding label does NOT say 'discount' - a trade/cash
+    discount rate is a rate, never the paid portion (Sprint 15F:
+    '...at 25% trade discount; paid three-fourths immediately' must pay
+    75%, never the 25% of the discount)."""
     low = " " + str(text or "").lower() + " "
     for word, fraction in _FRACTION_WORDS.items():
-        if f" {word} " in low or low.startswith(word + " ") \
-                or f" {word} " in low:
-            if ("paid" in low or "cash" in low or "immediately" in low):
+        if f" {word} " in low:
+            if ("paid" in low or "cash" in low or "immediately" in low
+                    or "at once" in low):
                 return Decimal(fraction)
+    # percent-based payment fractions: a '<n>%' token is the PAID portion
+    # only when its immediate neighbourhood says 'paid'/'immediately'/'at
+    # once'/'cash' and does NOT say 'discount'. The window is tight
+    # (+/- 12 chars) so a trade-discount rate elsewhere in the sentence
+    # ('...at 15% trade discount; paid 50% immediately') never poisons the
+    # payment fraction.
+    for m in _PERCENT_TOKEN.finditer(low):
+        window = low[max(0, m.start() - 12):m.end() + 12]
+        if "discount" in window:
+            continue
+        if any(k in window for k in ("paid", "immediately", "at once",
+                                     "cash")):
+            try:
+                return Decimal(m.group(1))
+            except (InvalidOperation, ValueError):
+                continue
     return None
 
 
@@ -403,7 +426,10 @@ BK_PATTERNS: List[Dict[str, Any]] = [
                  "paid telephone", "telephone bill paid",
                  # 'Paid for stationery in cash Rs.500' / 'Paid for repairs'
                  # - the expense word follows 'paid for' (Sprint 15E)
-                 "paid for "),
+                 "paid for ",
+                 # 'Payment made for rent Rs.5,000 in cash' - same expense
+                 # family with the payment noun (Sprint 15F)
+                 "payment made for ", "payment made for"),
         "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
     },
     {
@@ -431,7 +457,11 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "key": "CASH_INTO_BANK",
         "label": "Cash deposited into bank",
         "when": ("deposited into bank", "deposited cash into bank",
-                 "paid into bank", "deposited in bank", "cash into bank"),
+                 "paid into bank", "deposited in bank", "cash into bank",
+                 # 'the bank' wording variants (Sprint 15F)
+                 "deposited into the bank", "deposited cash into the bank",
+                 "cash deposited into the bank", "deposited the cash into "
+                 "the bank", "paid into the bank", "deposited in the bank"),
         "debit": ["Bank"], "credit": ["Cash"],
     },
     {
@@ -439,7 +469,12 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "label": "Cash withdrawn from bank",
         "when": ("withdrew from bank", "withdrawn from bank",
                  "drew from bank", "drawn from bank", "cash from bank",
-                 "withdrew cash from bank", "withdrawn cash from bank"),
+                 "withdrew cash from bank", "withdrawn cash from bank",
+                 # 'the bank' wording variants (Sprint 15F)
+                 "withdrew from the bank", "withdrew cash from the bank",
+                 "withdrawn from the bank", "withdrawn cash from the bank",
+                 "drew from the bank", "drew cash from the bank",
+                 "drawn from the bank", "cash from the bank"),
         "debit": ["Cash"], "credit": ["Bank"],
     },
     {
@@ -611,7 +646,9 @@ def _party_from_text(text: str) -> Optional[str]:
                    "paid to ", "received from ", "sold to ",
                    "returned goods to ", "returned by ", "goods returned by ",
                    "received cash from ", "paid cash to ", "paid ",
-                   "from ", " to "):
+                   "from ", " to ",
+                   # cheque-in-favour wording (Sprint 15F)
+                   "in favour of ", "in favor of ", "cheque in favour of "):
         if marker in low:
             idx = low.index(marker) + len(marker)
             rest = text[idx:]
@@ -623,6 +660,16 @@ def _party_from_text(text: str) -> Optional[str]:
                 if party and not party.lower().endswith(
                         ("a/c", "account", "ltd", "limited")):
                     return party
+    # '<Party> paid ...' - the party is the SUBJECT of the payment verb
+    # (a receipt to the business: 'Mohan paid Rs.12,000'). The subject
+    # position before 'paid' is deterministic - never an invented name.
+    m_subj = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+paid\b",
+                      str(text or ""))
+    if m_subj:
+        subject = m_subj.group(1).strip().rstrip(".;,")
+        if subject.lower() not in ("paid", "he", "she", "they", "the",
+                                   "we", "i", "him", "her", "them"):
+            return subject
     return None
 
 
@@ -797,10 +844,47 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "debit": ["Purchases"], "credit": ["Cash", "Bank"],
             }
         if any(k in low for k in goods_sale_words) or costing_sale:
+            # 'Sold goods to Mohan ... ; received cash for half at once' is
+            # a CREDIT sale with a PARTIAL collection (Mohan stays a
+            # debtor for the unpaid balance). The 'cash' word describes the
+            # collection, not the sale mode - a named customer + a payment
+            # fraction keeps the sale on credit unless the wording says
+            # 'for cash' (Sprint 15F: Mohan never becomes a debtor for a
+            # true cash sale, and never disappears from a partial one).
+            _sale_party = bool(re.search(
+                r"\bsold\b[^.;]*?\bto\b\s+[a-z]", low)) \
+                or "sold to" in low
+            _partial_collection = bool(_paid_fraction(question)) \
+                or "half" in low or "quarter" in low
+            if _sale_party and _partial_collection \
+                    and "for cash" not in _cash_mode_text:
+                return {
+                    "key": "SALE_GOODS_CREDIT",
+                    "label": "Goods sold on credit",
+                    "debit": [{"party": "receiver"}], "credit": ["Sales"],
+                }
             return {
                 "key": "SALE_GOODS_CASH",
                 "label": "Goods sold for cash",
                 "debit": ["Cash", "Bank"], "credit": ["Sales"],
+            }
+    # 'on credit' / 'on account' decides CREDIT mode even when the amount
+    # sits between the goods word and the party ('Purchased goods for
+    # Rs.10,000 on credit from Rahul', 'Bought goods on account from
+    # Rahul'). A party named with credit wording never becomes a cash
+    # transaction (Sprint 15F: 'on account' = 'on credit').
+    if has_credit_mode and not has_cash_mode:
+        if any(k in low for k in goods_purchase_words):
+            return {
+                "key": "PURCHASE_GOODS_CREDIT",
+                "label": "Goods purchased on credit",
+                "debit": ["Purchases"], "credit": [{"party": "giver"}],
+            }
+        if any(k in low for k in goods_sale_words):
+            return {
+                "key": "SALE_GOODS_CREDIT",
+                "label": "Goods sold on credit",
+                "debit": [{"party": "receiver"}], "credit": ["Sales"],
             }
     # 'interest on drawings' is its own transaction - it must NEVER be
     # routed as a cash withdrawal by the bare 'drawings' phrase below.
@@ -831,6 +915,62 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "key": "DISCOUNT_RECEIVED",
             "label": "Cash discount received from supplier",
             "debit": [{"party": "giver"}], "credit": ["Discount Received"],
+        }
+    # '<Party> paid ...' (a debtor settles the business, e.g. 'Mohan paid
+    # Rs.12,000 immediately') is a RECEIPT: Cash/Bank Dr, <Party> Cr - the
+    # exact reverse of 'paid <Party> Rs.X'. The party's SUBJECT position
+    # before the verb decides the direction (Sprint 15F: a party is never
+    # treated as being paid when the party name opens the sentence). Guarded
+    # against expense/income verbs so 'Rahul paid rent ...' stays with the
+    # expense machinery instead of becoming a receipt.
+    m_party_paid = re.match(
+        r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+(?:has\s+|had\s+)?paid\b", text)
+    if m_party_paid and not any(k in low for k in (
+            "rent", "salary", "wages", "commission", "insurance",
+            "electricity", "advertisement", "stationery", "repairs",
+            "interest", "dividend", "purchased", "bought", "sold",
+            "carriage", "postage", "tax", "fee", "discount")):
+        return {
+            "key": "RECEIVED_FROM",
+            "label": "Receipt from a party",
+            "debit": ["Cash", "Bank"], "credit": [{"party": "giver"}],
+        }
+    # A CHEQUE deposited into the bank is never cash: the counterparty is
+    # the drawer of the cheque. 'Cheque deposited into bank' without a
+    # named drawer is REVIEW_REQUIRED - FT-E never turns a cheque into a
+    # cash deposit (Sprint 15F: 0 silent substitutions).
+    if "cheque" in low and "bank" in low and any(k in low for k in
+                                                  ("deposited", "deposit")):
+        party = _party_from_text(text)
+        if party:
+            return {
+                "key": "CHEQUE_DEPOSITED",
+                "label": "Cheque deposited into bank",
+                "debit": ["Bank"], "credit": [{"party": "giver"}],
+            }
+        return {
+            "key": "CHEQUE_DEPOSIT_AMBIGUOUS",
+            "label": "Cheque deposited into bank",
+            "refuse": True, "debit": [], "credit": [],
+            "why": ("The cheque was deposited into the bank but the drawer "
+                    "(the person from whom the cheque was received) is not "
+                    "named. FT-E never treats a cheque as cash."),
+        }
+    # A CHEQUE received is a bank transaction: 'Cheque received from Mohan'
+    # and 'Received a cheque from Mohan' are the SAME CHEQUE_RECEIVED
+    # pattern (Bank Dr / <party> Cr). The generic 'received from' phrase in
+    # RECEIVED_FROM must not shadow it. Fires ONLY when the cheque is the
+    # OBJECT of the receipt ('received a cheque', 'got a cheque'), the
+    # SUBJECT ('cheque received'), or a drawer is named - 'Interest
+    # received by cheque' is an INCOME received by cheque (Sprint 15F).
+    if "cheque" in low and ("received a cheque" in low
+                            or "got a cheque" in low
+                            or "cheque received" in low
+                            or "cheque was received" in low):
+        return {
+            "key": "CHEQUE_RECEIVED",
+            "label": "Receipt by cheque",
+            "debit": ["Bank"], "credit": [{"party": "giver"}],
         }
     for cand in BK_PATTERNS:
         when = cand["when"]
@@ -902,7 +1042,8 @@ def _asset_pattern(text: str, assets: List[str],
                     "cash or on credit."),
         }
     if "for cash" in low or "cash sale" in low \
-            or re.search(r"\bcash\b", low) or by_cheque:
+            or re.search(r"\bcash\b", low) or "received a cheque" in low \
+            or by_cheque:
         return {
             "key": "SALE_ASSET_CASH", "label": f"{asset} sold for cash",
             "debit": ["Cash", "Bank"], "credit": [asset],
@@ -1266,6 +1407,9 @@ _AMBIGUOUS_HINTS = (
     "purchased goods for rs.", "sold goods for rs.", "purchased for rs.",
     "sold for rs.", "bought goods for rs.", "paid to",
     "received from", "on account",
+    # 'Received Rs.5,000.' with no purpose/context is REVIEW_REQUIRED,
+    # parallel to 'Paid Rs.5,000.' - never NOT_SUPPORTED (Sprint 15F)
+    "received rs.", "received cash of rs.",
     # a bare goods transaction without a cash/credit word is ambiguous -
     # FT-E never assumes one.
     "purchased goods", "bought goods", "goods purchased",

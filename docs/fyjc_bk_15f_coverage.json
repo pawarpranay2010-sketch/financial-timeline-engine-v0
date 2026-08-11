@@ -1,0 +1,1045 @@
+{
+  "patterns": [
+    {
+      "pattern_id": "CAPITAL_ASSET_INTRODUCED",
+      "description": "An asset brought into the business as capital",
+      "example_category": "Capital & Drawings",
+      "required_inputs": [
+        "amount",
+        "the exact asset word"
+      ],
+      "account_structure": {
+        "debit": [
+          "exact named asset"
+        ],
+        "credit": [
+          "Capital"
+        ]
+      },
+      "golden_rule": [
+        "Asset: Real - Debit what comes in",
+        "Capital: Personal - Credit the giver"
+      ],
+      "journal_structure": "<Asset> A/c Dr ... / To Capital A/c ...",
+      "ledger_effect": "Asset balance increases (Dr); Capital increases (Cr)",
+      "trial_balance_effect": "Asset on the debit side; Capital on the credit side",
+      "wording_variants": [
+        "brought machinery worth Rs.X into the business",
+        "introduced furniture worth Rs.X as additional capital",
+        "brought furniture into the business as capital Rs.X"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        ">1 named asset -> refused (never split)"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "CAPITAL_INTRODUCED",
+      "description": "Additional capital brought in during the year",
+      "example_category": "Capital & Drawings",
+      "required_inputs": [
+        "amount",
+        "the capital side (cash | bank)"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank"
+        ],
+        "credit": [
+          "Capital"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank: Real - Debit what comes in",
+        "Capital: Personal - Credit the giver"
+      ],
+      "journal_structure": "Cash/Bank A/c Dr ... / To Capital A/c ...",
+      "ledger_effect": "Cash/Bank balance increases (Dr); Capital balance increases (Cr)",
+      "trial_balance_effect": "Cash/Bank on the debit side; Capital on the credit side",
+      "wording_variants": [
+        "brought in additional capital",
+        "introduced capital",
+        "brought into the business as capital"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "CASH_FROM_BANK",
+      "description": "Cash withdrawn from the bank for office use (contra)",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash"
+        ],
+        "credit": [
+          "Bank"
+        ]
+      },
+      "golden_rule": [
+        "Cash: Real - Debit what comes in",
+        "Bank: Personal - Credit the giver"
+      ],
+      "journal_structure": "Cash A/c Dr ... / To Bank A/c ...",
+      "ledger_effect": "Cash increases (Dr); Bank decreases (Cr)",
+      "trial_balance_effect": "Cash on the debit side; Bank on the credit side",
+      "wording_variants": [
+        "withdrew cash from bank",
+        "cash withdrawn from the bank",
+        "drew cash from the bank"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 2,
+      "pass_count": 2,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "CASH_INTO_BANK",
+      "description": "Cash deposited into the bank (contra entry)",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Bank"
+        ],
+        "credit": [
+          "Cash"
+        ]
+      },
+      "golden_rule": [
+        "Bank: Personal - Debit the receiver",
+        "Cash: Real - Credit what goes out"
+      ],
+      "journal_structure": "Bank A/c Dr ... / To Cash A/c ...",
+      "ledger_effect": "Bank balance increases (Dr); Cash decreases (Cr)",
+      "trial_balance_effect": "Bank on the debit side; Cash on the credit side",
+      "wording_variants": [
+        "deposited cash into bank",
+        "cash deposited into bank",
+        "deposited cash into the bank",
+        "paid into the bank",
+        "cash deposited in bank"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 3,
+      "pass_count": 3,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "CHEQUE_PAID",
+      "description": "A cheque issued/paid to a party",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount",
+        "the party"
+      ],
+      "account_structure": {
+        "debit": [
+          "<party> (Personal)"
+        ],
+        "credit": [
+          "Bank"
+        ]
+      },
+      "golden_rule": [
+        "<party>: Personal - Debit the receiver",
+        "Bank: Personal - Credit the giver"
+      ],
+      "journal_structure": "<party> A/c Dr ... / To Bank A/c ...",
+      "ledger_effect": "Party balance decreases (Dr); Bank decreases (Cr)",
+      "trial_balance_effect": "Party on the debit side; Bank on the credit side",
+      "wording_variants": [
+        "paid Amit by cheque",
+        "issued a cheque to Rahul",
+        "gave a cheque to Amit",
+        "issued a cheque in favour of Amit"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "party not named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 3,
+      "pass_count": 3,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "CHEQUE_RECEIVED",
+      "description": "A cheque received from a party",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount",
+        "the party"
+      ],
+      "account_structure": {
+        "debit": [
+          "Bank"
+        ],
+        "credit": [
+          "<party> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Bank: Personal - Debit the receiver",
+        "<party>: Personal - Credit the giver"
+      ],
+      "journal_structure": "Bank A/c Dr ... / To <party> A/c ...",
+      "ledger_effect": "Bank increases (Dr); party debtor decreases (Cr)",
+      "trial_balance_effect": "Bank on the debit side; party on the credit side",
+      "wording_variants": [
+        "received a cheque from Mohan",
+        "cheque received from Mohan",
+        "got a cheque from Mohan"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "party not named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 2,
+      "pass_count": 2,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "DISCOUNT_ALLOWED",
+      "description": "A cash discount allowed to a customer (alone or as part of a settlement)",
+      "example_category": "Discounts",
+      "required_inputs": [
+        "amount",
+        "the customer"
+      ],
+      "account_structure": {
+        "debit": [
+          "Discount Allowed"
+        ],
+        "credit": [
+          "<customer> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Discount Allowed: Nominal - Debit expenses/losses",
+        "<customer>: Personal - Credit the giver"
+      ],
+      "journal_structure": "Discount Allowed A/c Dr ... / To <customer> A/c ...",
+      "ledger_effect": "Discount Allowed increases (Dr); customer balance decreases (Cr)",
+      "trial_balance_effect": "Discount Allowed on the debit side; customer on the credit side",
+      "wording_variants": [
+        "discount allowed to Mohan",
+        "allowed him discount Rs.X",
+        "received from Mohan Rs.A, discount allowed Rs.B"
+      ],
+      "refusal_conditions": [
+        "no settlement context -> REVIEW_REQUIRED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "DISCOUNT_RECEIVED",
+      "description": "A cash discount received from a supplier",
+      "example_category": "Discounts",
+      "required_inputs": [
+        "amount",
+        "the supplier"
+      ],
+      "account_structure": {
+        "debit": [
+          "<supplier> (Personal)"
+        ],
+        "credit": [
+          "Discount Received"
+        ]
+      },
+      "golden_rule": [
+        "<supplier>: Personal - Debit the receiver",
+        "Discount Received: Nominal - Credit incomes/gains"
+      ],
+      "journal_structure": "<supplier> A/c Dr ... / To Discount Received A/c ...",
+      "ledger_effect": "Supplier balance decreases (Dr); Discount Received increases (Cr)",
+      "trial_balance_effect": "Supplier on the debit side; Discount Received on the credit side",
+      "wording_variants": [
+        "discount received from Rahul",
+        "paid to Amit Rs.A, discount received Rs.B"
+      ],
+      "refusal_conditions": [
+        "no settlement context -> REVIEW_REQUIRED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "DRAWINGS_CASH",
+      "description": "Cash (or bank) withdrawn for personal/private use",
+      "example_category": "Capital & Drawings",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Drawings"
+        ],
+        "credit": [
+          "Cash | Bank"
+        ]
+      },
+      "golden_rule": [
+        "Drawings: Personal - Debit the receiver (the proprietor)",
+        "Cash/Bank: Real - Credit what goes out"
+      ],
+      "journal_structure": "Drawings A/c Dr ... / To Cash/Bank A/c ...",
+      "ledger_effect": "Drawings balance increases (Dr); Cash/Bank decreases (Cr)",
+      "trial_balance_effect": "Drawings on the debit side; Cash/Bank on the credit side",
+      "wording_variants": [
+        "withdrew cash for personal use",
+        "withdrawn for private use",
+        "cash withdrawn from bank for personal use"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "EXPENSE_PAID",
+      "description": "An expense paid in cash, by cheque or at once",
+      "example_category": "Expenses",
+      "required_inputs": [
+        "amount",
+        "the expense word"
+      ],
+      "account_structure": {
+        "debit": [
+          "expense A/c (Nominal)"
+        ],
+        "credit": [
+          "Cash | Bank"
+        ]
+      },
+      "golden_rule": [
+        "Expense: Nominal - Debit expenses and losses",
+        "Cash/Bank: Real - Credit what goes out"
+      ],
+      "journal_structure": "<Expense> A/c Dr ... / To Cash/Bank A/c ...",
+      "ledger_effect": "Expense balance increases (Dr); Cash/Bank decreases (Cr)",
+      "trial_balance_effect": "Expense on the debit side; Cash/Bank on the credit side",
+      "wording_variants": [
+        "paid rent",
+        "paid salaries in cash",
+        "rent paid",
+        "paid for stationery in cash",
+        "payment made for rent in cash",
+        "paid electricity bill",
+        "paid carriage inward/outward",
+        "paid rent by cheque"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "expense word not recognised -> REVIEW_REQUIRED"
+      ],
+      "test_count": 15,
+      "pass_count": 15,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "GOODS_PERSONAL_USE",
+      "description": "Goods taken by the proprietor for personal use",
+      "example_category": "Capital & Drawings",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Drawings"
+        ],
+        "credit": [
+          "Purchases"
+        ]
+      },
+      "golden_rule": [
+        "Drawings: Personal - Debit the receiver",
+        "Purchases: Nominal - Credit incomes/gains (goods returned to the business)"
+      ],
+      "journal_structure": "Drawings A/c Dr ... / To Purchases A/c ...",
+      "ledger_effect": "Drawings increases (Dr); Purchases decreases (Cr)",
+      "trial_balance_effect": "Drawings on the debit side; Purchases on the credit side",
+      "wording_variants": [
+        "withdrew goods worth Rs.X for personal use",
+        "goods taken by the proprietor for private use",
+        "goods for personal use"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 2,
+      "pass_count": 2,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "INCOME_RECEIVED",
+      "description": "Income received in cash or by cheque",
+      "example_category": "Incomes",
+      "required_inputs": [
+        "amount",
+        "the income word"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank"
+        ],
+        "credit": [
+          "income A/c (Nominal)"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank: Real - Debit what comes in",
+        "Income: Nominal - Credit incomes and gains"
+      ],
+      "journal_structure": "Cash/Bank A/c Dr ... / To <Income> A/c ...",
+      "ledger_effect": "Cash/Bank increases (Dr); income balance increases (Cr)",
+      "trial_balance_effect": "Cash/Bank on the debit side; income on the credit side",
+      "wording_variants": [
+        "received commission",
+        "commission received in cash",
+        "interest received by cheque",
+        "received rent",
+        "received dividend"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 7,
+      "pass_count": 7,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "MULTI_TRANSACTION",
+      "description": "A question with several independent transactions - split chronologically, journaled independently, aggregated into ONE ledger and ONE trial balance",
+      "example_category": "Multi-transaction questions",
+      "required_inputs": [
+        "each transaction with its amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "per-entry"
+        ],
+        "credit": [
+          "per-entry"
+        ]
+      },
+      "golden_rule": "Each entry follows its own pattern's golden rule",
+      "journal_structure": "N independent journal entries in order",
+      "ledger_effect": "Aggregate of every entry's postings",
+      "trial_balance_effect": "Aggregate ledger balances; Dr == Cr",
+      "wording_variants": [
+        "Started business ... . Purchased goods ... . Paid rent ... .",
+        "Sold goods to Mohan ... . Received from him ... discount allowed ...",
+        "Purchased goods ... . Paid him Rs.X immediately."
+      ],
+      "refusal_conditions": [
+        "any segment missing an amount -> BLOCKED (no partial fabrication)",
+        "continuation pronouns resolve only to a previously named party"
+      ],
+      "test_count": 17,
+      "pass_count": 17,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PAID_TO",
+      "description": "Cash/cheque paid TO a party (settling a creditor or any payment to a person)",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount",
+        "the party"
+      ],
+      "account_structure": {
+        "debit": [
+          "<party> (Personal)"
+        ],
+        "credit": [
+          "Cash | Bank"
+        ]
+      },
+      "golden_rule": [
+        "<party>: Personal - Debit the receiver",
+        "Cash/Bank: Real - Credit what goes out"
+      ],
+      "journal_structure": "<party> A/c Dr ... / To Cash/Bank A/c ...",
+      "ledger_effect": "Party balance decreases (Dr); Cash/Bank decreases (Cr)",
+      "trial_balance_effect": "Party on the debit side; Cash/Bank on the credit side",
+      "wording_variants": [
+        "paid to Rahul Rs.X in cash",
+        "paid Rahul Rs.X in cash",
+        "paid cash to Rahul",
+        "paid Amit by cheque",
+        "issued a cheque in favour of Amit"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "party not named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 5,
+      "pass_count": 5,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PURCHASE_ASSET_CASH",
+      "description": "A fixed asset purchased for cash/cheque - EXACT named asset only",
+      "example_category": "Purchases (assets)",
+      "required_inputs": [
+        "amount",
+        "the exact asset word"
+      ],
+      "account_structure": {
+        "debit": [
+          "exact asset"
+        ],
+        "credit": [
+          "Cash | Bank"
+        ]
+      },
+      "golden_rule": [
+        "Asset: Real - Debit what comes in",
+        "Cash/Bank: Real - Credit what goes out"
+      ],
+      "journal_structure": "<Asset> A/c Dr ... / To Cash/Bank A/c ...",
+      "ledger_effect": "Asset balance increases (Dr); Cash/Bank decreases (Cr)",
+      "trial_balance_effect": "Asset on the debit side; Cash/Bank on the credit side",
+      "wording_variants": [
+        "purchased furniture for cash",
+        "bought machinery for cash",
+        "building purchased for Rs.X in cash",
+        "purchased furniture costing Rs.X, payment made immediately"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        ">1 asset named -> refused",
+        "mode not stated -> REVIEW_REQUIRED"
+      ],
+      "test_count": 5,
+      "pass_count": 5,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PURCHASE_ASSET_CREDIT",
+      "description": "A fixed asset purchased on credit from a supplier",
+      "example_category": "Purchases (assets)",
+      "required_inputs": [
+        "amount",
+        "the exact asset word",
+        "supplier"
+      ],
+      "account_structure": {
+        "debit": [
+          "exact asset"
+        ],
+        "credit": [
+          "<supplier> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Asset: Real - Debit what comes in",
+        "<supplier>: Personal - Credit the giver"
+      ],
+      "journal_structure": "<Asset> A/c Dr ... / To <supplier> A/c ...",
+      "ledger_effect": "Asset increases (Dr); supplier creditor increases (Cr)",
+      "trial_balance_effect": "Asset on the debit side; supplier on the credit side",
+      "wording_variants": [
+        "bought furniture from Vijay on credit",
+        "purchased machinery from Suresh on credit",
+        "furniture purchased from Rahul for Rs.X on credit"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        ">1 asset named -> refused",
+        "no supplier -> REVIEW_REQUIRED"
+      ],
+      "test_count": 3,
+      "pass_count": 3,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PURCHASE_GOODS_CASH",
+      "description": "Goods purchased for cash or by cheque",
+      "example_category": "Purchases",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Purchases"
+        ],
+        "credit": [
+          "Cash | Bank"
+        ]
+      },
+      "golden_rule": [
+        "Purchases: Nominal - Debit expenses and losses",
+        "Cash/Bank: Real - Credit what goes out"
+      ],
+      "journal_structure": "Purchases A/c Dr ... / To Cash/Bank A/c ...",
+      "ledger_effect": "Purchases increases (Dr); Cash/Bank decreases (Cr)",
+      "trial_balance_effect": "Purchases on the debit side; Cash/Bank on the credit side",
+      "wording_variants": [
+        "purchased goods for cash",
+        "bought goods for cash",
+        "goods purchased for Rs.X in cash",
+        "purchased goods paying cash",
+        "purchased goods by cheque",
+        "goods purchased and payment made immediately"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "cash vs credit not stated -> REVIEW_REQUIRED"
+      ],
+      "test_count": 8,
+      "pass_count": 8,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PURCHASE_GOODS_CREDIT",
+      "description": "Goods purchased on credit from a named supplier",
+      "example_category": "Purchases",
+      "required_inputs": [
+        "amount",
+        "the supplier (party)"
+      ],
+      "account_structure": {
+        "debit": [
+          "Purchases"
+        ],
+        "credit": [
+          "<supplier> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Purchases: Nominal - Debit expenses and losses",
+        "<supplier>: Personal - Credit the giver"
+      ],
+      "journal_structure": "Purchases A/c Dr ... / To <supplier> A/c ...",
+      "ledger_effect": "Purchases increases (Dr); <supplier> creditor balance increases (Cr)",
+      "trial_balance_effect": "Purchases on the debit side; <supplier> on the credit side",
+      "wording_variants": [
+        "purchased goods from Rahul on credit",
+        "bought goods on credit from Rahul",
+        "goods purchased from Rahul for Rs.X on credit",
+        "bought goods on account from Rahul",
+        "purchased goods worth Rs.X from Rahul"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "no supplier named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 22,
+      "pass_count": 22,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "PURCHASE_RETURN",
+      "description": "Goods returned to the supplier (returns outward)",
+      "example_category": "Returns",
+      "required_inputs": [
+        "amount",
+        "the supplier"
+      ],
+      "account_structure": {
+        "debit": [
+          "<supplier> (Personal)"
+        ],
+        "credit": [
+          "Purchase Returns"
+        ]
+      },
+      "golden_rule": [
+        "<supplier>: Personal - Debit the receiver",
+        "Purchase Returns: Nominal - Credit incomes/gains"
+      ],
+      "journal_structure": "<supplier> A/c Dr ... / To Purchase Returns A/c",
+      "ledger_effect": "Supplier balance decreases (Dr); Purchase Returns increases (Cr)",
+      "trial_balance_effect": "Supplier on the debit side; Purchase Returns on the credit side",
+      "wording_variants": [
+        "returned goods to Rahul",
+        "purchases returns to Rahul",
+        "returned goods worth Rs.X to him"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "supplier not named -> REVIEW_REQUIRED (party inherited from the previous transaction when deterministic)"
+      ],
+      "test_count": 2,
+      "pass_count": 2,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "RECEIVED_FROM",
+      "description": "Cash/cheque received FROM a party (settling a debtor); also '<Party> paid ...' subject wording",
+      "example_category": "Bank / Cash / Parties",
+      "required_inputs": [
+        "amount",
+        "the party"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank"
+        ],
+        "credit": [
+          "<party> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank: Real - Debit what comes in",
+        "<party>: Personal - Credit the giver"
+      ],
+      "journal_structure": "Cash/Bank A/c Dr ... / To <party> A/c ...",
+      "ledger_effect": "Cash/Bank increases (Dr); party debtor balance decreases (Cr)",
+      "trial_balance_effect": "Cash/Bank on the debit side; party on the credit side",
+      "wording_variants": [
+        "received from Mohan Rs.X in cash",
+        "received cash from Mohan",
+        "received Rs.X from Amit in cash",
+        "Mohan paid Rs.X immediately",
+        "Mohan paid us Rs.X"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "party not named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 5,
+      "pass_count": 5,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "REFUSAL::BLOCKED",
+      "description": "Essential information (usually the amount) is missing - the transaction is NOT solved",
+      "example_category": "Refusals",
+      "required_inputs": [
+        "none - refuses"
+      ],
+      "account_structure": {
+        "debit": [],
+        "credit": []
+      },
+      "golden_rule": "Never invent an amount",
+      "journal_structure": "No journal lines are produced",
+      "ledger_effect": "No ledger effect",
+      "trial_balance_effect": "No trial-balance effect",
+      "wording_variants": [
+        "Purchased goods from Rahul.",
+        "Paid rent."
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 4,
+      "pass_count": 4,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "REFUSAL::NOT_SUPPORTED",
+      "description": "The topic is outside the approved Ch.1-3 Unit-Test-1 boundary",
+      "example_category": "Refusals",
+      "required_inputs": [
+        "none - refuses"
+      ],
+      "account_structure": {
+        "debit": [],
+        "credit": []
+      },
+      "golden_rule": "Never answer outside the syllabus",
+      "journal_structure": "No journal lines are produced",
+      "ledger_effect": "No ledger effect",
+      "trial_balance_effect": "No trial-balance effect",
+      "wording_variants": [
+        "depreciation",
+        "final accounts",
+        "balance sheet",
+        "partnership",
+        "opening entry",
+        "issue of shares"
+      ],
+      "refusal_conditions": [
+        "any later-year topic -> NOT_SUPPORTED"
+      ],
+      "test_count": 12,
+      "pass_count": 12,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "REFUSAL::REVIEW_REQUIRED",
+      "description": "The wording is ambiguous (cash vs credit, mode, discount context) - FT-E never guesses",
+      "example_category": "Refusals",
+      "required_inputs": [
+        "none - refuses"
+      ],
+      "account_structure": {
+        "debit": [],
+        "credit": []
+      },
+      "golden_rule": "Never assume a treatment",
+      "journal_structure": "No journal lines are produced",
+      "ledger_effect": "No ledger effect",
+      "trial_balance_effect": "No trial-balance effect",
+      "wording_variants": [
+        "Purchased goods for Rs.10,000.",
+        "Paid Rs.5,000.",
+        "Received Rs.5,000.",
+        "Purchased goods."
+      ],
+      "refusal_conditions": [
+        "cash/credit unstated -> REVIEW_REQUIRED",
+        "purpose/context missing -> REVIEW_REQUIRED"
+      ],
+      "test_count": 8,
+      "pass_count": 8,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "SALES_RETURN",
+      "description": "Goods returned by the customer (returns inward)",
+      "example_category": "Returns",
+      "required_inputs": [
+        "amount",
+        "the customer"
+      ],
+      "account_structure": {
+        "debit": [
+          "Sales Returns"
+        ],
+        "credit": [
+          "<customer> (Personal)"
+        ]
+      },
+      "golden_rule": [
+        "Sales Returns: Nominal - Debit expenses/losses",
+        "<customer>: Personal - Credit the giver"
+      ],
+      "journal_structure": "Sales Returns A/c Dr ... / To <customer> A/c ...",
+      "ledger_effect": "Sales Returns increases (Dr); customer balance decreases (Cr)",
+      "trial_balance_effect": "Sales Returns on the debit side; customer on the credit side",
+      "wording_variants": [
+        "goods returned by Mohan",
+        "sales returns from Mohan",
+        "Mohan returned goods worth Rs.X"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "customer not named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 2,
+      "pass_count": 2,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "SALE_ASSET_CASH",
+      "description": "An old fixed asset sold for cash/cheque",
+      "example_category": "Sales (assets)",
+      "required_inputs": [
+        "amount",
+        "the exact asset word"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank"
+        ],
+        "credit": [
+          "exact asset"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank: Real - Debit what comes in",
+        "Asset: Real - Credit what goes out"
+      ],
+      "journal_structure": "Cash/Bank A/c Dr ... / To <Asset> A/c ...",
+      "ledger_effect": "Cash/Bank increases (Dr); Asset decreases (Cr)",
+      "trial_balance_effect": "Cash/Bank on the debit side; Asset on the credit side",
+      "wording_variants": [
+        "sold old furniture for cash",
+        "sold machinery for Rs.X in cash"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "mode not stated -> REVIEW_REQUIRED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "SALE_ASSET_CREDIT",
+      "description": "An old fixed asset sold on credit",
+      "example_category": "Sales (assets)",
+      "required_inputs": [
+        "amount",
+        "the exact asset word",
+        "customer"
+      ],
+      "account_structure": {
+        "debit": [
+          "<customer> (Personal)"
+        ],
+        "credit": [
+          "exact asset"
+        ]
+      },
+      "golden_rule": [
+        "<customer>: Personal - Debit the receiver",
+        "Asset: Real - Credit what goes out"
+      ],
+      "journal_structure": "<customer> A/c Dr ... / To <Asset> A/c ...",
+      "ledger_effect": "Customer debtor increases (Dr); Asset decreases (Cr)",
+      "trial_balance_effect": "Customer on the debit side; Asset on the credit side",
+      "wording_variants": [
+        "sold old furniture to Ramesh on credit",
+        "sold machinery on credit to Ramesh"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "no customer -> REVIEW_REQUIRED"
+      ],
+      "test_count": 1,
+      "pass_count": 1,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "SALE_GOODS_CASH",
+      "description": "Goods sold for cash or by cheque (a named customer never becomes a debtor)",
+      "example_category": "Sales",
+      "required_inputs": [
+        "amount"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank"
+        ],
+        "credit": [
+          "Sales"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank: Real - Debit what comes in",
+        "Sales: Nominal - Credit incomes and gains"
+      ],
+      "journal_structure": "Cash/Bank A/c Dr ... / To Sales A/c ...",
+      "ledger_effect": "Cash/Bank increases (Dr); Sales increases (Cr)",
+      "trial_balance_effect": "Cash/Bank on the debit side; Sales on the credit side",
+      "wording_variants": [
+        "sold goods for cash",
+        "sold goods to Mohan for cash",
+        "cash sale of goods",
+        "goods sold and cash received immediately",
+        "goods sold by cheque"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED"
+      ],
+      "test_count": 8,
+      "pass_count": 8,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "SALE_GOODS_CREDIT",
+      "description": "Goods sold on credit to a named customer",
+      "example_category": "Sales",
+      "required_inputs": [
+        "amount",
+        "the customer (party)"
+      ],
+      "account_structure": {
+        "debit": [
+          "<customer> (Personal)"
+        ],
+        "credit": [
+          "Sales"
+        ]
+      },
+      "golden_rule": [
+        "<customer>: Personal - Debit the receiver",
+        "Sales: Nominal - Credit incomes and gains"
+      ],
+      "journal_structure": "<customer> A/c Dr ... / To Sales A/c ...",
+      "ledger_effect": "<customer> debtor balance increases (Dr); Sales increases (Cr)",
+      "trial_balance_effect": "<customer> on the debit side; Sales on the credit side",
+      "wording_variants": [
+        "sold goods to Mohan on credit",
+        "sold to Mohan for Rs.X on credit",
+        "goods sold on credit to Mohan",
+        "sold goods on account to Mohan"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "no customer named -> REVIEW_REQUIRED"
+      ],
+      "test_count": 4,
+      "pass_count": 4,
+      "pass_rate": 100.0
+    },
+    {
+      "pattern_id": "START_BUSINESS",
+      "description": "Starting the business with capital (cash, bank or named assets)",
+      "example_category": "Capital & Drawings",
+      "required_inputs": [
+        "amount",
+        "the capital side (cash | bank | named asset(s))"
+      ],
+      "account_structure": {
+        "debit": [
+          "Cash | Bank | named asset(s)"
+        ],
+        "credit": [
+          "Capital"
+        ]
+      },
+      "golden_rule": [
+        "Cash/Bank/assets: Real - Debit what comes in",
+        "Capital: Personal - Credit the giver"
+      ],
+      "journal_structure": "Cash/Bank/<asset> A/c Dr ... / To Capital A/c ...",
+      "ledger_effect": "Cash/Bank/asset balances increase (Dr); Capital balance increases (Cr)",
+      "trial_balance_effect": "Cash/Bank/assets on the debit side; Capital on the credit side",
+      "wording_variants": [
+        "started business with cash",
+        "commenced business with bank balance",
+        "began business with cash and furniture",
+        "started the business with cash Rs.X and bank balance Rs.Y"
+      ],
+      "refusal_conditions": [
+        "amount missing -> BLOCKED",
+        "more than one named asset -> refused (never guessed split)"
+      ],
+      "test_count": 4,
+      "pass_count": 4,
+      "pass_rate": 100.0
+    }
+  ],
+  "totals": {
+    "test_count": 150,
+    "pass_count": 150,
+    "pass_rate": 100.0
+  },
+  "invariants": {
+    "invented_accounts": 0,
+    "fabricated_amounts": 0,
+    "unbalanced_verified_journals": 0,
+    "unbalanced_verified_trial_balances": 0,
+    "formula_id_none_confident": 0,
+    "cpp_authority_violations": 0,
+    "unsupported_confident": 0
+  }
+}
