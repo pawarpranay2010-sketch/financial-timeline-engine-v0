@@ -16,6 +16,23 @@ journey:
         -> Independent verification ("verify your answer")
         -> Explanation / correction
 
+Session & refresh persistence (Sprint 15I-C)
+--------------------------------------------
+All session state lives in backend.fyjc_student_session - the single,
+pure session layer. It owns the keys, the canonical stage machine
+(ENTRY / INPUT_READY / RESULT / VERIFYING / EDITING), and reconcile(),
+which is run at the top of every rerun and again after the entry
+widgets render. A stable sha256 fingerprint binds every stored artifact
+(flow, verdict, accounting checks, manual facts, analysis error) to the
+question it was computed for, so:
+
+* a browser refresh / rerun preserves a valid session,
+* changing the question discards the previous result (never stale),
+* Start Over is the only action that fully clears the session,
+* uploaded binaries are honestly reported as unavailable after a
+  refresh (extracted text and typed questions are preserved),
+* a failed analysis recovers to INPUT_READY instead of faking a result.
+
 Honesty rules implemented here
 ------------------------------
 * No OCR engine is bundled in this deployment. A photo/image is shown to
@@ -37,6 +54,18 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from backend.fyjc_student_session import (
+    K_MODE, K_QUESTION, K_CORRECTED, K_DOC_TEXT, K_DOC_NAME, K_UPLOAD_KIND,
+    K_FLOW, K_EDIT, K_MANUAL_FACTS, K_VERDICT, K_ACCT_VERIFY,
+    K_ANALYSIS_ERROR, K_FLOW_FP, K_VERDICT_FP, K_ACCT_FP, K_MANUAL_FACTS_FP,
+    STAGE_ENTRY,
+    derive_stage,
+    effective_question,
+    question_fingerprint,
+    reconcile,
+    reset_session,
+    upload_recovery_note,
+)
 from backend.maths.fyjc_student_flow import (
     build_understanding,
     run_fyjc_student_flow,
@@ -49,22 +78,6 @@ from backend.maths.fyjc_student_flow import (
     fyjc_study_topics,
     fyjc_traditional_class,
 )
-
-# ---------------------------------------------------------------------------
-# Session keys
-# ---------------------------------------------------------------------------
-
-K_MODE = "fte_fyjc_mode"
-K_QUESTION = "fte_fyjc_question"
-K_CORRECTED = "fte_fyjc_corrected"
-K_DOC_TEXT = "fte_fyjc_doc_text"
-K_DOC_NAME = "fte_fyjc_doc_name"
-K_UPLOAD_KIND = "fte_fyjc_upload_kind"
-K_FLOW = "fte_fyjc_flow"
-K_EDIT = "fte_fyjc_edit"
-K_MANUAL_FACTS = "fte_fyjc_manual_facts"
-K_VERDICT = "fte_fyjc_verdict"
-K_ACCT_VERIFY = "fte_fyjc_acct_verify"
 
 _IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 _TEXT_EXT = (".pdf", ".docx", ".txt", ".csv", ".xlsx")
@@ -153,22 +166,9 @@ def _esc(value: Any) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
-def _has_session() -> bool:
-    """True when there is an active question/session worth clearing."""
-    return any(st.session_state.get(key) is not None for key in (
-        K_QUESTION, K_CORRECTED, K_DOC_TEXT, K_DOC_NAME, K_FLOW))
-
-
 # ---------------------------------------------------------------------------
 # Entry stage
 # ---------------------------------------------------------------------------
-
-
-def _reset_question() -> None:
-    for key in (K_QUESTION, K_CORRECTED, K_DOC_TEXT, K_DOC_NAME,
-                K_UPLOAD_KIND, K_FLOW, K_MANUAL_FACTS, K_VERDICT,
-                K_ACCT_VERIFY):
-        st.session_state.pop(key, None)
 
 
 def _extract_document_text(uploaded) -> str:
@@ -211,7 +211,7 @@ def _render_how_it_works() -> None:
         )
 
 
-def _render_entry(demo: bool) -> None:
+def _render_entry(demo: bool, stage: str) -> None:
     st.markdown('<div class="fte-fyjc-page-title">FYJC Study / Verify</div>',
                 unsafe_allow_html=True)
     st.markdown(
@@ -250,6 +250,13 @@ def _render_entry(demo: bool) -> None:
                 '</div>',
                 unsafe_allow_html=True,
             )
+        else:
+            note = upload_recovery_note(st.session_state, "image")
+            if note:
+                st.markdown(
+                    f'<div class="fte-fyjc-note">{note}</div>',
+                    unsafe_allow_html=True,
+                )
         st.text_area(
             "Type the question",
             key=K_QUESTION,
@@ -298,6 +305,13 @@ def _render_entry(demo: bool) -> None:
                     'DOCX, or TXT file.</div>',
                     unsafe_allow_html=True,
                 )
+        else:
+            note = upload_recovery_note(st.session_state, "document")
+            if note:
+                st.markdown(
+                    f'<div class="fte-fyjc-note">{note}</div>',
+                    unsafe_allow_html=True,
+                )
         st.text_area(
             "Or paste / type the question",
             key=K_QUESTION,
@@ -318,7 +332,7 @@ def _render_entry(demo: bool) -> None:
             ),
         )
 
-    has_input = bool(_question_text().strip())
+    has_input = bool(effective_question(st.session_state).strip())
     col_go, col_reset = st.columns([3, 1])
     with col_go:
         st.button(
@@ -330,25 +344,11 @@ def _render_entry(demo: bool) -> None:
             help=None if has_input else "Type, upload, or paste a question first.",
         )
     with col_reset:
-        if _has_session():
+        if stage != STAGE_ENTRY:
             if st.button("Start over", key="fte_fyjc_reset",
                          width="stretch"):
-                _reset_question()
+                reset_session(st.session_state)
                 st.rerun()
-
-
-def _question_text() -> str:
-    """The effective question text: a student correction wins over the
-    typed/typed-into-photo text, which wins over extracted document text.
-    K_CORRECTED is a plain session key (never a widget), so the
-    understanding stage can update it freely."""
-    corrected = str(st.session_state.get(K_CORRECTED) or "").strip()
-    if corrected:
-        return corrected
-    typed = str(st.session_state.get(K_QUESTION) or "").strip()
-    if typed:
-        return typed
-    return str(st.session_state.get(K_DOC_TEXT) or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
     understanding = flow.get("understanding") or {}
     st.markdown('<div class="fte-fyjc-title">1 · Question understood</div>',
                 unsafe_allow_html=True)
-    q = _question_text()
+    q = effective_question(st.session_state)
     st.markdown(
         f'<div class="fte-fyjc-card">“{_esc(q[:600])}”</div>',
         unsafe_allow_html=True,
@@ -431,7 +431,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
         corrected = st.text_area(
             "Correct the question (FT-E will re-interpret it)",
             key="fte_fyjc_question_edit",
-            value=_question_text(),
+            value=effective_question(st.session_state),
             height=120,
         )
         if st.button("Re-analyse corrected question",
@@ -439,6 +439,12 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
             st.session_state[K_CORRECTED] = corrected.strip()
             st.session_state[K_EDIT] = False
             st.session_state[K_FLOW] = None
+            # The question is changing: every artifact from the old question
+            # (result, verification, manual values, analysis error) is stale.
+            for key in (K_FLOW_FP, K_VERDICT, K_VERDICT_FP, K_ACCT_VERIFY,
+                        K_ACCT_FP, K_MANUAL_FACTS, K_MANUAL_FACTS_FP,
+                        K_ANALYSIS_ERROR):
+                st.session_state.pop(key, None)
             st.rerun()
 
 
@@ -581,15 +587,19 @@ def _render_blocked_manual_entry(flow: Dict[str, Any]) -> None:
         }
         if cleaned:
             st.session_state[K_MANUAL_FACTS] = cleaned
+            st.session_state[K_MANUAL_FACTS_FP] = question_fingerprint(
+                effective_question(st.session_state))
             metric = flow.get("metric")
             if metric:
                 new_flow = run_fyjc_maths_flow(
                     metric, facts=cleaned,
-                    text=_question_text(),
+                    text=effective_question(st.session_state),
                     student_answer=None,
                 )
                 new_flow["understanding"] = flow.get("understanding")
                 st.session_state[K_FLOW] = new_flow
+                st.session_state[K_FLOW_FP] = question_fingerprint(
+                    effective_question(st.session_state))
             st.rerun()
         else:
             st.warning("Enter at least one value to continue.")
@@ -671,15 +681,17 @@ def _render_maths_verify(flow: Dict[str, Any]) -> None:
             v = run_fyjc_maths_flow(
                 metric,
                 facts=st.session_state.get(K_MANUAL_FACTS) or None,
-                text=_question_text(),
+                text=effective_question(st.session_state),
                 student_answer=answer.strip() or None,
             )
+            fp = question_fingerprint(effective_question(st.session_state))
             st.session_state[K_VERDICT] = {
                 "verdict": v.get("verdict"),
                 "student_display": (v.get("audit") or {}).get("student_display"),
                 "correct_answer": (v.get("audit") or {}).get("correct_answer"),
                 "mismatch": (v.get("audit") or {}).get("mismatch"),
             }
+            st.session_state[K_VERDICT_FP] = fp
             st.rerun()
     _render_verdict(verdict)
 
@@ -738,10 +750,23 @@ def _fmt_amount(value: Any) -> str:
         return _esc(value)
 
 
+def _save_acct_verify(result: Dict[str, Any]) -> None:
+    """Persist accounting-verification results with their question binding.
+
+    The result dict must be written back to session_state explicitly (a
+    freshly-created local dict would be lost on the rerun triggered by the
+    verify button), and bound to the current question via fingerprint so a
+    changed question invalidates it.
+    """
+    st.session_state[K_ACCT_VERIFY] = result
+    st.session_state[K_ACCT_FP] = question_fingerprint(
+        effective_question(st.session_state))
+
+
 def _render_accounting_verify(flow: Dict[str, Any]) -> None:
     outcome = flow.get("outcome") or {}
     entries = _reference_entries(flow)
-    q = _question_text()
+    q = effective_question(st.session_state)
     result = st.session_state.get(K_ACCT_VERIFY) or {}
 
     st.markdown("Choose the check you want to perform:")
@@ -772,7 +797,9 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
                 q,
                 [d1a, d2a], [d1v, d2v], [c1a, c2a], [c1v, c2v],
             )
+            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
             result["journal"] = jv
+            _save_acct_verify(result)
             st.rerun()
         jv = result.get("journal")
         if jv:
@@ -791,7 +818,9 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
         if st.button("Verify ledger balance", key="fte_fyjc_lv_btn",
                      width="stretch"):
             lv = verify_student_ledger(acc, bal, side, entries)
+            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
             result["ledger"] = lv
+            _save_acct_verify(result)
             st.rerun()
         lv = result.get("ledger")
         if lv:
@@ -810,7 +839,9 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
         if st.button("Verify trial balance", key="fte_fyjc_tbv_btn",
                      width="stretch"):
             tv = verify_student_trial_balance(tb_text, entries)
+            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
             result["trial_balance"] = tv
+            _save_acct_verify(result)
             st.rerun()
         tv = result.get("trial_balance")
         if tv:
@@ -893,6 +924,23 @@ def _render_study_topics() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Recoverable error state (refresh during/before analysis never fakes a result)
+# ---------------------------------------------------------------------------
+
+
+def _render_recoverable_error(error: Dict[str, Any]) -> None:
+    st.markdown(
+        '<div class="fte-fyjc-title">2 · Analysis</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="fte-fyjc-why"><b>FT-E couldn’t finish reading this '
+        f'question.</b><br/>{_esc(error.get("message"))}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Page entry
 # ---------------------------------------------------------------------------
 
@@ -901,14 +949,23 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
     """The FYJC Study / Verify page (rendered inside the workspace)."""
     _ensure_css()
 
-    if demo and not _question_text() and not st.session_state.get(K_FLOW):
+    # 1. Pre-render reconcile: validate the session left by the previous run
+    #    (a refresh reruns the whole script; anything stale is dropped here).
+    stage = reconcile(st.session_state)
+
+    if demo and stage == STAGE_ENTRY:
         st.session_state[K_QUESTION] = (
             "Purchased goods from Rahul on credit for Rs.10,000."
         )
+        stage = reconcile(st.session_state)
 
-    _render_entry(demo)
+    _render_entry(demo, stage)
 
-    question = _question_text()
+    # 2. Post-render reconcile: the entry widgets may have just changed the
+    #    question (typed, cleared, switched modes) - a changed question must
+    #    never display the previous question's result.
+    reconcile(st.session_state)
+    question = effective_question(st.session_state)
     if not question:
         st.caption("Enter or upload a question to begin.")
         _render_study_topics()
@@ -920,8 +977,24 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
 
     flow = st.session_state.get(K_FLOW)
     if flow is None:
-        flow = run_fyjc_student_flow(question)
-        st.session_state[K_FLOW] = flow
+        try:
+            flow = run_fyjc_student_flow(question)
+            st.session_state[K_FLOW] = flow
+            st.session_state[K_FLOW_FP] = question_fingerprint(question)
+        except Exception:  # defensive: a failure is recoverable, never fake
+            st.session_state[K_ANALYSIS_ERROR] = {
+                "message": (
+                    "FT-E hit an unexpected problem while reading that "
+                    "question. Your question is still saved below - press "
+                    "Analyse question to try again."
+                ),
+                "fp": question_fingerprint(question),
+            }
+    if st.session_state.get(K_ANALYSIS_ERROR):
+        _render_recoverable_error(st.session_state[K_ANALYSIS_ERROR])
+        _render_study_topics()
+        return
+    flow = st.session_state[K_FLOW]
 
     st.markdown("---")
     _render_understanding(flow)
