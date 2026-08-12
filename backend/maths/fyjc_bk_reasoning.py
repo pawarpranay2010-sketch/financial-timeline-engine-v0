@@ -724,8 +724,13 @@ def _party_from_text(text: str) -> Optional[str]:
     if m_subj:
         subject = _strip_aux_before_verb(
             m_subj.group(1).strip().rstrip(".;,"))
+        # Sprint 15I-D: a bare auxiliary verb is never a party - 'Was paid
+        # Rs.5,000.' has NO subject, so the aux must not become the account.
         if subject.lower() not in ("paid", "he", "she", "they", "the",
-                                   "we", "i", "him", "her", "them"):
+                                   "we", "i", "him", "her", "them", "it",
+                                   "was", "were", "has", "have", "had",
+                                   "is", "are", "be", "been", "being",
+                                   "am", "does", "did"):
             return subject
     return None
 
@@ -819,6 +824,78 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     text = str(question or "").strip()
     if not text:
         return None
+    # Sprint 15I-D transaction-local isolation: a two-sentence compound
+    # (';', '. ' or ' - ' separated) whose SECOND transaction carries its
+    # own identity (a registered expense word, a subject-passive party
+    # payment, a 'Paid <Party>' tail, or a subjectless passive tail) is
+    # NEVER silently folded into the first transaction as a partial
+    # payment - the previous transaction's state must not bleed into the
+    # next one. FT-E refuses the compound so the student enters the two
+    # transactions separately (deterministic; never an invented journal,
+    # never a silent combination). The head need NOT be a purchase: the
+    # multi-transaction fallback path also folds a failed payment step
+    # after ANY prior journal, so a sale/other head + own-identity tail
+    # ('Sold goods to Ram on credit Rs.12,000. Was paid Rs.5,000.') must
+    # be refused the same way (Sprint 15I-D adversarial finding).
+    _c_parts = re.split(
+        r";\s*| - |(?<=[a-z0-9)])\.\s+(?=[A-Z])", text)
+    if len(_c_parts) == 2:
+        _c_head, _c_tail = _c_parts
+        _c_low = " " + _c_tail.lower() + " "
+        _c_head_pattern = classify_bk_type(_c_head)
+        _c_purchase_head = bool(_c_head_pattern) and \
+            "PURCHASE" in _c_head_pattern["key"]
+        # An expense-word tail ('paid postage Rs.250', 'paid rent
+        # Rs.4,000') is only ambiguous AFTER a PURCHASE (it could be part
+        # of that purchase, e.g. carriage); after any other head it is a
+        # clean second expense transaction and must stay journaled
+        # independently ('Started business with cash Rs.50,000; paid rent
+        # Rs.4,000' -> two journals, corpus-verified). So _c_expense is
+        # purchase-head-gated; the party/subjectless-passive checks below
+        # are not (a party payment or subjectless passive tail after ANY
+        # head carries its own identity and must never be folded).
+        _c_expense = _c_purchase_head and any(
+            phrase != "office" and re.search(
+                r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])",
+                _c_low)
+            for phrase, _ in _EXPENSE_ACCOUNT_WORDS)
+        # '<Party> was paid ...' - a proper-noun SUBJECT of a passive
+        # payment, so the tail is a payment TO that party, never a
+        # settlement step of the previous transaction. Quantifier
+        # subjects ('Half the amount was paid') are never parties.
+        _c_passive_party = False
+        _c_m_passive = re.match(
+            r"\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:was|were|"
+            r"has been|have been|had been)\s+paid\b", _c_tail)
+        if _c_m_passive and _c_m_passive.group(1).lower() not in (
+                "half", "one", "quarter", "third", "fourth", "the",
+                "a", "an", "amount", "balance", "full", "some",
+                "rest", "part", "cash", "goods", "stock", "money",
+                "cheque"):
+            _c_passive_party = True
+        # 'Paid <Party> Rs.X' with a Capitalised party (not a
+        # pronoun 'him/her').
+        _c_paid_party = bool(re.match(
+            r"\s*Paid\s+[A-Z][A-Za-z' .]{1,40}?(\s|,|\.)", _c_tail))
+        # subjectless passive tail ('Was paid Rs.X ...') - the aux
+        # alone is never a party, and without a continuation pronoun
+        # the tail cannot be tied to the previous transaction.
+        _c_subjless = bool(re.match(
+            r"\s*(?:was|were|has been|have been|had been)\s+paid\b",
+            _c_tail, re.IGNORECASE))
+        if (_c_expense or _c_passive_party or _c_paid_party
+                or _c_subjless):
+            return {
+                "key": "COMPOUND_OWN_IDENTITY",
+                "label": "Two separate transactions entered together",
+                "refuse": True, "debit": [], "credit": [],
+                "why": ("The description joins two transactions that "
+                        "FT-E will not silently combine: the second "
+                        "one carries its own expense/party identity. "
+                        "FT-E never folds it into the first transaction "
+                        "as a partial payment - enter the two "
+                        "transactions separately."),
+            }
     # fixed-asset rules first (Sprint 15B exact-account guarantee)
     for rule in (classify_transaction,):
         # asset purchases/sales are handled by the accounting engine's
@@ -1030,6 +1107,24 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Expense paid",
             "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
         }
+    # Subjectless passive expense ('Was paid Rs.3,000 carriage', 'Was paid
+    # wages Rs.2,000'): the sentence opens with an auxiliary verb and the
+    # expense word FOLLOWS 'paid' (postposed subject). The auxiliary verb
+    # alone is never a party and never names an account - the registered
+    # expense word carries the transaction, so it resolves to the SAME
+    # EXPENSE_PAID treatment as the subject-first passive form. A named
+    # party ('Was paid Rs.3,000 to Rahul') stays a party payment below
+    # (Sprint 15I-D).
+    if re.match(r"\s*(?:was|were|has\s+been|have\s+been|had\s+been|is|are)"
+                r"\s+paid\b", low) and _party_from_text(text) is None:
+        _subjless_expense = _resolve_variable_account(
+            "_EXPENSE_ACCOUNT", text)
+        if _subjless_expense:
+            return {
+                "key": "EXPENSE_PAID",
+                "label": "Expense paid",
+                "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
+            }
     # '<Party> paid ...' (a debtor settles the business, e.g. 'Mohan paid
     # Rs.12,000 immediately') is a RECEIPT: Cash/Bank Dr, <Party> Cr - the
     # exact reverse of 'paid <Party> Rs.X'. The party's SUBJECT position
