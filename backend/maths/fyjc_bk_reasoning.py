@@ -691,6 +691,18 @@ def _strip_aux_before_verb(name: str) -> str:
     return name
 
 
+# Sprint 15I-D / 15I-F P1-B: words that can never be the party SUBJECT of
+# a payment sentence - bare auxiliary verbs ('Was paid Rs.X.' has NO
+# subject), pronouns and the payment verb itself. Shared by
+# _party_from_text and the classify_bk_type m_party_paid path so the two
+# voice-resolution branches stay structurally consistent.
+_NON_PARTY_PAYMENT_SUBJECTS = (
+    "paid", "he", "she", "they", "the", "we", "i", "him", "her", "them",
+    "it", "was", "were", "has", "have", "had", "is", "are", "be", "been",
+    "being", "am", "does", "did",
+)
+
+
 def _party_from_text(text: str) -> Optional[str]:
     """Extract a Capitalised proper-noun party from the description."""
     if not text:
@@ -726,11 +738,7 @@ def _party_from_text(text: str) -> Optional[str]:
             m_subj.group(1).strip().rstrip(".;,"))
         # Sprint 15I-D: a bare auxiliary verb is never a party - 'Was paid
         # Rs.5,000.' has NO subject, so the aux must not become the account.
-        if subject.lower() not in ("paid", "he", "she", "they", "the",
-                                   "we", "i", "him", "her", "them", "it",
-                                   "was", "were", "has", "have", "had",
-                                   "is", "are", "be", "been", "being",
-                                   "am", "does", "did"):
+        if subject.lower() not in _NON_PARTY_PAYMENT_SUBJECTS:
             return subject
     return None
 
@@ -1138,7 +1146,12 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     if m_party_paid:
         m_party_paid_name = _strip_aux_before_verb(
             m_party_paid.group(1).strip().rstrip(".;,"))
-        if not m_party_paid_name:
+        if (not m_party_paid_name
+                or m_party_paid_name.lower() in _NON_PARTY_PAYMENT_SUBJECTS):
+            # Sprint 15I-D guard parity (Sprint 15I-F P1-B): a bare
+            # auxiliary verb is never a party on this path either -
+            # 'Was paid Rs.3,000 transport.' must never let 'Was' become
+            # the account of a PAID_TO journal.
             m_party_paid = None
         else:
             # Passive voice ('Mohan was paid Rs.5,000', 'Rahul has been
@@ -1221,6 +1234,22 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "key": "CASH_FROM_BANK",
             "label": "Cash withdrawn from bank",
             "debit": ["Cash"], "credit": ["Bank"],
+        }
+    # Sprint 15I-F P1-C: opening a bank account ('Opened an account with
+    # Bank of India Rs.20,000') is a deterministic BANK Dr / Cash Cr
+    # transaction - the money moves from the till into the new account.
+    # A cheque/check opening would credit Bank instead of Cash (not this
+    # pattern) - the phrase then simply does not match and the
+    # transaction falls through to the refusal layer. Only the named
+    # opening wording fires; nothing is guessed.
+    if any(k in low for k in ("opened an account", "opened a bank account",
+                              "opened a current account",
+                              "opened a savings account")) \
+            and "cheque" not in low and "check" not in low:
+        return {
+            "key": "BANK_ACCOUNT_OPENED",
+            "label": "Bank account opened",
+            "debit": ["Bank"], "credit": ["Cash"],
         }
     for cand in BK_PATTERNS:
         when = cand["when"]
@@ -1711,7 +1740,18 @@ def _split_transactions(question: str) -> List[str]:
         # transaction, never silently swallowed by the purchase (Sprint
         # 15E: 0 silent substitutions).
         pieces.extend(re.split(
+            # Sprint 15I-F P0-A: em dash (\u2014), en dash (\u2013) and
+            # newline act as transaction boundaries under the SAME
+            # lookbehind/lookahead guards as the period rule - only a
+            # Capital-letter start after a digit/lower-case/')' splits, so
+            # an intra-transaction dash or a continuation sentence is never
+            # split. The ASCII-hyphen compound refusal from Sprint 15I-D is
+            # untouched (an ASCII hyphen is NOT a splitter boundary;
+            # classify_bk_type still catches own-identity compounds).
             r"(?<=[a-z0-9)])\.\s+(?=[A-Z])|"
+            r"(?<=[0-9)])(?:\u2014|\u2013)\s+(?=[A-Z])|"
+            r"(?<=[0-9)]\s)(?:\u2014|\u2013)\s+(?=[A-Z])|"
+            r"(?<![A-Za-z])\n\s*(?=[A-Z])|"
             r",\s+(?=returned (?:goods|stock)|goods returned|"
             r"purchases returns|purchases return|sales returns|"
             r"sales return)", part, flags=re.IGNORECASE))
@@ -2371,6 +2411,63 @@ def _party_from_journal(journal: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _merge_preserves_integrity(prior_segment: str, merged_text: str,
+                               step_segment: str,
+                               merged: Dict[str, Any]) -> bool:
+    """Sprint 15I-F P0-B merge-path integrity invariant.
+
+    A payment-step merge must NEVER change the semantic nature of the
+    already-established prior transaction. Returns False (the merge is
+    refused with REVIEW_REQUIRED) when the merged journal:
+      * swaps the accounting MODE of the prior pattern (credit <-> cash,
+        e.g. SALE_GOODS_CREDIT -> SALE_GOODS_CASH merely because the
+        continuation says 'cash'/'further cash'),
+      * swaps the transaction FAMILY (sale <-> purchase), or
+      * drops an explicitly stated amount from the continuation step.
+    Deterministic - compares the classify_bk_type keys of the prior
+    segment and the merged text, and checks every currency amount stated
+    in the step against the merged journal's line amounts. No guessing.
+    """
+    prior_pattern = classify_bk_type(prior_segment)
+    merged_pattern = classify_bk_type(merged_text)
+    if prior_pattern and merged_pattern:
+        pk = prior_pattern["key"]
+        mk = merged_pattern["key"]
+        if ("SALE" in pk) != ("SALE" in mk) or \
+                ("PURCHASE" in pk) != ("PURCHASE" in mk):
+            return False
+        if ("CASH" in pk, "CREDIT" in pk) != ("CASH" in mk, "CREDIT" in mk):
+            return False
+    step_amounts, _ = _extract_amounts(step_segment)
+    line_amounts = [line.get("amount") for line in
+                    (merged.get("debit_lines") or [])
+                    + (merged.get("credit_lines") or [])]
+    for amount in step_amounts:
+        if amount not in line_amounts:
+            return False
+    return True
+
+
+def _party_role_in_journal(journal: Dict[str, Any],
+                           party: str) -> str:
+    """The accounting ROLE of a party inside a journal (Sprint 15I-F
+    P1-A): DEBTOR when the party sits on the DEBIT side (a receivable -
+    the party owes the business), CREDITOR when on the CREDIT side (a
+    payable - the business owes the party), NEUTRAL otherwise. Only the
+    side of the party's own line decides - never the wording."""
+    debits = [line.get("account") for line in
+              (journal.get("debit_lines") or [])]
+    credits = [line.get("account") for line in
+               (journal.get("credit_lines") or [])]
+    if party in debits and party in credits:
+        return "NEUTRAL"
+    if party in debits:
+        return "DEBTOR"
+    if party in credits:
+        return "CREDITOR"
+    return "NEUTRAL"
+
+
 def _reason_multi_transaction(text: str,
                               segments: List[str]) -> Dict[str, Any]:
     """Reason through a multi-transaction question (';'-separated).
@@ -2391,6 +2488,7 @@ def _reason_multi_transaction(text: str,
     understanding = build_bk_understanding(text)
     journals: List[Dict[str, Any]] = []
     prior_party: Optional[str] = None
+    prior_role: str = "NEUTRAL"
     resolved_segments: List[str] = []
 
     for i, raw_segment in enumerate(segments):
@@ -2411,18 +2509,85 @@ def _reason_multi_transaction(text: str,
             joiner = "by" if is_sale_prior else "to"
             segment = segment.rstrip(". ") + f" {joiner} {prior_party}."
         resolved_segments.append(segment)
-        journal = generate_journal(segment)
-        if journal["status"] != VERIFIED and i > 0                 and _is_payment_step(raw_segment):
+        # Sprint 15I-F P1-A accounting-role continuity: a payment step
+        # that PAYS the party the previous transaction established as a
+        # DEBTOR ('Sold goods to Ram on credit Rs.12,000. Paid him
+        # Rs.5,000.') contradicts the debtor relationship - FT-E never
+        # blindly posts the generic PAID_TO direction for a debtor it
+        # already placed on the debit side. REVIEW_REQUIRED so the
+        # student re-states the direction ('Received from him' if the
+        # party settled). Creditor settlements ('Bought goods from Rahul
+        # ... Paid him ...') keep the existing purchase-continuation
+        # pipeline untouched, as does generic pronoun resolution.
+        _low_seg = " " + segment.lower() + " "
+        _seg_pattern = classify_bk_type(segment)
+        _role_conflict = (i > 0 and prior_party
+                          and prior_role == "DEBTOR"
+                          and _is_payment_step(raw_segment)
+                          and " paid " in _low_seg
+                          and _party_from_text(segment) == prior_party
+                          # only a payment TO the debtor contradicts the
+                          # debtor relationship - an ACTIVE-voice receipt
+                          # ('Mohan paid Rs.12,000' = Mohan settles the
+                          # business) classifies RECEIVED_FROM and must
+                          # keep the 15F settlement behaviour.
+                          and bool(_seg_pattern)
+                          and _seg_pattern.get("key") == "PAID_TO")
+        if _role_conflict:
+            journal = {
+                "status": REVIEW_REQUIRED,
+                "why_not": (f"The previous transaction made {prior_party} "
+                            "a debtor (they owe the business), so a "
+                            "payment TO that party now would contradict "
+                            "the debtor relationship. FT-E never guesses "
+                            "the payment direction."),
+                "next_action": ("Re-type the settlement with an explicit "
+                                "direction, e.g. 'Received Rs.X from "
+                                f"{prior_party}.' if the party settled."),
+                "debit_lines": [], "credit_lines": [],
+                "narration": None, "calculation_records": [],
+                "total_debit": 0, "total_credit": 0, "balanced": True,
+            }
+        else:
+            journal = generate_journal(segment)
+        if (not _role_conflict and journal["status"] != VERIFIED
+                and i > 0 and _is_payment_step(raw_segment)):
             # payment/discount step -> re-run the discount pipeline over
             # the previous transaction PLUS this step as ONE journal.
             merged_text = resolved_segments[i - 1] + "; " + segment
             merged = generate_journal(merged_text)
-            if merged["status"] == VERIFIED:
+            if merged["status"] == VERIFIED \
+                    and _merge_preserves_integrity(
+                        resolved_segments[i - 1], merged_text,
+                        raw_segment, merged):
                 journals[-1] = merged
                 party = _party_from_journal(merged)
                 if party:
                     prior_party = party
+                    prior_role = _party_role_in_journal(merged, party)
+                else:
+                    prior_role = "NEUTRAL"
                 continue
+            if merged["status"] == VERIFIED:
+                # the merge would silently change the prior transaction
+                # (mode/family flip or a dropped stated amount) - never
+                # reinterpret or repair the previous journal (Sprint
+                # 15I-F P0-B). REVIEW_REQUIRED with the calm refusal.
+                journal = {
+                    "status": REVIEW_REQUIRED,
+                    "why_not": ("FT-E will not silently re-interpret the "
+                                "previous transaction while folding this "
+                                "payment step into it (it would change "
+                                "the sale/purchase mode or drop a stated "
+                                "amount). Enter the two transactions "
+                                "separately."),
+                    "next_action": ("Separate the transactions, e.g. 'Sold "
+                                    "goods to Ram on credit Rs.12,000.' "
+                                    "then 'Received Rs.5,000 from Ram.'."),
+                    "debit_lines": [], "credit_lines": [],
+                    "narration": None, "calculation_records": [],
+                    "total_debit": 0, "total_credit": 0, "balanced": True,
+                }
         if journal["status"] != VERIFIED:
             status = journal["status"]
             refusal = _refusal(
@@ -2441,6 +2606,9 @@ def _reason_multi_transaction(text: str,
         party = _party_from_journal(journal)
         if party:
             prior_party = party
+            prior_role = _party_role_in_journal(journal, party)
+        else:
+            prior_role = "NEUTRAL"
 
     step_records: List[Dict[str, Any]] = [
         step for j in journals for step in (j.get("calculation_records") or [])
