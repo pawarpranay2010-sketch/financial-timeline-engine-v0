@@ -84,7 +84,13 @@ def _student_lines(student_entry: Any) -> Tuple[List[Dict[str, Any]],
             else None
         if not account or parsed is None or parsed.value is None:
             return None
-        return {"account": account, "amount": parsed.value, "side": side}
+        line = {"account": account, "amount": parsed.value, "side": side}
+        # a student may state the traditional class explicitly (Sprint 15H:
+        # wrong-classification answers are checked against it); when absent
+        # the verifier falls back to the canonical Real/Personal/Nominal.
+        if isinstance(raw, dict) and raw.get("class"):
+            line["class"] = str(raw["class"])
+        return line
 
     for raw in raw_debits:
         line = _line(raw, "debit")

@@ -325,6 +325,36 @@ def _full_immediate_settlement(low: str) -> bool:
         "paid immediately"))
 
 
+def _contradictory_cash_credit(low: str) -> bool:
+    """True when the wording states BOTH a cash mode and a credit mode
+    with no payment/collection step that explains the cash side
+    ('Purchased goods for cash on credit from Rahul Rs.10,000' is
+    contradictory and must be REVIEW_REQUIRED, never guessed; a credit
+    purchase with 'half the amount paid immediately' is NOT contradictory
+    - the cash words describe the partial settlement, Sprint 15F).
+    'cash discount' never counts as a cash mode (Sprint 15E)."""
+    _cash_phr = re.sub(r"\bcash\s+discount\b", " ", low)
+    # 'cash book' / 'cashbook' / 'cashier' name a record-keeping place,
+    # never a settlement mode - 'Enter ... in the cash book ... on credit'
+    # is a CREDIT purchase, not a contradiction (Sprint 15H).
+    _cash_phr = re.sub(r"\b(?:cash\s+book|cashbook|cash\s+bank|cashier)\b",
+                       " ", _cash_phr)
+    has_cash = ("for cash" in _cash_phr or "paid cash" in _cash_phr
+                or "cash purchase" in _cash_phr
+                or re.search(r"\bcash\b", _cash_phr))
+    has_credit = ("on credit" in low or "on account" in low
+                  or "credit" in low)
+    if not (has_cash and has_credit):
+        return False
+    payment_step = (
+        re.search(r"\b(?:paid|received)\b", low) is not None
+        or "immediately" in low or "at once" in low
+        or "half" in low or "quarter" in low
+        or "full settlement" in low
+    )
+    return not payment_step
+
+
 # ---------------------------------------------------------------------------
 # Wording normalization -> canonical transaction type (registry-driven)
 # ---------------------------------------------------------------------------
@@ -358,7 +388,11 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "key": "DRAWINGS_CASH",
         "label": "Drawings (cash withdrawn for personal use)",
         "when": ("withdrew for personal use", "withdrawn for personal use",
-                 "for personal use", "for private use", "drawings"),
+                 "for personal use", "for private use", "drawings",
+                 # passive-voice homework phrasing (Sprint 15H)
+                 "cash withdrawn by", "for personal expenses",
+                 "for private expenses", "personal expenses",
+                 "private expenses"),
         "debit": ["Drawings"], "credit": ["Cash", "Bank"],
     },
     {
@@ -397,7 +431,11 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "when": ("sold goods for cash", "sold for cash", "cash sale",
                  "cash sales", "sold goods in cash", "sold stock for cash",
                  "sold goods by cheque", "sold goods by check",
-                 "sold stock by cheque", "sold by cheque", "sold by check"),
+                 "sold stock by cheque", "sold by cheque", "sold by check",
+                 # passive sale with explicit cash receipt (Sprint 15H):
+                 # 'Goods were sold and cash received immediately' is a
+                 # CASH sale - never a debtor.
+                 "sold and cash received", "sold and received"),
         "debit": ["Cash", "Bank"], "credit": ["Sales"],
     },
     {
@@ -635,6 +673,24 @@ def _resolve_bk_spec(spec: Any, text: str,
     return None
 
 
+
+_AUX_BEFORE_VERB = ("was", "were", "has", "have", "had", "is", "are", "be",
+                   "been", "being", "am")
+
+
+def _strip_aux_before_verb(name: str) -> str:
+    """'Rent was paid' -> 'Rent': an auxiliary verb between a name and the
+    main verb belongs to the verb phrase, never to the name (Sprint 15H).
+    Deterministic - only trailing aux verbs are removed, at most three."""
+    for _ in range(3):
+        head, _, tail = name.rpartition(" ")
+        if head and tail.lower() in _AUX_BEFORE_VERB:
+            name = head
+        else:
+            break
+    return name
+
+
 def _party_from_text(text: str) -> Optional[str]:
     """Extract a Capitalised proper-noun party from the description."""
     if not text:
@@ -653,8 +709,8 @@ def _party_from_text(text: str) -> Optional[str]:
             idx = low.index(marker) + len(marker)
             rest = text[idx:]
             m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
-                         r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+and\s+"
-                         r"|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
+                         r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+worth\s+"
+                         r"|\s+and\s+|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
             if m:
                 party = m.group(1).strip().rstrip(".;,")
                 if party and not party.lower().endswith(
@@ -666,7 +722,8 @@ def _party_from_text(text: str) -> Optional[str]:
     m_subj = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+paid\b",
                       str(text or ""))
     if m_subj:
-        subject = m_subj.group(1).strip().rstrip(".;,")
+        subject = _strip_aux_before_verb(
+            m_subj.group(1).strip().rstrip(".;,"))
         if subject.lower() not in ("paid", "he", "she", "they", "the",
                                    "we", "i", "him", "her", "them"):
             return subject
@@ -745,7 +802,7 @@ def _returns_rule(text: str) -> Optional[Dict[str, Any]]:
     m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+returned\b",
                  str(text or ""))
     if m:
-        name = m.group(1).strip().rstrip(".;,")
+        name = _strip_aux_before_verb(m.group(1).strip().rstrip(".;,"))
         if name.lower() not in _RETURN_NONPARTY_WORDS:
             return {
                 "key": "SALES_RETURN", "label": "Goods returned by customer",
@@ -794,6 +851,31 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "label": f"{assets[0]} introduced as capital",
                 "debit": assets, "credit": ["Capital"],
             }
+    # Installation / erection charges paid on a fixed asset are
+    # CAPITALISED into that asset (Sprint 15H real-world finding):
+    # 'Paid wages for installation of machinery Rs.5,000' -> Machinery A/c
+    # Dr, never a standalone Wages expense. Narrow trigger - only an
+    # installation/fixing phrase + exactly one named asset; anything else
+    # stays with the normal expense patterns.
+    if any(k in low for k in (
+            "for installation", "installation of", "installation charges",
+            "for erection", "erection of", "for fixing")):
+        _cap_assets = named_assets(text)
+        if len(_cap_assets) == 1:
+            return {
+                "key": "CAPITALISE_EXPENSE",
+                "label": f"Installation charge capitalised into "
+                         f"{_cap_assets[0]}",
+                "debit": _cap_assets, "credit": ["Cash", "Bank"],
+            }
+        if len(_cap_assets) > 1:
+            return {
+                "key": "CAPITALISE_AMBIGUOUS",
+                "label": "Ambiguous installation charge",
+                "refuse": True, "debit": [], "credit": [],
+                "why": ("The installation charge names more than one asset "
+                        "to capitalise into. FT-E never guesses the split."),
+            }
     # goods-return wording ('returned ... to <party>' = purchase return;
     # '<party> returned goods' = sales return) - structural, registry-free.
     returns = _returns_rule(text)
@@ -820,6 +902,18 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                      or re.search(r"\bcash\b", _cash_mode_text)
                      or full_immediate_payment or payment_by_cheque)
     has_credit_mode = ("credit" in low or "on account" in low)
+    # Contradictory 'for cash ... on credit' wording (no payment step that
+    # explains the cash side) is REVIEW_REQUIRED - FT-E never guesses the
+    # settlement mode (Sprint 15H ambiguity attacks).
+    if _contradictory_cash_credit(low):
+        return {
+            "key": "MODE_CONTRADICTORY",
+            "label": "Cash and credit mode both stated",
+            "refuse": True, "debit": [], "credit": [],
+            "why": ("The description states both a cash mode and a credit "
+                    "mode with no payment step to reconcile them. FT-E "
+                    "never guesses which settlement applies."),
+        }
     goods_purchase_words = (
         "purchased goods", "bought goods", "goods purchased",
         "goods bought", "purchased stock", "bought stock",
@@ -897,7 +991,9 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # 'goods ... for personal use' debits Drawings and credits PURCHASES
     # (the goods, not cash) - the cash-withdrawal pattern's generic
     # 'for personal use' phrase must not shadow it.
-    if "goods" in low and ("personal use" in low or "private use" in low):
+    if "goods" in low and any(k in low for k in (
+            "personal use", "private use", "personal expenses",
+            "private expenses")):
         return {
             "key": "GOODS_PERSONAL_USE",
             "label": "Goods taken for personal use",
@@ -916,6 +1012,24 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Cash discount received from supplier",
             "debit": [{"party": "giver"}], "credit": ["Discount Received"],
         }
+
+    # Passive-voice expenses ('Rent was paid in cash', 'Wages were paid'):
+    # the expense word PRECEDES a passive 'paid' instead of following it.
+    # Registry-driven via the same expense words. Checked BEFORE the
+    # subject-position receipt branch ('<Party> paid ...') so an expense
+    # name can never be mistaken for a paying party (Sprint 15H).
+    m_exp = re.search(
+        r"\b(rent|salary|salaries|wages|insurance|electricity|"
+        r"advertisement|commission|interest|carriage|repairs|postage|"
+        r"stationery|audit fees|legal fees|income tax|fuel|telephone)\b"
+        r"\s+(?:was|were|has been|have been|had been|is|are)\s+paid\b",
+        low)
+    if m_exp:
+        return {
+            "key": "EXPENSE_PAID",
+            "label": "Expense paid",
+            "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
+        }
     # '<Party> paid ...' (a debtor settles the business, e.g. 'Mohan paid
     # Rs.12,000 immediately') is a RECEIPT: Cash/Bank Dr, <Party> Cr - the
     # exact reverse of 'paid <Party> Rs.X'. The party's SUBJECT position
@@ -925,11 +1039,35 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # expense machinery instead of becoming a receipt.
     m_party_paid = re.match(
         r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+(?:has\s+|had\s+)?paid\b", text)
+    _party_paid_passive = False
+    if m_party_paid:
+        m_party_paid_name = _strip_aux_before_verb(
+            m_party_paid.group(1).strip().rstrip(".;,"))
+        if not m_party_paid_name:
+            m_party_paid = None
+        else:
+            # Passive voice ('Mohan was paid Rs.5,000', 'Rahul has been
+            # paid Rs.4,000') means the business PAID the party -> the
+            # party is debited and Cash/Bank credited (PAID_TO). Active
+            # voice ('Mohan paid Rs.12,000') means the party settled the
+            # business -> Cash/Bank Dr, party Cr (RECEIVED_FROM). The
+            # auxiliary verb between the name and 'paid' decides the
+            # direction deterministically - never a reversed confident
+            # answer (Sprint 15H).
+            _party_paid_passive = re.search(
+                r"\b(?:was|were|is|are|has\s+been|have\s+been|"
+                r"had\s+been)\b", m_party_paid.group(1).lower())
     if m_party_paid and not any(k in low for k in (
-            "rent", "salary", "wages", "commission", "insurance",
-            "electricity", "advertisement", "stationery", "repairs",
-            "interest", "dividend", "purchased", "bought", "sold",
-            "carriage", "postage", "tax", "fee", "discount")):
+            "rent", "salary", "salaries", "wages", "commission",
+            "insurance", "electricity", "advertisement", "stationery",
+            "repairs", "interest", "dividend", "purchased", "bought",
+            "sold", "carriage", "postage", "tax", "fee", "discount")):
+        if _party_paid_passive:
+            return {
+                "key": "PAID_TO",
+                "label": "Payment to a party",
+                "debit": [{"party": "giver"}], "credit": ["Cash", "Bank"],
+            }
         return {
             "key": "RECEIVED_FROM",
             "label": "Receipt from a party",
@@ -971,6 +1109,23 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "key": "CHEQUE_RECEIVED",
             "label": "Receipt by cheque",
             "debit": ["Bank"], "credit": [{"party": "giver"}],
+        }
+    # 'Withdrew Rs.5,000 from bank for office use' - a bank withdrawal
+    # WITHOUT the word 'cash': the direction is structural (withdraw verb
+    # + 'from bank'), never inferred from the word 'cash' alone (Sprint
+    # 15H wording gap - the registry phrase 'withdrew from bank' cannot
+    # match when the amount sits between). A personal/private purpose
+    # stays with the drawings machinery below, and a bare 'Withdrew
+    # Rs.5,000.' (no bank) stays with the ambiguity layer.
+    if re.search(r"\b(?:withdrew|withdrawn|drew)\b.*?\bfrom\s+"
+                 r"(?:the\s+)?bank\b", low) \
+            and not any(k in low for k in (
+                "for personal use", "for private use", "personal expenses",
+                "private expenses", "for personal", "for private")):
+        return {
+            "key": "CASH_FROM_BANK",
+            "label": "Cash withdrawn from bank",
+            "debit": ["Cash"], "credit": ["Bank"],
         }
     for cand in BK_PATTERNS:
         when = cand["when"]
@@ -1416,6 +1571,9 @@ _AMBIGUOUS_HINTS = (
     "purchased goods", "bought goods", "goods purchased",
     "goods bought", "sold goods", "goods sold",
     "purchased stock", "sold stock",
+    # bare 'Withdrew Rs.5,000.' is unclear (cash/bank/purpose) - ask,
+    # never NOT_SUPPORTED (Sprint 15H ambiguity attacks)
+    "withdrew rs.", "withdrawn rs.", "withdrew ", "withdrawn ",
 )
 
 
@@ -1507,7 +1665,8 @@ def _startup_asset_breakdown(text: str) -> Optional[Dict[str, Any]]:
     breakdown: Dict[str, Decimal] = {}
     for asset in named:
         m = re.search(
-            re.escape(asset) + r"\s+(?:for\s+)?(?:Rs\.?|₹|INR)?\s*"
+            re.escape(asset)
+            + r"\s+(?:(?:for|worth)\s+)?(?:Rs\.?|₹|INR)?\s*"
             r"(\d[\d,]*(?:\.\d+)?)", text, re.IGNORECASE)
         if not m:
             return None

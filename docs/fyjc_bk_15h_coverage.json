@@ -1,0 +1,19 @@
+{
+ "failure_taxonomy": {
+  "EXPECTED_REFUSAL": 21
+ },
+ "parser_failures": [],
+ "report": {
+  "cases": 66,
+  "correct_blocked": 4,
+  "correct_derived": 0,
+  "correct_not_supported": 3,
+  "correct_review_required": 14,
+  "correct_verified": 45,
+  "extraction_failure": 0,
+  "incorrect_confident": 0,
+  "incorrect_refusal": 0,
+  "parser_failure": 0
+ },
+ "unsafe_confident_answers": 0
+}

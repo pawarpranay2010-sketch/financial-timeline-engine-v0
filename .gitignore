@@ -4,6 +4,14 @@ __pycache__/
 .env.local
 *.log
 
+# Sprint scratch / diagnostic probes - never commit
+_fte_patch_*
+_patch_*
+_probe*
+formula_engine/bin/
+scripts/chatinput_test.py
+scripts/tabs_test.py
+
 # Credential-handling / diagnostic scripts — never commit
 append_env_keys.py
 scripts/set_ai_keys.py
