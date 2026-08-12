@@ -9,21 +9,25 @@ capability modules through backend.maths.fyjc_student_flow (pure,
 deterministic). This module ONLY prepares and renders the student
 journey:
 
-    📸 Photo / 📁 PDF / ✍️ Type
+    📷 Photo / 📄 PDF / ✍️ Type
         -> What FT-E understood (editable)
         -> Maths | Book-Keeping flow (steps 1-6 / 1-8)
-        -> C++ mathematical authority confirmation + audit
-        -> Independent verification
+        -> Final answer
+        -> Independent verification ("verify your answer")
+        -> Explanation / correction
 
 Honesty rules implemented here
 ------------------------------
 * No OCR engine is bundled in this deployment. A photo/image is shown to
   the student and clearly labelled as NOT machine-read; the student is
-  guided to type/paste the question. FT-E never pretends it read a photo.
+  guided to type/paste the question. FT-E never pretends it read a photo
+  and never guesses text.
 * BLOCKED / REVIEW_REQUIRED / UNSUPPORTED states are rendered with exact
   what / why / next-action copy and concrete actions (enter the missing
   value manually, review sources, etc.) - never a guessed answer.
-* The expandable technical audit is optional and defaults to hidden.
+* Technical evidence (formula ids, audit fields, engine internals) is
+  hidden behind a collapsed "Verification details" expander so the
+  student is never overwhelmed by internal detail by default.
 """
 
 from __future__ import annotations
@@ -67,12 +71,12 @@ _TEXT_EXT = (".pdf", ".docx", ".txt", ".csv", ".xlsx")
 
 _FYJC_CSS = """
 <style>
-.fte-fyjc-title { font-size: 1.5rem; font-weight: 800; margin: .2rem 0 .1rem; }
-.fte-fyjc-sub { color: var(--fte-muted, #8a94a6); margin-bottom: .6rem; }
+.fte-fyjc-title { font-size: 1.35rem; font-weight: 800; margin: .1rem 0 .05rem; }
+.fte-fyjc-sub { color: var(--fte-muted, #8a94a6); margin-bottom: .5rem; font-size: .95rem; }
 .fte-fyjc-card { border: 1px solid var(--fte-border, #2b3550);
-  border-radius: 12px; padding: .8rem 1rem; margin: .4rem 0; }
+  border-radius: 10px; padding: .65rem .9rem; margin: .35rem 0; }
 .fte-fyjc-step { border-left: 3px solid var(--fte-accent, #4f8cff);
-  border-radius: 0 10px 10px 0; padding: .5rem .9rem; margin: .35rem 0;
+  border-radius: 0 8px 8px 0; padding: .45rem .8rem; margin: .3rem 0;
   background: rgba(79,140,255,.05); }
 .fte-fyjc-step b { color: var(--fte-text, #e6ecf5); }
 .fte-fyjc-chip { display:inline-block; border-radius: 999px; padding:.1rem .6rem;
@@ -81,13 +85,18 @@ _FYJC_CSS = """
 .fte-fyjc-chip.amber { background: rgba(255,180,60,.15); color:#ffb43c; }
 .fte-fyjc-chip.red   { background: rgba(255,99,99,.15); color:#ff6363; }
 .fte-fyjc-chip.blue  { background: rgba(79,140,255,.15); color:#7fb0ff; }
-.fte-fyjc-why { border:1px solid #ffb43c; border-radius:10px;
-  padding:.6rem .9rem; background: rgba(255,180,60,.06); margin:.5rem 0; }
-.fte-fyjc-blocked { border:1px solid #ff6363; border-radius:10px;
-  padding:.6rem .9rem; background: rgba(255,99,99,.06); margin:.5rem 0; }
+.fte-fyjc-answer { border: 1px solid var(--fte-accent, #4f8cff);
+  border-radius: 10px; padding: .6rem .9rem; margin: .4rem 0;
+  background: rgba(79,140,255,.08); }
+.fte-fyjc-answer b { color: var(--fte-accent-light, #7fb0ff); font-size: 1.1rem; }
+.fte-fyjc-why { border:1px solid #ffb43c; border-radius:8px;
+  padding:.55rem .85rem; background: rgba(255,180,60,.06); margin:.45rem 0; }
+.fte-fyjc-blocked { border:1px solid #ff6363; border-radius:8px;
+  padding:.55rem .85rem; background: rgba(255,99,99,.06); margin:.45rem 0; }
 .fte-fyjc-unsupported { border:1px solid var(--fte-border,#2b3550);
-  border-radius:10px; padding:.6rem .9rem; background: rgba(138,148,166,.08);
-  margin:.5rem 0; }
+  border-radius:8px; padding:.55rem .85rem; background: rgba(138,148,166,.08);
+  margin:.45rem 0; }
+.fte-fyjc-note { color: var(--fte-muted, #8a94a6); font-size: .85rem; }
 </style>
 """
 
@@ -104,6 +113,12 @@ def _chip(label: str, tone: str) -> str:
 
 def _esc(value: Any) -> str:
     return html.escape(str(value if value is not None else ""))
+
+
+def _has_session() -> bool:
+    """True when there is an active question/session worth clearing."""
+    return any(st.session_state.get(key) is not None for key in (
+        K_QUESTION, K_CORRECTED, K_DOC_TEXT, K_DOC_NAME, K_FLOW))
 
 
 # ---------------------------------------------------------------------------
@@ -131,50 +146,74 @@ def _extract_document_text(uploaded) -> str:
         return ""
 
 
+def _file_size(uploaded) -> str:
+    """Human-readable file size for the selected document."""
+    try:
+        size = int(getattr(uploaded, "size", 0) or 0)
+    except (TypeError, ValueError):
+        return ""
+    if size <= 0:
+        return ""
+    if size >= 1_000_000:
+        return f"{size / 1_000_000:.1f} MB"
+    return f"{max(1, size // 1024)} KB"
+
+
+def _render_how_it_works() -> None:
+    """Collapsed, jargon-free explanation of what FT-E does."""
+    with st.expander("How FT-E works"):
+        st.markdown(
+            "- FT-E reads your question and shows what it understood.\n"
+            "- It applies the registered formula (Maths) or the golden "
+            "rule (Book-Keeping) step by step.\n"
+            "- It shows the final answer and lets you check your own "
+            "answer against it.\n"
+            "- When a value is missing or the question is ambiguous, "
+            "FT-E asks instead of guessing."
+        )
+
+
 def _render_entry(demo: bool) -> None:
-    st.markdown('<div class="fte-fyjc-title">🎓 FYJC Study / Verify</div>',
+    st.markdown('<div class="fte-fyjc-title">FYJC Study / Verify</div>',
                 unsafe_allow_html=True)
     st.markdown(
-        '<div class="fte-fyjc-sub">For the 24 August FYJC Maths & '
-        'Book-Keeping exam. Upload your question, take a photo, or type '
-        'it — FT-E shows what it understood, applies the registered '
-        'formula / golden rule, and lets you verify your own answer. '
-        'C++ is the mathematical authority; FT-E never guesses.</div>',
+        '<div class="fte-fyjc-sub">Solve, verify, and understand your '
+        'FYJC Maths &amp; Book-Keeping questions.</div>',
         unsafe_allow_html=True,
     )
+    _render_how_it_works()
 
     st.radio(
-        "What are you working on?",
-        ["📸 Take Photo / Image", "📁 Upload Question (PDF / Document)",
-         "✍️ Enter Question"],
+        "Input method",
+        ["📷 Photo", "📄 PDF", "✍️ Enter Question"],
         key=K_MODE,
         horizontal=True,
         label_visibility="collapsed",
+        help="Choose how you want to give FT-E your question.",
     )
     mode = st.session_state[K_MODE]
 
-    if mode.startswith("📸"):
+    if mode.startswith("📷"):
         photo = st.file_uploader(
-            "Take or choose a photo of the question",
+            "Upload a photo of your question",
             type=["png", "jpg", "jpeg", "webp"],
             key="fte_fyjc_photo",
-            help="A clear photo of the textbook page or question paper.",
+            help="PNG, JPG, WEBP • Max 200 MB",
         )
         if photo is not None:
             st.session_state[K_UPLOAD_KIND] = "image"
             st.session_state[K_DOC_NAME] = getattr(photo, "name", "photo")
-            st.image(photo, caption="Your uploaded question photo",
-                     use_container_width=True)
+            st.image(photo, caption="Your question photo", width=320)
             st.markdown(
-                '<div class="fte-fyjc-why"><b>⚠️ Photo received — text '
+                '<div class="fte-fyjc-why"><b>Photo received — text is '
                 'not machine-read.</b> This deployment does not bundle an '
                 'OCR engine, so FT-E will not pretend to read the photo '
-                'and will never guess its text. Type or paste the question '
-                'below (the photo stays visible as your source).</div>',
+                'and will never guess its text. Type the question below '
+                '(the photo stays visible as your source).</div>',
                 unsafe_allow_html=True,
             )
         st.text_area(
-            "Type the question from the photo",
+            "Type the question",
             key=K_QUESTION,
             height=120,
             placeholder=(
@@ -182,16 +221,17 @@ def _render_entry(demo: bool) -> None:
                 "Rs.5,00,000 and Current Liabilities Rs.2,50,000."
             ),
         )
-    elif mode.startswith("📁"):
+    elif mode.startswith("📄"):
         doc = st.file_uploader(
-            "Upload the question (.pdf, .docx, .txt)",
+            "Upload a question document (PDF, DOCX, TXT)",
             type=["pdf", "docx", "txt"],
             key="fte_fyjc_doc",
-            help="Text-based PDFs and documents. Scanned photo-PDFs cannot "
-                 "be read without OCR — FT-E will say so honestly.",
+            help="Text-based files. Scanned photo-PDFs cannot be read "
+                 "without OCR — FT-E will say so honestly.",
         )
         if doc is not None:
             name = getattr(doc, "name", "document")
+            size = _file_size(doc)
             if st.session_state.get(K_DOC_NAME) != name or \
                     st.session_state.get(K_DOC_TEXT) is None:
                 text = _extract_document_text(doc)
@@ -201,17 +241,18 @@ def _render_entry(demo: bool) -> None:
             text = st.session_state.get(K_DOC_TEXT) or ""
             if text:
                 st.markdown(
-                    f'<div class="fte-fyjc-card">📄 <b>Extracted from '
-                    f'<i>{_esc(name)}</i></b> — {len(text)} characters of '
-                    f'readable text found. Review it below, then analyse.'
-                    f'</div>',
+                    f'<div class="fte-fyjc-card"><b>{_esc(name)}</b>'
+                    f'{" · " + _esc(size) if size else ""} — '
+                    f'{len(text)} characters of readable text found. '
+                    f'<span class="fte-fyjc-note">Review it below, then '
+                    f'analyse.</span></div>',
                     unsafe_allow_html=True,
                 )
                 with st.expander("Show extracted text"):
                     st.code(text[:4000], language=None)
             else:
                 st.markdown(
-                    '<div class="fte-fyjc-blocked"><b>🔴 BLOCKED: text '
+                    '<div class="fte-fyjc-blocked"><b>BLOCKED: text '
                     'extraction</b> — this file yielded no readable text '
                     '(scanned image PDF, encrypted, or empty). FT-E will '
                     'not guess content. Type or paste the question below '
@@ -219,34 +260,42 @@ def _render_entry(demo: bool) -> None:
                     unsafe_allow_html=True,
                 )
         st.text_area(
-            "…or paste / type the question",
+            "Or paste / type the question",
             key=K_QUESTION,
             height=120,
             placeholder="e.g. Purchased goods from Rahul on credit for Rs.10,000.",
         )
     else:
         st.text_area(
-            "Enter the question",
+            "Enter your question",
             key=K_QUESTION,
-            height=140,
+            height=150,
             placeholder=(
+                "Type or paste your FYJC question here…\n\n"
                 "Maths: 'Calculate the Profit Margin. Profit Rs.200 and "
                 "Revenue Rs.1,000.'\n"
                 "Book-Keeping: 'Purchased goods from Rahul on credit for "
-                "Rs.10,000.'\n"
-                "Or paste 'Concept: value' lines (e.g. 'Net Profit: 200')."
+                "Rs.10,000.'"
             ),
         )
 
-    col_go, col_reset = st.columns([2, 1])
+    has_input = bool(_question_text().strip())
+    col_go, col_reset = st.columns([3, 1])
     with col_go:
-        st.button("Analyse question", key="fte_fyjc_go",
-                  use_container_width=True, type="primary")
+        st.button(
+            "Analyse question",
+            key="fte_fyjc_go",
+            use_container_width=True,
+            type="primary",
+            disabled=not has_input,
+            help=None if has_input else "Type, upload, or paste a question first.",
+        )
     with col_reset:
-        if st.button("Start over", key="fte_fyjc_reset",
-                     use_container_width=True):
-            _reset_question()
-            st.rerun()
+        if _has_session():
+            if st.button("Start over", key="fte_fyjc_reset",
+                         use_container_width=True):
+                _reset_question()
+                st.rerun()
 
 
 def _question_text() -> str:
@@ -270,7 +319,7 @@ def _question_text() -> str:
 
 def _render_understanding(flow: Dict[str, Any]) -> None:
     understanding = flow.get("understanding") or {}
-    st.markdown('<div class="fte-fyjc-title">1 · Question detected</div>',
+    st.markdown('<div class="fte-fyjc-title">1 · Question understood</div>',
                 unsafe_allow_html=True)
     q = _question_text()
     st.markdown(
@@ -278,8 +327,10 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="fte-fyjc-title">FT-E understood</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="fte-fyjc-note">What FT-E understood:</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         f'<div class="fte-fyjc-card">{_esc(understanding.get("interpretation"))}'
         f'</div>',
@@ -288,15 +339,15 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
 
     domain = understanding.get("domain")
     if domain == "maths":
-        domain_label, tone = "📐 Maths", "blue"
+        domain_label, tone = "Maths", "blue"
     elif domain == "bookkeeping":
-        domain_label, tone = "📒 Book-Keeping & Accountancy", "green"
+        domain_label, tone = "Book-Keeping & Accountancy", "green"
     else:
-        domain_label, tone = "❓ Unrecognised", "amber"
+        domain_label, tone = "Unrecognised", "amber"
     st.markdown(
         f'<div class="fte-fyjc-card">{_chip(domain_label, tone)}'
-        f'<span style="color:var(--fte-muted,#8a94a6)">'
-        f'{_esc(understanding.get("reason"))}</span></div>',
+        f'<span class="fte-fyjc-note">{_esc(understanding.get("reason"))}'
+        f'</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -319,7 +370,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
     concerns = understanding.get("concerns") or []
     if concerns:
         st.markdown(
-            '<div class="fte-fyjc-why"><b>🟠 REVIEW REQUIRED</b></div>',
+            '<div class="fte-fyjc-why"><b>REVIEW REQUIRED</b></div>',
             unsafe_allow_html=True,
         )
         for concern in concerns:
@@ -327,7 +378,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
 
     c1, c2 = st.columns([1, 3])
     with c1:
-        if st.button("✏️ Correct / Edit", key="fte_fyjc_edit_btn",
+        if st.button("Correct / Edit", key="fte_fyjc_edit_btn",
                      use_container_width=True):
             st.session_state[K_EDIT] = True
             st.rerun()
@@ -365,9 +416,9 @@ def _render_steps(steps: List[Dict[str, Any]]) -> None:
 
 
 def _render_audit(audit: Dict[str, Any]) -> None:
-    with st.expander("🔍 Technical audit (optional detail)"):
+    with st.expander("Verification details"):
         st.caption(
-            "Internal detail for anyone who wants it — not needed to use "
+            "Technical detail for anyone who wants it — not needed to use "
             "FT-E."
         )
         rows = [
@@ -392,6 +443,20 @@ def _render_audit(audit: Dict[str, Any]) -> None:
                 )
 
 
+def _render_final_answer(flow: Dict[str, Any]) -> None:
+    """A compact, prominent final-answer card for resolved maths."""
+    if flow.get("flow") != "maths" or not flow.get("resolved"):
+        return
+    display = (flow.get("outcome") or {}).get("display_value")
+    if display is None:
+        return
+    st.markdown(
+        f'<div class="fte-fyjc-answer"><b>Final answer</b><br/>'
+        f'{_esc(display)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_maths_flow(flow: Dict[str, Any]) -> None:
     st.markdown('<div class="fte-fyjc-title">2 · Maths — working</div>',
                 unsafe_allow_html=True)
@@ -399,13 +464,13 @@ def _render_maths_flow(flow: Dict[str, Any]) -> None:
     status = flow.get("status")
     if resolved:
         st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("🟢 VERIFIED", "green")} '
+            f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
             f'{_esc(flow.get("status_label"))}</div>',
             unsafe_allow_html=True,
         )
     elif status == "UNSUPPORTED":
         st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("🟡 NOT SUPPORTED YET", "amber")}</div>',
+            f'<div class="fte-fyjc-card">{_chip("NOT SUPPORTED YET", "amber")}</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -417,7 +482,6 @@ def _render_maths_flow(flow: Dict[str, Any]) -> None:
         )
 
     _render_steps(flow.get("steps") or [])
-    _render_audit(flow.get("audit") or {})
 
     # Refusal / next-step block
     why_not = flow.get("why_not")
@@ -430,9 +494,13 @@ def _render_maths_flow(flow: Dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
+    _render_final_answer(flow)
+
     # Manual value entry for BLOCKED maths (missing inputs)
     if status == "BLOCKED":
         _render_blocked_manual_entry(flow)
+
+    _render_audit(flow.get("audit") or {})
 
 
 def _render_blocked_manual_entry(flow: Dict[str, Any]) -> None:
@@ -441,7 +509,7 @@ def _render_blocked_manual_entry(flow: Dict[str, Any]) -> None:
     if not missing:
         return
     st.markdown(
-        '<div class="fte-fyjc-blocked"><b>🔴 BLOCKED</b> — required '
+        '<div class="fte-fyjc-blocked"><b>BLOCKED</b> — required '
         'evidence is missing. FT-E cannot calculate without it. You can '
         'upload the relevant page or enter the verified value manually '
         'below (it will be labelled as student-entered, never as document '
@@ -488,25 +556,24 @@ def _render_accounting_flow(flow: Dict[str, Any]) -> None:
     status = flow.get("status")
     if status == "VERIFIED":
         st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("🟢 VERIFIED", "green")} '
+            f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
             f'{_esc(flow.get("status_label"))}</div>',
             unsafe_allow_html=True,
         )
     elif status == "BLOCKED":
         st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("🔴 BLOCKED", "red")} '
+            f'<div class="fte-fyjc-card">{_chip("BLOCKED", "red")} '
             f'{_esc(flow.get("status_label"))}</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("🟠 REVIEW REQUIRED", "amber")} '
+            f'<div class="fte-fyjc-card">{_chip("REVIEW REQUIRED", "amber")} '
             f'{_esc(flow.get("status_label"))}</div>',
             unsafe_allow_html=True,
         )
 
     _render_steps(flow.get("steps") or [])
-    _render_audit(flow.get("audit") or {})
 
     why_not = flow.get("why_not")
     if why_not:
@@ -517,6 +584,8 @@ def _render_accounting_flow(flow: Dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
 
+    _render_audit(flow.get("audit") or {})
+
 
 # ---------------------------------------------------------------------------
 # Independent verification (Sprint 14 section 8)
@@ -524,7 +593,7 @@ def _render_accounting_flow(flow: Dict[str, Any]) -> None:
 
 
 def _render_verification(flow: Dict[str, Any]) -> None:
-    st.markdown('<div class="fte-fyjc-title">3 · Verify yourself</div>',
+    st.markdown('<div class="fte-fyjc-title">3 · Verify your answer</div>',
                 unsafe_allow_html=True)
     if flow.get("flow") == "maths":
         _render_maths_verify(flow)
@@ -543,7 +612,7 @@ def _render_maths_verify(flow: Dict[str, Any]) -> None:
         return
     st.markdown(
         "Enter your own answer (e.g. `20` or `20.00`) and FT-E compares it "
-        "to the C++-verified value."
+        "to the verified value."
     )
     answer = st.text_input("Your answer", key="fte_fyjc_verify_answer",
                            placeholder="e.g. 20")
@@ -573,17 +642,25 @@ def _render_verdict(verdict: Dict[str, Any]) -> None:
     if not v:
         return
     if v == "CORRECT":
-        st.success(
-            f"✅ MATCH — {_esc(verdict.get('student_display'))} is the "
-            "C++-verified value."
+        st.success("Your answer matches the verified value.")
+        st.markdown(
+            f"**Your answer:** {_esc(verdict.get('student_display'))}"
         )
+        verified = verdict.get("correct_answer") or verdict.get(
+            "student_display")
+        st.markdown(f"**FT-E verification:** {_esc(verified)}")
     elif v == "INCORRECT":
-        st.error(
-            f"🔴 MISMATCH — your answer {_esc(verdict.get('student_display'))} "
-            f"differs from the C++-verified value "
-            f"{_esc(verdict.get('correct_answer'))}. "
-            f"{_esc(verdict.get('mismatch'))}"
+        st.error("Your answer does not match the verified value.")
+        st.markdown(
+            f"**Your answer:** {_esc(verdict.get('student_display'))}"
         )
+        st.markdown(
+            f"**Correct answer:** {_esc(verdict.get('correct_answer'))}"
+        )
+        if verdict.get("mismatch"):
+            st.markdown(
+                f"**First mistake:** {_esc(verdict.get('mismatch'))}"
+            )
     else:
         st.info(_esc(verdict.get("mismatch") or "Could not verify that answer."))
 
@@ -615,7 +692,7 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
     st.markdown("Choose the check you want to perform:")
 
     # --- Journal entry check ---------------------------------------------
-    with st.expander("📒 Check a journal entry (Debit = Credit + direction)"):
+    with st.expander("Check a journal entry (Debit = Credit + direction)"):
         jc = st.columns(4)
         with jc[0]:
             d1a = st.text_input("Debit account 1", key="fte_fyjc_jd1a",
@@ -646,7 +723,7 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
             _render_journal_verdict(jv)
 
     # --- Ledger balance check --------------------------------------------
-    with st.expander("📗 Check a ledger balance"):
+    with st.expander("Check a ledger balance"):
         lc = st.columns(3)
         with lc[0]:
             acc = st.text_input("Account", key="fte_fyjc_lacc",
@@ -666,7 +743,7 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
             _render_verdict_entry(lv)
 
     # --- Trial balance check ---------------------------------------------
-    with st.expander("⚖️ Check a trial balance (one line per account)"):
+    with st.expander("Check a trial balance (one line per account)"):
         st.caption(
             "One account per line: `Account, Dr amount, Cr amount` — "
             "e.g. `Cash, 50000, 0` and `Capital, 0, 50000`."
@@ -702,12 +779,12 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
 def _render_journal_verdict(jv: Dict[str, Any]) -> None:
     verdict = jv.get("verdict")
     if verdict == "CORRECT":
-        st.success("✅ The journal entry is correct and follows the golden rule.")
+        st.success("The journal entry is correct and follows the golden rule.")
         st.markdown(f"**Rule:** {_esc(jv.get('rule'))}")
     elif verdict == "INCORRECT":
-        st.error(f"🔴 {_esc(jv.get('what'))} — {_esc(jv.get('why_not'))}")
+        st.error(f"{_esc(jv.get('what'))} — {_esc(jv.get('why_not'))}")
     elif verdict == "BALANCED":
-        st.info(f"⚖️ {_esc(jv.get('what'))} — {_esc(jv.get('why_not'))}")
+        st.info(f"{_esc(jv.get('what'))} — {_esc(jv.get('why_not'))}")
     else:
         st.info(_esc(jv.get("why_not") or "The entry could not be verified."))
     td = jv.get("total_debit")
@@ -719,26 +796,31 @@ def _render_journal_verdict(jv: Dict[str, Any]) -> None:
 def _render_verdict_entry(v: Dict[str, Any]) -> None:
     verdict = v.get("verdict")
     if verdict == "CORRECT":
-        st.success(f"✅ {_esc(v.get('what'))}")
+        st.success(f"{_esc(v.get('what'))}")
     elif verdict == "INCORRECT":
-        st.error(f"🔴 {_esc(v.get('what'))} — {_esc(v.get('why_not'))}")
+        st.error(f"{_esc(v.get('what'))} — {_esc(v.get('why_not'))}")
     else:
         st.info(_esc(v.get("why_not") or "Could not verify that check."))
 
 
 # ---------------------------------------------------------------------------
-# Study surface (supported topics)
+# Study surface (supported topics) - collapsed, student-friendly categories
 # ---------------------------------------------------------------------------
 
 
 def _render_study_topics() -> None:
-    with st.expander("📚 What FT-E can verify (FYJC study list)", expanded=False):
+    with st.expander("What FT-E can verify", expanded=False):
         topics = fyjc_study_topics()
-        st.markdown("**Maths (existing registered formulas only):**")
+        st.markdown("**Maths — financial calculations:**")
         st.markdown(" · ".join(f"`{m}`" for m in topics["maths"]))
-        st.markdown("**Book-Keeping & Accountancy:**")
+        st.markdown("**Book-Keeping — journal, ledger & trial balance:**")
         for topic in topics["bookkeeping"]:
             st.markdown(f"- {topic}")
+        st.markdown(
+            "**Answer verification:** enter your own answer and FT-E "
+            "tells you whether it matches, with the first mistake if it "
+            "does not."
+        )
         st.caption(
             "Anything else is refused deterministically — FT-E never "
             "invents a formula or a value."
@@ -760,11 +842,11 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
         )
 
     _render_entry(demo)
-    _render_study_topics()
 
     question = _question_text()
     if not question:
         st.caption("Enter or upload a question to begin.")
+        _render_study_topics()
         return
 
     if st.session_state.get(K_FLOW) is None and st.session_state.get(K_EDIT):
@@ -788,6 +870,9 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
 
     st.markdown("---")
     _render_verification(flow)
+
+    st.markdown("---")
+    _render_study_topics()
 
 
 def _render_refusal(flow: Dict[str, Any]) -> None:
