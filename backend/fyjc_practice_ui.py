@@ -73,6 +73,16 @@ from backend.maths.fyjc_question_bank import (
     STATUS_REJECTED,
     STATUS_REVIEW_REQUIRED,
 )
+from backend.maths.fyjc_personalization_engine import (
+    PersonalizationEngine,
+    OBJECTIVES,
+    OBJECTIVE_AUTO,
+    MODE_COLD_START,
+    MODE_ADAPTIVE,
+    DIRECTION_ADVANCE,
+    DIRECTION_REINFORCE,
+    DIRECTION_REMEDIATION,
+)
 
 # Deterministic UI selection seed: same bank + same history + same config
 # -> same question order. The engine still persists every interaction.
@@ -240,6 +250,27 @@ def _load_bank() -> QuestionBank:
 
 def _load_engine() -> PracticeEngine:
     return PracticeEngine(_load_bank(), STORE_PATH, rng_seed=UI_RNG_SEED)
+
+
+def _load_personalizer(bank: QuestionBank) -> PersonalizationEngine:
+    return PersonalizationEngine(bank)
+
+
+_OBJECTIVE_LABELS = {
+    OBJECTIVE_AUTO: "Auto (recommended)",
+    "REMEDIATION": "Remediation (fix weak areas)",
+    "REVISION": "Revision (revisit due topics)",
+    "MASTERY_BUILDING": "Mastery building",
+    "EXAM_PREPARATION": "Exam preparation",
+    "MIXED_PRACTICE": "Mixed practice",
+    "WEAK_AREA_FOCUS": "Weak-area focus",
+    "CHAPTER_FOCUS": "Chapter focus",
+    "DIFFICULTY_PROGRESSION": "Difficulty progression",
+}
+
+
+def _objective_label(value: str) -> str:
+    return _OBJECTIVE_LABELS.get(value, value)
 
 
 def _default_student_id() -> str:
@@ -428,6 +459,79 @@ def _scope_options(engine: PracticeEngine) -> Dict[str, List[Any]]:
             "types": types, "difficulties": difficulties}
 
 
+def _render_personalization_panel(engine: PracticeEngine,
+                                 student_id: str) -> None:
+    """Sprint 15I-N: deterministic personalized plan (recommendation,
+    focus areas, revision explanation, difficulty direction, mix). Pure
+    presentation of PersonalizationEngine output - no accounting logic."""
+    personalizer = _load_personalizer(engine.bank)
+    profile = personalizer.evaluate(
+        student_id, engine.store.attempts, engine.ledger.records(),
+        engine.mastery.records())
+    if profile["mode"] == MODE_COLD_START:
+        with st.expander("🎯 Personalized plan (building your baseline)",
+                         expanded=False):
+            st.markdown(
+                "Practice is mixed across concepts at a moderate level "
+                "until enough answers exist to personalize. Answer a few "
+                "questions and this plan will target your weak areas, "
+                "mistake patterns and revision needs."
+            )
+        return
+    with st.expander("🎯 Personalized plan", expanded=True):
+        tone = {"ADAPTIVE": "green", "COLD_START": "gray"}.get(
+            profile["mode"], "gray")
+        chips = [
+            _chip("ADAPTIVE", tone),
+            _chip(f"Accuracy (recent) "
+                  f"{profile['evidence_summary']['recent_accuracy']:.0%}",
+                  "blue"),
+            _chip(f"Open mistakes {profile['evidence_summary']['open_mistakes']}",
+                  "amber"),
+        ]
+        st.markdown(
+            f'<div class="fte-pi-card">{" ".join(chips)}</div>',
+            unsafe_allow_html=True,
+        )
+        readiness = profile["difficulty_readiness"]
+        direction_labels = {
+            DIRECTION_ADVANCE: "ready for harder questions",
+            DIRECTION_REINFORCE: "reinforcing the current level",
+            DIRECTION_REMEDIATION: "review concepts need reinforcement",
+            "MIXED": "mixed difficulty",
+            "STAY": "steady at the current level",
+        }
+        st.markdown(
+            f"**Difficulty:** {_esc(readiness.get('explanation'))}"
+        )
+        st.markdown("**Recommended focus**")
+        focus = profile["recommended_focus_areas"] or []
+        if not focus:
+            st.caption("No areas flagged yet - keep practising.")
+        for item in focus:
+            st.markdown(
+                f'- {_esc(item["reason"])}', unsafe_allow_html=False)
+        revision_due = [r for r in profile["revision_candidates"]
+                        if r.get("due")]
+        if revision_due:
+            st.markdown("**Due for revision**")
+            for r in revision_due[:5]:
+                st.markdown(
+                    f"- {_esc(r['concept_key'])} - last practiced "
+                    f"{r['days_since']:.0f} days ago "
+                    f"({_esc(r['mastery_state'])})"
+                )
+        mix = profile["recommended_mix"]
+        st.markdown(
+            "**Recommended mix:** "
+            f"weakness remediation {mix['weakness_remediation']:.0%} · "
+            f"revision {mix['revision']:.0%} · "
+            f"current level {mix['current_level']:.0%} · "
+            f"challenge {mix['challenge']:.0%} · "
+            f"maintenance {mix['maintenance']:.0%}"
+        )
+
+
 def _render_new_session(engine: PracticeEngine, student_id: str) -> None:
     opts = _scope_options(engine)
     mode_labels = {
@@ -462,6 +566,10 @@ def _render_new_session(engine: PracticeEngine, student_id: str) -> None:
                 key="fte_pi_difficulty")
             ttype = st.selectbox(
                 "Transaction type", ["Any"] + opts["types"], key="fte_pi_type")
+            objective = st.selectbox(
+                "Session objective", [OBJECTIVE_AUTO] + list(OBJECTIVES),
+                key="fte_pi_objective",
+                format_func=_objective_label)
             count = st.number_input(
                 "Number of questions", min_value=1, max_value=100, value=10,
                 key="fte_pi_count")
@@ -483,6 +591,7 @@ def _render_new_session(engine: PracticeEngine, student_id: str) -> None:
         transaction_type=None if ttype == "Any" else ttype,
         difficulty=diff_value,
         question_count=int(count),
+        objective=(None if objective == OBJECTIVE_AUTO else objective),
     )
     st.session_state["fte_pi_session"] = {
         "student_id": student_id, "session_id": sid}
@@ -498,7 +607,14 @@ def _render_question_screen(engine: PracticeEngine, session: Dict[str, Any],
     qid = st.session_state.get("fte_pi_qid")
     if qid is None:
         try:
-            qid = engine.select_next(sid)
+            personalizer = _load_personalizer(engine.bank)
+            if personalizer.should_personalize(
+                    student_id, engine.store.attempts):
+                qid = engine.select_next(sid, personalizer=personalizer)
+            else:
+                # Cold start: baseline mixed practice (15I-H ladder) until
+                # enough verified evidence exists (Sprint 15I-N section 15).
+                qid = engine.select_next(sid)
         except ValueError as exc:
             st.warning(f"Could not pick a question: {_esc(exc)}")
             st.session_state.pop("fte_pi_session", None)
@@ -527,6 +643,16 @@ def _render_question_screen(engine: PracticeEngine, session: Dict[str, Any],
         f'<div class="fte-pi-question">{_esc(question.get("raw_text"))}</div>',
         unsafe_allow_html=True,
     )
+
+    reasons = (engine.get_session(sid).get("selection_reasons") or [])
+    sel = next((r for r in reversed(reasons)
+                if r.get("question_id") == qid), None)
+    if sel and sel.get("reason"):
+        st.markdown(
+            f'<div class="fte-pi-card"><b>Why this question:</b> '
+            f'{_esc(sel.get("reason"))}</div>',
+            unsafe_allow_html=True,
+        )
 
     _render_journal_input()
     st.caption(
@@ -639,6 +765,7 @@ def render_practice_section(demo: bool = False) -> None:
 
     tab_practice, tab_progress = st.tabs(["Practice", "My progress"])
     with tab_practice:
+        _render_personalization_panel(engine, student_id)
         session = _active_session(engine, student_id)
         if session and session["status"] == SESSION_ACTIVE:
             _render_question_screen(engine, session, student_id)
@@ -973,6 +1100,88 @@ def _render_review_tab(engine: PracticeEngine) -> None:
                 st.error(f"Could not reject: {_esc(exc)}")
 
 
+def _render_personalization_tab(engine: PracticeEngine) -> None:
+    """Sprint 15I-N: teacher-facing personalization aggregates. All
+    values come from PersonalizationEngine.teacher_aggregates (derived
+    from the persisted evidence); nothing is fabricated."""
+    st.markdown("**Personalization overview**")
+    personalizer = _load_personalizer(engine.bank)
+    aggregates = personalizer.teacher_aggregates(
+        engine.store.attempts, engine.ledger.records(),
+        engine.mastery.records())
+    import pandas as pd
+    if not aggregates["weakest_concepts"] and not aggregates["revision_due"]:
+        st.caption("No personalization evidence yet (no student activity).")
+        return
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**Weakest concepts**")
+        if aggregates["weakest_concepts"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"],
+                 "score": r["score"]}
+                for r in aggregates["weakest_concepts"][:20]]),
+                use_container_width=True, height=180)
+        else:
+            st.caption("None flagged.")
+        st.markdown("**Students needing review**")
+        if aggregates["students_needing_review"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"],
+                 "recent": f"{r['recent_accuracy']:.0%}"}
+                for r in aggregates["students_needing_review"][:20]]),
+                use_container_width=True, height=180)
+        else:
+            st.caption("None.")
+    with col_b:
+        st.markdown("**Strongest concepts**")
+        if aggregates["strongest_concepts"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"],
+                 "score": r["score"]}
+                for r in aggregates["strongest_concepts"][:20]]),
+                use_container_width=True, height=180)
+        else:
+            st.caption("None claimed yet (strength needs sustained "
+                       "evidence).")
+        st.markdown("**Revision due**")
+        if aggregates["revision_due"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"],
+                 "days": r["days_since"], "state": r["mastery_state"]}
+                for r in aggregates["revision_due"][:20]]),
+                use_container_width=True, height=180)
+        else:
+            st.caption("Nothing due.")
+    st.markdown("**Common mistake categories**")
+    if aggregates["common_mistake_categories"]:
+        st.dataframe(pd.DataFrame([
+            {"category": r["category"], "occurrences": r["occurrences"]}
+            for r in aggregates["common_mistake_categories"]]),
+            use_container_width=True, height=160)
+    else:
+        st.caption("No mistakes recorded.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Concepts improving**")
+        if aggregates["concepts_improving"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"]}
+                for r in aggregates["concepts_improving"][:15]]),
+                use_container_width=True, height=140)
+        else:
+            st.caption("None detected.")
+    with c2:
+        st.markdown("**Concepts degrading**")
+        if aggregates["concepts_degrading"]:
+            st.dataframe(pd.DataFrame([
+                {"student": r["student_id"], "concept": r["concept_key"]}
+                for r in aggregates["concepts_degrading"][:15]]),
+                use_container_width=True, height=140)
+        else:
+            st.caption("None detected.")
+
+
 def render_teacher_section(demo: bool = False) -> None:
     _ensure_css()
     st.markdown('<div class="fte-pi-title">Teacher Dashboard</div>',
@@ -983,8 +1192,9 @@ def render_teacher_section(demo: bool = False) -> None:
         unsafe_allow_html=True,
     )
     engine = _load_engine()
-    tab_bank, tab_students, tab_mistakes, tab_review = st.tabs(
-        ["Question Bank", "Students", "Mistakes", "Question Review"])
+    tab_bank, tab_students, tab_mistakes, tab_review, tab_personal = st.tabs(
+        ["Question Bank", "Students", "Mistakes", "Question Review",
+         "Personalization"])
     with tab_bank:
         _render_bank_tab(engine)
     with tab_students:
@@ -993,3 +1203,5 @@ def render_teacher_section(demo: bool = False) -> None:
         _render_mistakes_tab(engine)
     with tab_review:
         _render_review_tab(engine)
+    with tab_personal:
+        _render_personalization_tab(engine)

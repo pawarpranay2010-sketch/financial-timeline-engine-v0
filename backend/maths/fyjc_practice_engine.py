@@ -177,7 +177,8 @@ class PracticeEngine:
                        concept: Optional[str] = None,
                        transaction_type: Optional[str] = None,
                        difficulty: Optional[Any] = None,
-                       question_count: Optional[int] = None) -> str:
+                       question_count: Optional[int] = None,
+                       objective: Optional[str] = None) -> str:
         if mode not in MODES:
             raise ValueError(f"unknown practice mode: {mode!r}")
         sid = "S-" + hashlib.sha1(
@@ -187,6 +188,7 @@ class PracticeEngine:
             "session_id": sid,
             "student_id": student_id,
             "mode": mode,
+            "objective": objective,
             "chapter": chapter,
             "concept": concept,
             "transaction_type": transaction_type,
@@ -246,7 +248,7 @@ class PracticeEngine:
     # Question selection
     # ------------------------------------------------------------------
 
-    def select_next(self, session_id: str) -> str:
+    def select_next(self, session_id: str, personalizer=None) -> str:
         """Deterministic next-question selection for a session.
 
         Priority ladder (section 16), each tier deterministic:
@@ -261,6 +263,14 @@ class PracticeEngine:
         Anti-repetition (section 17): a question already answered in this
         session is only repeated for remediation / mistake retry when it
         carries an open mistake, or when nothing else remains.
+
+        Sprint 15I-N hook (additive): when a PersonalizationEngine
+        (`personalizer`) is supplied, its deterministic ranked selection
+        is tried first (within the same approved-only scoped pool). The
+        personalizer NEVER verifies answers or mutates content - it only
+        decides WHAT to practice next; the ladder below remains the
+        fallback, and FT-E verification is untouched. With no personalizer
+        the selection is byte-identical to 15I-H behavior.
         """
         s = self._session(session_id)
         if s["status"] != SESSION_ACTIVE:
@@ -276,6 +286,33 @@ class PracticeEngine:
         answered |= attempted
         open_mistakes = self.ledger.open_mistakes(
             student_id=s["student_id"])
+
+        # Sprint 15I-N: optional personalization-driven selection. The
+        # pick must be in the scoped pool and must respect anti-repetition
+        # (the personalizer already filters answered questions; repeats are
+        # only honoured for mistake-retry remediation).
+        if personalizer is not None and s["mode"] != MODE_MISTAKE_RETRY:
+            # MISTAKE_RETRY keeps the 15I-H ladder (open-mistake repeats
+            # are its job); the personalizer never overrides remediation.
+            pick = personalizer.select_question(
+                student_id=s["student_id"],
+                attempts=self.store.attempts,
+                mistakes=self.ledger.records(),
+                mastery=self.mastery.records(),
+                pool=pool, session=s, answered=sorted(answered),
+                clock=self._clock())
+            if pick is not None and pick.get("question_id") in pool:
+                qid = pick["question_id"]
+                if qid not in answered or s["mode"] == MODE_MISTAKE_RETRY \
+                        or len(pool) == 1:
+                    s.setdefault("selection_reasons", []).append({
+                        "question_id": qid,
+                        "objective": pick.get("objective"),
+                        "reason": pick.get("reason"),
+                        "evidence": pick.get("evidence") or [],
+                        "rank": pick.get("rank"),
+                    })
+                    return self._pick(s, [qid])
 
         # Tier 1: open high-frequency mistakes.
         if s["mode"] in (MODE_WEAKNESS, MODE_MISTAKE_RETRY):
