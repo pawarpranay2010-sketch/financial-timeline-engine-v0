@@ -946,8 +946,30 @@ def _render_recoverable_error(error: Dict[str, Any]) -> None:
 
 
 def render_fyjc_student_ui(demo: bool = False) -> None:
-    """The FYJC Study / Verify page (rendered inside the workspace)."""
+    """The FYJC page (rendered inside the workspace). Sprint 15I-I adds a
+    top-level section switcher: Study / Verify (Sprint 14 flow), Practice
+    and Teacher Dashboard (Sprint 15I-I, rendered by
+    backend.fyjc_practice_ui). The study/verify flow below is unchanged."""
     _ensure_css()
+
+    section = st.session_state.get("fte_fyjc_section")
+    if section not in ("Study / Verify", "Practice", "Teacher Dashboard"):
+        section = "Study / Verify"
+    st.segmented_control(
+        "FYJC section",
+        options=["Study / Verify", "Practice", "Teacher Dashboard"],
+        key="fte_fyjc_section",
+        label_visibility="collapsed",
+    )
+    section = st.session_state["fte_fyjc_section"]
+    if section == "Practice":
+        from backend.fyjc_practice_ui import render_practice_section
+        render_practice_section(demo=demo)
+        return
+    if section == "Teacher Dashboard":
+        from backend.fyjc_practice_ui import render_teacher_section
+        render_teacher_section(demo=demo)
+        return
 
     # 1. Pre-render reconcile: validate the session left by the previous run
     #    (a refresh reruns the whole script; anything stale is dropped here).
