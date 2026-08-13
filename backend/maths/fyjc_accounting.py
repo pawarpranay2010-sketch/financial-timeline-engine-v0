@@ -94,6 +94,11 @@ ACCOUNT_ROLES: Dict[str, str] = {
     "Creditors": LIABILITY, "Loan": LIABILITY, "Bank Loan": LIABILITY,
     "Bills Payable": LIABILITY, "Outstanding Expenses": LIABILITY,
     "Unearned Income": LIABILITY, "Bank Overdraft": LIABILITY,
+    # Sprint 15I-K GST accounts: input tax credit is an asset (receivable
+    # from the government), output tax is a liability (payable to it).
+    "Input CGST": ASSET, "Input SGST": ASSET, "Input IGST": ASSET,
+    "Output CGST": LIABILITY, "Output SGST": LIABILITY,
+    "Output IGST": LIABILITY,
     # capital
     "Capital": CAPITAL,
     # income
@@ -171,6 +176,12 @@ ACCOUNT_ALIASES: Dict[str, str] = {
     "repairs": "Repairs", "postage": "Postage", "stationery": "Stationery",
     "audit fees": "Audit Fees", "legal fees": "Legal Fees",
     "fuel": "Fuel", "income tax": "Income Tax",
+    # Sprint 15I-K: GST account aliases - only the full input/output forms
+    # resolve; a bare 'CGST'/'SGST'/'IGST' is ambiguous between input and
+    # output and is never silently mapped.
+    "input cgst": "Input CGST", "input sgst": "Input SGST",
+    "input igst": "Input IGST", "output cgst": "Output CGST",
+    "output sgst": "Output SGST", "output igst": "Output IGST",
 }
 
 SIDE_EXPLANATION = {

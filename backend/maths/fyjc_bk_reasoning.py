@@ -50,7 +50,8 @@ Pure module: no Streamlit, no AI, no network. Deterministic.
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.maths.fyjc_accounting import (
@@ -120,6 +121,13 @@ _TRADITIONAL_OVERRIDES: Dict[str, str] = {
     "Bills Receivable": CLASS_REAL, "Goodwill": CLASS_REAL,
     "Patents": CLASS_REAL, "Prepaid Expenses": CLASS_REAL,
     "Provision for Depreciation": CLASS_REAL,
+    # Sprint 15I-K GST accounts: input tax credit (asset) and output tax
+    # payable (liability) are both Real accounts in the traditional FYJC
+    # threefold classification. Without the override a Capitalised word
+    # would be read as a Personal account (a party).
+    "Input CGST": CLASS_REAL, "Input SGST": CLASS_REAL,
+    "Input IGST": CLASS_REAL, "Output CGST": CLASS_REAL,
+    "Output SGST": CLASS_REAL, "Output IGST": CLASS_REAL,
     # nominal (expenses / incomes / losses / gains)
     "Purchases": CLASS_NOMINAL, "Sales": CLASS_NOMINAL,
     "Rent": CLASS_NOMINAL, "Salaries": CLASS_NOMINAL, "Wages": CLASS_NOMINAL,
@@ -1842,7 +1850,11 @@ def _split_transactions(question: str) -> List[str]:
             # split. The ASCII-hyphen compound refusal from Sprint 15I-D is
             # untouched (an ASCII hyphen is NOT a splitter boundary;
             # classify_bk_type still catches own-identity compounds).
-            r"(?<=[a-z0-9)])\.\s+(?=[A-Z])|"
+            # Sprint 15I-K: '%' joins the lookbehind set - a GST clause
+            # ending in a rate ('...CGST @ 9% and SGST @ 9%. Sold goods
+            # ...') is a real sentence boundary, never a swallowed second
+            # transaction.
+            r"(?<=[a-z0-9)%])\.\s+(?=[A-Z])|"
             r"(?<=[0-9)])(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<=[0-9)]\s)(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<![A-Za-z])\n\s*(?=[A-Z])|"
@@ -1857,8 +1869,25 @@ def _split_transactions(question: str) -> List[str]:
             r"sales return)", part, flags=re.IGNORECASE))
     segments = [seg.replace("\x01", ". ").strip() for seg in pieces
                 if seg.strip()]
-    merged: List[str] = []
+    # Sprint 15I-K: a trailing segment that is ONLY a GST component
+    # ('CGST @ 9% and SGST @ 9%', 'SGST Rs.900', '• IGST @ 18%') belongs
+    # to the previous transaction's GST clause - textbooks often
+    # sentence-break or bullet the tax line. It is rejoined, never
+    # journaled as an independent transaction. A segment carrying any
+    # transaction word stays independent.
+    frag_merged: List[str] = []
     for seg in segments:
+        low_seg = " " + seg.lower() + " "
+        is_fragment = bool(re.match(
+            r"\s*(?:and\s+)?(?:input\s+|output\s+)?(?:cgst|sgst|igst)\b",
+            seg, re.IGNORECASE)) and not any(
+                v in low_seg for v in _GST_FRAGMENT_VERBS)
+        if is_fragment and frag_merged:
+            frag_merged[-1] = frag_merged[-1] + "; " + seg
+        else:
+            frag_merged.append(seg)
+    merged: List[str] = []
+    for seg in frag_merged:
         prior = merged[-1] if merged else None
         prior_pattern = classify_bk_type(prior) if prior else None
         is_purchase_prior = bool(prior_pattern) and \
@@ -1944,6 +1973,640 @@ def _startup_asset_breakdown(text: str) -> Optional[Dict[str, Any]]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Sprint 15I-K - deterministic GST layer
+#
+# GST is a deterministic domain of its own. When ANY GST evidence is
+# present, ONLY the GST journal path may post: the plain patterns would
+# silently drop the tax from the journal (a safety bug). Every GST fact
+# the syllabus rule requires - rate, components, inclusive/exclusive
+# mode, intra/inter-state status - must be explicitly supported by the
+# question wording. Ambiguity is REVIEW_REQUIRED, never a guess:
+#   * CGST + SGST requires explicit evidence (both components named, or
+#     an explicit intra-state marker with a single GST rate);
+#   * IGST requires explicit evidence (IGST named, or an explicit
+#     inter-state marker);
+#   * a bare 'GST @ r%' with no component or state evidence is ambiguous
+#     -> REVIEW_REQUIRED.
+# ---------------------------------------------------------------------------
+
+_GST_TOKEN_RE = re.compile(
+    r"\b(?:gst|cgst|sgst|igst)\b|goods and services tax", re.IGNORECASE)
+_GST_COMPONENT_RE = re.compile(
+    r"\b(?:input\s+|output\s+)?(?:cgst|sgst|igst)\b", re.IGNORECASE)
+
+# A whole GST clause (rate + optional component tail) - used to strip GST
+# phrases out of the text so the UNDERLYING transaction can be classified
+# deterministically. Never strips transaction words.
+_GST_PHRASE = re.compile(
+    r"(?:inclusive\s+of\s+|including\s+|exclusive\s+of\s+|excluding\s+|"
+    r"plus\s+|in\s+addition\s+to\s+|extra\s+with\s+|with\s+|at\s+)?"
+    r"(?:goods\s+and\s+services\s+tax|gst|"
+    r"(?:input\s+|output\s+)?(?:cgst|sgst|igst))"
+    r"(?:\s*[@-]?\s*(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d+)?\s*%?)?"
+    r"(?:\s*(?:and|&)\s*(?:input\s+|output\s+)?(?:cgst|sgst)"
+    r"(?:\s*[@-]?\s*(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d+)?\s*%?)?)?",
+    re.IGNORECASE)
+
+# A trailing segment that is ONLY a GST component ('CGST @ 9% and SGST
+# @ 9%', 'SGST Rs.900') is part of the previous transaction's GST clause
+# - textbooks often sentence-break or bullet the tax line. A segment
+# carrying any transaction word stays an independent transaction.
+_GST_FRAGMENT_VERBS = (
+    "purchased", "bought", "sold", "paid", "received", "started",
+    "commenced", "withdrew", "deposited", "returned", "rent", "salary",
+    "wages", "goods", "stock", "furniture", "machinery", "cash", "bank",
+    "cheque", "capital", "drawings", "conveyance", "printing", "telephone")
+
+
+def _gst_amt_token(token: str) -> Optional[Decimal]:
+    """Parse one money token like _extract_amounts (currency prefix
+    stripped, trailing separators dropped, hard parse or None)."""
+    t = _CURRENCY_PREFIX.sub("", str(token).strip()).rstrip(",.")
+    if not t or not re.search(r"\d", t):
+        return None
+    parsed = parse_numeric_text(t)
+    if parsed.value is None or parsed.ambiguity:
+        return None
+    return parsed.value
+
+
+def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
+    """Deterministic GST evidence sheet, or None when the question carries
+    no GST evidence at all. Every field derives from explicit wording only."""
+    low = " " + str(text or "").lower() + " "
+    if not _GST_TOKEN_RE.search(low):
+        return None
+    facts: Dict[str, Any] = {
+        "components": [],       # ["CGST","SGST"] / ["IGST"] / []
+        "side": set(),          # {"input"} / {"output"} / {}
+        "rates": [],            # (Decimal rate, kind) kind in total/cgst/sgst/igst
+        "comp_amounts": [],     # (kind, Decimal) amounts adjacent to a component
+        "unlabeled": [],        # amounts not adjacent to any component token
+        "inclusive": False,
+        "exclusive": False,
+        "intra_state": False,
+        "inter_state": False,
+    }
+    for m in _GST_COMPONENT_RE.finditer(low):
+        up = m.group(0).strip().upper()
+        for comp in ("CGST", "SGST", "IGST"):
+            if comp in up and comp not in facts["components"]:
+                facts["components"].append(comp)
+        if "INPUT" in up:
+            facts["side"].add("input")
+        if "OUTPUT" in up:
+            facts["side"].add("output")
+    # rates whose PRECEDING label mentions a GST token. The kind comes
+    # ONLY from the text immediately before the '<n>%' token ('CGST @
+    # 9%') - never from text that follows it, so 'GST @ 18%, CGST and
+    # SGST' labels the 18% as the TOTAL rate (split into CGST 9% + SGST
+    # 9%), instead of being misread as a per-component CGST rate that
+    # would double the tax.
+    low_rates = " " + str(text or "").lower() + " "
+    for match in _PERCENT_TOKEN.finditer(low_rates):
+        try:
+            rate = Decimal(match.group(1))
+        except (InvalidOperation, ValueError):
+            continue
+        before = low_rates[max(0, match.start() - 40):match.start()]
+        if not _GST_TOKEN_RE.search(before):
+            continue
+        kind = "total"
+        for comp in ("igst", "cgst", "sgst"):
+            if comp in before:
+                kind = comp
+                break
+        facts["rates"].append((rate, kind))
+    # amounts adjacent to a component token vs unlabeled
+    raw = str(text or "")
+    for match in _NUMBER_TOKEN.finditer(raw):
+        after = raw[match.end():match.end() + 2]
+        if after.lstrip().startswith("%"):
+            continue
+        value = _gst_amt_token(match.group(0))
+        if value is None:
+            continue
+        before = raw[max(0, match.start() - 30):match.start()].lower()
+        comp = None
+        last = None
+        for cm in _GST_COMPONENT_RE.finditer(before):
+            last = cm
+        if last is not None:
+            up = last.group(0).strip().upper()
+            for name in ("IGST", "CGST", "SGST"):
+                if name in up:
+                    comp = name
+                    break
+        if comp:
+            facts["comp_amounts"].append((comp, value))
+        else:
+            facts["unlabeled"].append(value)
+    # inclusive / exclusive markers (deterministic, mutually exclusive)
+    if re.search(r"\binclusive\s+of\s+gst\b|\bgst\s+inclusive\b|"
+                 r"\bincluding\s+gst\b|\bgst\s+included\b", low):
+        facts["inclusive"] = True
+    if re.search(r"\bexclusive\s+of\s+gst\b|\bgst\s+exclusive\b|"
+                 r"\bexcluding\s+gst\b|\bgst\s+excluded\b|"
+                 r"\bplus\s+gst\b|\bgst\s+extra\b|"
+                 r"\bgst\s+added\s+separately\b|"
+                 r"\bin\s+addition\s+to\s+gst\b", low):
+        facts["exclusive"] = True
+    # intra / inter-state markers (explicit wording only)
+    if re.search(r"\bintra[- ]state\b|\bwithin\s+the\s+state\b|"
+                 r"\bwithin\s+maharashtra\b|"
+                 r"\bwithin\s+the\s+same\s+state\b|\blocal\b", low):
+        facts["intra_state"] = True
+    if re.search(r"\binter[- ]state\b|\boutside\s+the\s+state\b|"
+                 r"\bfrom\s+another\s+state\b|"
+                 r"\bto\s+another\s+state\b|\bother\s+state\b", low):
+        facts["inter_state"] = True
+    return facts
+
+
+def _gst_refusal(status: str, why: str, action: str,
+                 facts: Dict[str, Any]) -> Dict[str, Any]:
+    """A GST refusal shares generate_journal's refusal shape so every
+    caller treats it identically."""
+    return {
+        "status": status,
+        "why_not": why,
+        "next_action": action,
+        "debit_lines": [], "credit_lines": [],
+        "narration": None, "calculation_records": [],
+        "total_debit": 0, "total_credit": 0, "balanced": True,
+        "gst": facts,
+    }
+
+
+def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
+    """The deterministic GST journal for ONE transaction carrying GST
+    evidence. Reviews (never guesses) every GST fact the syllabus rule
+    requires; returns REVIEW_REQUIRED whenever any fact is missing or
+    contradictory."""
+    low = " " + str(text or "").lower() + " "
+
+    def _refuse(why: str, action: str) -> Dict[str, Any]:
+        return _gst_refusal(REVIEW_REQUIRED, why, action, facts)
+
+    # -- underlying transaction (GST phrases stripped) ---------------------
+    stripped = _GST_PHRASE.sub(" ", str(text or ""))
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    pattern = classify_bk_type(stripped)
+    if pattern is None or pattern.get("refuse"):
+        return _refuse(
+            "The underlying transaction could not be classified "
+            "deterministically once the GST wording is removed (the "
+            "cash/credit mode or the party may be missing).",
+            "State the transaction in standard FYJC wording with the mode "
+            "(for cash / on credit from <name>) and the party.")
+    key = pattern.get("key") or ""
+    # Sprint 15I-K: the GST surface is an EXPLICIT allowlist - only the
+    # goods purchase/sale and expense patterns. Goods RETURNS and
+    # FIXED-ASSET purchases/sales carry their own tax treatment in
+    # practice; FT-E never guesses it (rule 8 -> NOT_SUPPORTED).
+    if key in ("PURCHASE_GOODS_CASH", "PURCHASE_GOODS_CREDIT"):
+        is_sale = False
+    elif key in ("SALE_GOODS_CASH", "SALE_GOODS_CREDIT"):
+        is_sale = True
+    elif key == "EXPENSE_PAID":
+        is_sale = False
+    else:
+        # Sprint 15I-K rule 8: GST on a transaction type OUTSIDE the
+        # verified GST surface (capital introduction, drawings, loans,
+        # returns, fixed assets, discount settlements, ...) is
+        # NOT_SUPPORTED - no amount of re-stating within the GST domain
+        # can make it resolvable, and FT-E never guesses a tax treatment
+        # for a transaction the syllabus does not tax.
+        return _gst_refusal(
+            NOT_SUPPORTED,
+            "GST is only supported on goods purchases, goods sales and "
+            "expenses in the verified FYJC surface. This transaction "
+            "type is not one of them, so FT-E does not guess its GST "
+            "treatment.",
+            "Use a supported transaction (purchase, sale, expense) with "
+            "an explicit GST rate/components.",
+            facts)
+
+    debit_specs = pattern.get("debit") or []
+    credit_specs = pattern.get("credit") or []
+    # a party spec on the money side means a credit transaction
+    is_credit = any(isinstance(s, dict) and "party" in s
+                    for s in (credit_specs if not is_sale else debit_specs))
+
+    # -- GST + discount is 15I-L scope -------------------------------------
+    if "discount" in low:
+        return _refuse(
+            "A transaction combining GST with a trade/cash discount is "
+            "outside the verified 15I-K surface. FT-E never applies both "
+            "treatments on its own.",
+            "Enter the GST transaction and the discount settlement as "
+            "separate steps.")
+
+    # -- component scheme (never guessed) ----------------------------------
+    comps = set(facts["components"])
+    if "IGST" in comps and (comps & {"CGST", "SGST"}):
+        return _refuse(
+            "The question names both IGST and CGST/SGST for the same "
+            "transaction. FT-E never guesses which tax treatment applies.",
+            "State one treatment: either CGST + SGST (intra-state) or "
+            "IGST (inter-state).")
+    if ("CGST" in comps) != ("SGST" in comps):
+        present = "CGST" if "CGST" in comps else "SGST"
+        missing = "SGST" if present == "CGST" else "CGST"
+        return _refuse(
+            f"{present} is named without {missing}. FT-E never invents the "
+            "missing component.",
+            f"State both components (including {missing}) or use IGST.")
+    if "IGST" in comps:
+        scheme = "IGST"
+    elif "CGST" in comps and "SGST" in comps:
+        scheme = "CGST_SGST"
+    else:
+        if facts["intra_state"] and facts["inter_state"]:
+            return _refuse(
+                "The question marks the transaction as both intra-state "
+                "and inter-state. FT-E never guesses which applies.",
+                "State one: intra-state (CGST + SGST) or inter-state (IGST).")
+        if facts["intra_state"]:
+            scheme = "CGST_SGST"
+        elif facts["inter_state"]:
+            scheme = "IGST"
+        else:
+            return _refuse(
+                "GST is mentioned with a rate but the question does not "
+                "say whether it is intra-state (CGST + SGST) or "
+                "inter-state (IGST). FT-E never picks one.",
+                "Name the components ('CGST and SGST') or state the "
+                "intra/inter-state status.")
+
+    if scheme == "CGST_SGST" and facts["inter_state"]:
+        return _refuse(
+            "CGST + SGST (intra-state) is contradicted by an inter-state "
+            "marker. FT-E never guesses which treatment applies.",
+            "State one treatment: CGST + SGST (intra-state) or IGST "
+            "(inter-state).")
+    if scheme == "IGST" and facts["intra_state"]:
+        return _refuse(
+            "IGST (inter-state) is contradicted by an intra-state marker. "
+            "FT-E never guesses which treatment applies.",
+            "State one treatment: CGST + SGST (intra-state) or IGST "
+            "(inter-state).")
+
+    # input vs output side: explicit mentions must match the direction
+    side = facts["side"]
+    if len(side) > 1:
+        return _refuse(
+            "The question names both input and output GST for the same "
+            "transaction. FT-E never guesses which applies.",
+            "State the tax side for this transaction.")
+    expected_side = "output" if is_sale else "input"
+    if side and expected_side not in side:
+        return _refuse(
+            f"The question names "
+            f"{'input' if 'input' in side else 'output'} GST on a "
+            f"{'sale' if is_sale else 'purchase/expense'} whose verified "
+            f"tax side is "
+            f"{'output' if expected_side == 'output' else 'input'}. FT-E "
+            "never overrides the accounting direction.",
+            "Use the correct tax side for the transaction.")
+
+    # -- rate extraction (explicit only) -----------------------------------
+    rates: Dict[str, List[Decimal]] = {
+        "total": [], "cgst": [], "sgst": [], "igst": []}
+    for rate, kind in facts["rates"]:
+        if rate <= 0 or rate > Decimal(100):
+            return _refuse(
+                f"The stated GST rate ({rate}%) is impossible. FT-E never "
+                "records an invalid rate.",
+                "State a valid GST rate (0 < rate <= 100).")
+        rates[kind].append(rate)
+    for kind in ("total", "cgst", "sgst", "igst"):
+        if len({v.quantize(Decimal("0.01")) for v in rates[kind]}) > 1:
+            return _refuse(
+                f"The question states contradictory {kind.upper()} rates. "
+                "FT-E never guesses which is correct.",
+                "State one rate per tax component.")
+
+    def _uniq(vals: List[Decimal]) -> Optional[Decimal]:
+        uniq = {v.quantize(Decimal("0.01")) for v in vals}
+        return uniq.pop() if len(uniq) == 1 else None
+
+    total_rate: Optional[Decimal] = None
+    if scheme == "CGST_SGST":
+        if rates["igst"]:
+            return _refuse(
+                "An IGST rate on an intra-state CGST + SGST transaction. "
+                "FT-E never guesses which treatment applies.",
+                "State one treatment.")
+        cgst_r = _uniq(rates["cgst"])
+        sgst_r = _uniq(rates["sgst"])
+        if cgst_r is not None and sgst_r is not None and cgst_r != sgst_r:
+            return _refuse(
+                "CGST and SGST rates differ. FT-E never records a "
+                "non-standard split.",
+                "State equal CGST and SGST rates (or a single GST rate).")
+        total_r = _uniq(rates["total"])
+        if total_r is not None:
+            if cgst_r is not None and cgst_r != (total_r / Decimal(2)):
+                return _refuse(
+                    "The CGST/SGST rates do not match half the stated GST "
+                    "rate. FT-E never guesses which is correct.",
+                    "State consistent rates.")
+            total_rate = total_r
+        elif cgst_r is not None:
+            total_rate = cgst_r * Decimal(2)
+    else:  # IGST
+        if rates["cgst"] or rates["sgst"]:
+            return _refuse(
+                "A CGST/SGST rate on an IGST transaction. FT-E never "
+                "guesses which treatment applies.",
+                "State one treatment.")
+        igst_r = _uniq(rates["igst"])
+        total_r = _uniq(rates["total"])
+        if igst_r is not None and total_r is not None and igst_r != total_r:
+            return _refuse(
+                "The IGST rate differs from the stated GST rate. FT-E "
+                "never guesses which is correct.",
+                "State consistent rates.")
+        total_rate = igst_r if igst_r is not None else total_r
+
+    # -- inclusive / exclusive mode ----------------------------------------
+    if facts["inclusive"] and facts["exclusive"]:
+        return _refuse(
+            "The question says the amount is BOTH inclusive of GST and "
+            "exclusive/plus GST. FT-E never guesses which is meant.",
+            "State one: 'inclusive of GST' or 'GST added separately'.")
+    mode = "inclusive" if facts["inclusive"] else "exclusive"
+
+    # -- amounts ------------------------------------------------------------
+    unlabeled = facts["unlabeled"]
+    if len(unlabeled) != 1:
+        return _refuse(
+            "The GST transaction must carry exactly one stated amount for "
+            "the goods/service value. FT-E never picks between multiple "
+            "figures (and never treats a payment step as part of the GST "
+            "transaction).",
+            "Enter the single transaction amount; enter a partial payment "
+            "as a separate step.")
+    stated = unlabeled[0]
+    if stated <= 0:
+        return _refuse(
+            "The stated amount must be positive. FT-E never records a "
+            "zero or negative transaction.",
+            "Enter the correct positive amount.")
+
+    comp_amt: Dict[str, Decimal] = dict(facts["comp_amounts"])
+    if scheme == "IGST":
+        if any(k in comp_amt for k in ("CGST", "SGST")):
+            return _refuse(
+                "A CGST/SGST amount on an IGST transaction. FT-E never "
+                "guesses which treatment applies.",
+                "State one treatment.")
+    else:
+        if "IGST" in comp_amt:
+            return _refuse(
+                "An IGST amount on an intra-state CGST + SGST transaction. "
+                "FT-E never guesses which treatment applies.",
+                "State one treatment.")
+
+    def _q(value: Decimal) -> Decimal:
+        return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # -- base / GST computation --------------------------------------------
+    if mode == "inclusive":
+        if total_rate is not None:
+            gst_total = _q(stated * total_rate / (Decimal(100) + total_rate))
+            base = stated - gst_total
+        elif comp_amt:
+            gst_total = sum(comp_amt.values())
+            base = stated - gst_total
+        else:
+            return _refuse(
+                "'Inclusive of GST' requires a GST rate or a stated GST "
+                "amount to extract the taxable base. FT-E never estimates "
+                "the base.",
+                "State the GST rate (e.g. 'inclusive of GST @ 18%') or the "
+                "GST amount.")
+        if base <= 0:
+            return _refuse(
+                "The taxable base derived from the inclusive amount is not "
+                "positive. FT-E never records it.",
+                "Re-check the amount and rate.")
+    else:
+        base = stated
+        if total_rate is not None:
+            gst_total = _q(base * total_rate / Decimal(100))
+        elif comp_amt:
+            gst_total = sum(comp_amt.values())
+        else:
+            return _refuse(
+                "GST is mentioned but neither a rate nor a GST amount is "
+                "stated. FT-E never guesses the tax.",
+                "State the GST rate (e.g. 'GST @ 18%') or the GST amount.")
+        if gst_total <= 0:
+            return _refuse(
+                "The computed GST amount is not positive. FT-E never "
+                "records it.",
+                "Re-check the amount and rate.")
+
+    # -- component split ----------------------------------------------------
+    if scheme == "IGST":
+        if total_rate is not None:
+            igst_amt = _q(base * total_rate / Decimal(100))
+            if "IGST" in comp_amt and comp_amt["IGST"] != igst_amt:
+                return _refuse(
+                    "The stated IGST amount does not match the stated rate "
+                    "times the base. FT-E never guesses which is correct.",
+                    "State consistent amounts/rates.")
+        elif "IGST" in comp_amt:
+            igst_amt = comp_amt["IGST"]
+        else:
+            return _refuse(
+                "IGST is mentioned without a rate or an IGST amount. FT-E "
+                "never guesses the tax.",
+                "State the IGST rate or the IGST amount.")
+        if igst_amt <= 0:
+            return _refuse(
+                "The IGST amount is not positive. FT-E never records it.",
+                "Re-check the amount and rate.")
+        raw_components = [("IGST", igst_amt)]
+    else:
+        cgst_amt = comp_amt.get("CGST")
+        sgst_amt = comp_amt.get("SGST")
+        if (cgst_amt is None) != (sgst_amt is None):
+            return _refuse(
+                "Only one of the CGST/SGST amounts is stated. FT-E never "
+                "invents the missing component.",
+                "State both component amounts (or a rate).")
+        if total_rate is not None:
+            half = _q(base * total_rate / Decimal(200))
+            if cgst_amt is not None and (cgst_amt != half
+                                         or sgst_amt != half):
+                return _refuse(
+                    "The stated CGST/SGST amounts do not match the stated "
+                    "rate. FT-E never guesses which is correct.",
+                    "State consistent amounts/rates.")
+            cgst_amt = half
+            sgst_amt = half
+        elif cgst_amt is not None:
+            pass  # both stated amounts are used as-is
+        else:
+            return _refuse(
+                "CGST + SGST is mentioned without a rate or component "
+                "amounts. FT-E never guesses the tax.",
+                "State the GST rate or the CGST and SGST amounts.")
+        if cgst_amt <= 0 or sgst_amt <= 0:
+            return _refuse(
+                "A GST component amount is not positive. FT-E never "
+                "records it.",
+                "Re-check the amounts and rate.")
+        raw_components = [("CGST", cgst_amt), ("SGST", sgst_amt)]
+
+    gst_total = sum(amt for _, amt in raw_components)
+    total = base + gst_total
+
+    # -- journal build ------------------------------------------------------
+    prefix = "Output" if is_sale else "Input"
+    components_out = [(f"{prefix} {comp}", amt)
+                      for comp, amt in raw_components]
+
+    def _line(account: str, amount: Decimal, side: str) -> Dict[str, Any]:
+        cls = traditional_class_for(account)
+        return {
+            "account": account,
+            "class": cls,
+            "rule": TRADITIONAL_GOLDEN_RULES[cls],
+            "why": side_decision_for(account, side),
+            "amount": amount,
+            "side": side,
+        }
+
+    cash_or_bank = _resolve_cash_bank(text)
+    cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
+    debit_lines: List[Dict[str, Any]] = []
+    credit_lines: List[Dict[str, Any]] = []
+
+    if is_sale:
+        if is_credit:
+            party = _resolve_bk_spec({"party": "receiver"}, stripped,
+                                     "receiver")
+            if party is None:
+                return _refuse(
+                    "The credit sale does not name the customer. FT-E "
+                    "never invents a person's name.",
+                    "Add the customer's name.")
+            debit_lines.append(_line(party, total, "debit"))
+        else:
+            debit_lines.append(_line(cash_acct, total, "debit"))
+        credit_lines.append(_line("Sales", base, "credit"))
+        for account, amount in components_out:
+            credit_lines.append(_line(account, amount, "credit"))
+    else:
+        debit_accounts = _resolve_side_specs(debit_specs, stripped,
+                                             "receiver")
+        if not debit_accounts:
+            return _refuse(
+                "The underlying purchase/expense account could not be "
+                "resolved. FT-E never invents an account.",
+                "Re-type the transaction with the account explicit.")
+        debit_lines.append(_line(debit_accounts[0], base, "debit"))
+        for account, amount in components_out:
+            debit_lines.append(_line(account, amount, "debit"))
+        if is_credit:
+            party = _resolve_bk_spec({"party": "giver"}, stripped, "giver")
+            if party is None:
+                return _refuse(
+                    "The credit purchase does not name the supplier. FT-E "
+                    "never invents a person's name.",
+                    "Add the supplier's name.")
+            credit_lines.append(_line(party, total, "credit"))
+        else:
+            credit_lines.append(_line(cash_acct, total, "credit"))
+
+    total_debit = sum((l["amount"] for l in debit_lines), Decimal(0))
+    total_credit = sum((l["amount"] for l in credit_lines), Decimal(0))
+
+    steps: List[Dict[str, Any]] = []
+    if total_rate is not None:
+        steps.append({
+            "calculation_id": "BK_GST_RATE",
+            "label": "GST rate",
+            "formula": "Rate from the question",
+            "inputs": {"gst_rate": total_rate, "scheme": scheme},
+            "result": total_rate,
+        })
+    if mode == "inclusive":
+        steps.append({
+            "calculation_id": "BK_GST_INCLUSIVE_EXTRACTION",
+            "label": "Extract taxable base from inclusive amount",
+            "formula": "Base = total / (1 + rate)",
+            "inputs": {"inclusive_total": stated, "gst_rate": total_rate},
+            "result": base,
+        })
+    steps.append({
+        "calculation_id": "BK_GST_BASE",
+        "label": "Taxable base",
+        "formula": "Base from the question" if mode == "exclusive"
+                   else "Extracted from the inclusive amount",
+        "inputs": {"base": base},
+        "result": base,
+    })
+    steps.append({
+        "calculation_id": "BK_GST_COMPONENT_SPLIT",
+        "label": "GST component split",
+        "formula": ("CGST = SGST = total GST / 2" if scheme == "CGST_SGST"
+                    else "IGST = total GST"),
+        "inputs": {"components": raw_components, "gst_total": gst_total},
+        "result": gst_total,
+    })
+    steps.append({
+        "calculation_id": "BK_GST_TOTAL",
+        "label": "Total consideration",
+        "formula": "Total = taxable base + GST",
+        "inputs": {"base": base, "gst_total": gst_total},
+        "result": total,
+    })
+
+    narration_parts: List[str] = []
+    for line in debit_lines:
+        narration_parts.append(f"{line['account']} A/c Dr "
+                               f"{_fmt_amt(line['amount'])}")
+    for line in credit_lines:
+        narration_parts.append(f"To {line['account']} A/c "
+                               f"{_fmt_amt(line['amount'])}")
+    if total_rate is not None:
+        narration_parts.append(f"(GST @ {total_rate}%"
+                               + (" inclusive" if mode == "inclusive" else "")
+                               + ")")
+    narration = "Being " + "; ".join(narration_parts) + "."
+
+    return {
+        "status": VERIFIED,
+        "date": None,
+        "particulars": " / ".join(l["account"] for l in debit_lines)
+                       + " A/c Dr",
+        "debit_lines": debit_lines,
+        "credit_lines": credit_lines,
+        "narration": narration,
+        "why_not": None,
+        "next_action": "Post this entry in your journal and verify it.",
+        "calculation_records": steps,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+        "balanced": total_debit == total_credit,
+        "gst": {
+            "scheme": scheme,
+            "base": base,
+            "gst_total": gst_total,
+            "total": total,
+            "rate": total_rate,
+            "mode": mode,
+            "components": raw_components,
+        },
+    }
+
+
 def generate_journal(question: str) -> Dict[str, Any]:
     """The deterministic journal entry for ONE transaction description.
 
@@ -1961,6 +2624,12 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "calculation_records": [], "total_debit": 0,
             "total_credit": 0, "balanced": True,
         }
+
+    # Sprint 15I-K: when ANY GST evidence is present, ONLY the GST path may
+    # journal - the plain patterns would silently drop the tax.
+    _gst_facts_here = _gst_facts(text)
+    if _gst_facts_here is not None:
+        return _gst_journal(text, _gst_facts_here)
 
     # A discount is NEVER a standalone journal entry - it only exists as
     # part of a settlement (payment/receipt with a named party or an
