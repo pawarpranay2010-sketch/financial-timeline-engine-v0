@@ -179,6 +179,7 @@ class QuestionBank:
             "validation_errors": [],
             "validation_warnings": [],
             "verification": None,
+            "generation": None,
             "duplicate_of": duplicate_of,
             "lifecycle": [{
                 "action": "create",
@@ -447,6 +448,30 @@ class QuestionBank:
             "action": "llm_suggest", "fields": sorted(suggestions),
             "at": now})
         q["updated_at"] = now
+        return qid
+
+    # ------------------------------------------------------------------
+    # Generation provenance (additive; Sprint 15I-M)
+    # ------------------------------------------------------------------
+
+    def set_generation_metadata(self, qid: str,
+                                metadata: Dict[str, Any]) -> str:
+        """Attach generator provenance to a question (Sprint 15I-M).
+
+        Additive metadata only: generator version / seed / request
+        fingerprint / candidate + verification fingerprints. It never
+        touches raw_text, expected_journal, status, validation results or
+        any accounting field, and approval still requires deterministic
+        verification. Missing metadata never changes behavior.
+        """
+        q = self._require(qid)
+        q["generation"] = dict(metadata or {})
+        q["lifecycle"].append({
+            "action": "generation_metadata",
+            "fields": sorted(metadata or {}),
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        q["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                         time.gmtime())
         return qid
 
     # ------------------------------------------------------------------
