@@ -54,8 +54,11 @@ import time
 import unicodedata
 from typing import Any, Dict, List, Optional, Sequence
 
+from decimal import Decimal
+
 from backend.maths.fyjc_bk_reasoning import (
     classify_bk_type,
+    discount_evidence,
     generate_journal,
     reason_bk_question,
     _split_transactions,
@@ -516,12 +519,19 @@ def build_provenance(
 def default_metadata(raw: str) -> Dict[str, Any]:
     """Deterministic metadata that the compiler can derive safely.
     Everything else is UNKNOWN until a human or an LLM-suggestion (which
-    is only ever candidate evidence) supplies it."""
+    is only ever candidate evidence) supplies it.
+
+    Sprint 15I-L: discount fields are ADDITIVE and derived only from
+    explicit question wording via discount_evidence() - a field that
+    cannot be established deterministically stays UNKNOWN. Existing
+    approved questions are never mutated by the new fields (they fill on
+    the next compile from the same raw text, deterministically)."""
     breakdown = transaction_breakdown(raw)
     low = " " + normalize_question_text(raw).lower() + " "
     types = breakdown["types"]
     primary_key = types[0] if types else None
-    return {
+    disc = discount_evidence(raw)
+    meta = {
         "subject": SUBJECT_BOOKKEEPING,
         "curriculum": CURRICULUM_FYJC,
         "class_year": CLASS_YEAR_FYJC,
@@ -533,4 +543,20 @@ def default_metadata(raw: str) -> Dict[str, Any]:
         "transaction_count": breakdown["count"],
         "transaction_types": types,
         "question_style": UNKNOWN,
+        "trade_discount": disc["trade_discount"],
+        "cash_discount": disc["cash_discount"],
+        "discount_percentage": disc["discount_percentage"],
+        "discount_amount": disc["discount_amount"],
+        "gross_amount": disc["gross_amount"],
+        "net_amount": disc["net_amount"],
+        "settlement_amount": disc["settlement_amount"],
     }
+    # JSON-safe: Decimal values become floats (metadata is presentation
+    # metadata, never accounting arithmetic - the journal amounts stay
+    # Decimal in the FT-E engine).
+    for key in ("discount_percentage", "discount_amount", "gross_amount",
+                "net_amount", "settlement_amount"):
+        value = meta[key]
+        if isinstance(value, Decimal):
+            meta[key] = float(value)
+    return meta

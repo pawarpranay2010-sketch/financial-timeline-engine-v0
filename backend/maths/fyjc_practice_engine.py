@@ -648,7 +648,19 @@ class PracticeEngine:
                 and "discount" in hints:
             stu_accounts = (set(self._accounts(entry["debit"]))
                             | set(self._accounts(entry["credit"])))
-            if not any("discount" in a.lower() for a in stu_accounts):
+            stu_discount = {a for a in stu_accounts
+                            if "discount" in a.lower()}
+            canon_discount = {a for a in canon_accounts
+                              if "discount" in a.lower()}
+            if not stu_discount:
+                # the student dropped the discount account entirely
+                return "CASH_DISCOUNT_ERROR"
+            if stu_discount != canon_discount:
+                # the student used the WRONG discount account (Discount
+                # Received instead of Discount Allowed, or an invented
+                # discount line the canonical journal does not carry) - a
+                # cash-discount classification mistake, never a generic
+                # account-selection error (Sprint 15I-L).
                 return "CASH_DISCOUNT_ERROR"
         return base
 

@@ -501,7 +501,10 @@ DISCOUNT_CASES = [
     {
         # explicit discount AMOUNT settlement (not a % rate)
         "q": "Received from Mohan Rs.9,800, discount allowed Rs.200.",
-        "amounts": {"cash_paid": None, "cash_discount_amount": None,
+        # Sprint 15I-L: the amount-based cash-discount pipeline now ALSO
+        # exposes the settlement numbers (cash_paid / cash_discount_amount)
+        # - the journals are unchanged, only the internal contract grew.
+        "amounts": {"cash_paid": 9800.0, "cash_discount_amount": 200.0,
                     "explicit": {"party_total": 10000.0,
                                  "cash_amount": 9800.0,
                                  "discount_amount": 200.0}},
@@ -510,7 +513,7 @@ DISCOUNT_CASES = [
     },
     {
         "q": "Paid to Amit Rs.9,800, discount received Rs.200.",
-        "amounts": {"cash_paid": None, "cash_discount_amount": None,
+        "amounts": {"cash_paid": 9800.0, "cash_discount_amount": 200.0,
                     "explicit": {"party_total": 10000.0,
                                  "cash_amount": 9800.0,
                                  "discount_amount": 200.0}},

@@ -219,6 +219,11 @@ _NUMBER_TOKEN = re.compile(
 )
 _CURRENCY_PREFIX = re.compile(r"^(?:₹|Rs\.?|INR)\s*")
 _PERCENT_TOKEN = re.compile(r"\b(\d+(?:\.\d+)?)\s*%")
+# Sprint 15I-L: word-percent rate token ('10 percent', '10 per cent',
+# '10 per-cent'). Only the number is captured; the label window picks up
+# 'trade'/'cash discount' exactly like a '%' token.
+_WORD_PERCENT_TOKEN = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s+per(?:[\- ])?cent\b")
 _FRACTION_WORDS = {
     "half": "50", "one-half": "50", "one half": "50",
     "quarter": "25", "one-fourth": "25", "one fourth": "25",
@@ -243,6 +248,13 @@ def _extract_amounts(text: str) -> Tuple[List[Decimal], bool]:
         after = str(text)[match.end():match.end() + 2]
         if after.lstrip().startswith("%"):
             continue
+        # Sprint 15I-L: a word-percent rate token ('10 percent trade
+        # discount', '2 per cent cash discount') is a RATE like '10%',
+        # never a money amount - the digit must not leak into the
+        # amounts list ('2 percent' can never read as Rs.2 paid).
+        if re.match(r"\s*per(?:[ -]?cent)\b",
+                    str(text)[match.end():match.end() + 14].lower()):
+            continue
         token = _CURRENCY_PREFIX.sub("", token).strip()
         # 'Rs.9,800, discount ...' - the greedy number token swallows the
         # trailing comma; drop trailing separators before the hard parse so
@@ -258,10 +270,36 @@ def _extract_amounts(text: str) -> Tuple[List[Decimal], bool]:
 
 def _extract_percents(text: str) -> List[Tuple[Decimal, str]]:
     """(rate, label) for every '<n>%' token - the label is the surrounding
-    text so 'trade discount' vs 'cash discount' can be told apart."""
+    text so 'trade discount' vs 'cash discount' can be told apart.
+
+    Sprint 15I-L: a word-percent token ('10 percent trade discount',
+    'less 10 per cent') is the same rate with explicit wording - it is
+    parsed the same way and labeled identically. A '%' token and its
+    word-percent twin for the SAME number in the SAME question are
+    deliberately NOT deduplicated here: a question that states both
+    ('10% and 10 percent') is contradictory evidence and must be caught
+    by the downstream rate-consistency gates, never silently collapsed."""
     out: List[Tuple[Decimal, str]] = []
     low = " " + str(text or "").lower() + " "
+    seen_spans: List[Tuple[int, int]] = []
     for match in _PERCENT_TOKEN.finditer(low):
+        try:
+            rate = Decimal(match.group(1))
+        except (InvalidOperation, ValueError):
+            continue
+        before = low[max(0, match.start() - 24):match.start()]
+        after = low[match.end():match.end() + 24]
+        label = " ".join((before + after).split())
+        out.append((rate, label))
+        seen_spans.append((match.start(), match.end()))
+    # word-percent: '10 percent' / '10 per cent' / '10 per-cent'. A
+    # number ALREADY consumed by a '%' token is never re-read (the same
+    # '10' in '10%' must not yield two rate rows).
+    for match in _WORD_PERCENT_TOKEN.finditer(low):
+        number_span = (match.start(), match.start() + len(match.group(1)))
+        if any(s <= number_span[0] and number_span[1] <= e
+               for s, e in seen_spans):
+            continue
         try:
             rate = Decimal(match.group(1))
         except (InvalidOperation, ValueError):
@@ -299,8 +337,12 @@ def _paid_fraction(text: str) -> Optional[Decimal]:
         window = low[max(0, m.start() - 12):m.end() + 12]
         if "discount" in window:
             continue
-        if any(k in window for k in ("paid", "immediately", "at once",
-                                     "cash")):
+        # Sprint 15I-L: 'cash discount' rates are never paid portions. The
+        # bare word 'cash' is not enough - a payment-fraction percent must
+        # be tied to an actual payment verb ('paid'/'immediately'/'at
+        # once') so 'allowed 5% cash discount at settlement' is never read
+        # as a 5% payment.
+        if any(k in window for k in ("paid", "immediately", "at once")):
             try:
                 return Decimal(m.group(1))
             except (InvalidOperation, ValueError):
@@ -958,7 +1000,11 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         # 'Paid <Party> Rs.X' with a Capitalised party (not a
         # pronoun 'him/her').
         _c_paid_party = bool(re.match(
-            r"\s*Paid\s+[A-Z][A-Za-z' .]{1,40}?(\s|,|\.)", _c_tail))
+            # a currency token is never a party name: 'Paid Rs.9,800
+            # and received Rs.200 cash discount' is a settlement step,
+            # not a compound with its own party identity (Sprint 15I-L).
+            r"\s*Paid\s+(?!(?:Rs\.?|INR|\u20b9)\b)[A-Z][A-Za-z' .]"
+            r"{1,40}?(\s|,|\.)", _c_tail))
         # subjectless passive tail ('Was paid Rs.X ...') - the aux
         # alone is never a party, and without a continuation pronoun
         # the tail cannot be tied to the previous transaction.
@@ -1458,6 +1504,124 @@ _SETTLEMENT_PHRASES = (
     "his account of", "her account of", "their account of", "being",
 )
 
+# Sprint 15I-L: settlement-side discount-rate hints. A rate carrying these
+# words ('after allowing 10% discount', 'after receiving 5% discount',
+# 'discount allowed on the amount paid') is a CASH discount at settlement,
+# never a trade discount netting the list price.
+_CD_RATE_HINTS = re.compile(
+    r"after allowing|after receiving|allowed (?:him|her|them)?\s|"
+    r"received discount|allowed discount|discount allowed|"
+    r"discount received|on settlement|at settlement|on the amount paid",
+    re.IGNORECASE)
+
+
+def _cash_discount_amt_in(low: str) -> Optional[Decimal]:
+    """The stated CASH-discount AMOUNT in normalized text, or None.
+    Matches the amount BEFORE the 'cash discount' noun ('received Rs.500
+    cash discount', 'after Rs.500 cash discount'). The post-noun forms
+    ('discount allowed Rs.200') are handled by _detect_explicit_discount;
+    a '%' adjacent to the figure means it is a rate, never an amount."""
+    m = re.search(
+        r"(?:allowed|received|after)\s+(?:rs\.?|\u20b9|inr)?\s*"
+        r"(\d[\d,]*(?:\.\d+)?)\s+cash\s+discount\b", low)
+    if not m:
+        return None
+    after = low[m.end():m.end() + 2]
+    if after.lstrip().startswith("%"):
+        return None
+    try:
+        return Decimal(m.group(1).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _gst_trade_discount(text: str) -> Optional[Tuple[Decimal, str]]:
+    """(td_amount, kind) from EXPLICIT trade-discount evidence, or None.
+    Only 'trade discount' (or the unambiguous 'TD' abbreviation) qualifies
+    with GST; a bare or cash discount is a settlement concept and never
+    nets the taxable value. Returns None when the discount cannot be read
+    deterministically - the caller then refuses (never guesses)."""
+    low = " " + str(text or "").lower() + " "
+    if "trade discount" not in low and not re.search(r"\btd\b", low):
+        return None
+    m_r = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:%|percent)\s*(?:trade\s+discount|td)\b",
+        low)
+    if m_r:
+        try:
+            rate = Decimal(m_r.group(1))
+        except (InvalidOperation, ValueError):
+            rate = None
+        if rate is not None and 0 < rate <= Decimal(100):
+            return (rate, "rate")
+        return None
+    m_a = re.search(
+        r"less\s+(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)"
+        r"\s+(?:trade\s+discount|td)\b", low)
+    if m_a is None:
+        m_a = re.search(
+            r"(?:trade\s+discount|td)\s+(?:of\s+)?"
+            r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)",
+            low)
+    if m_a:
+        try:
+            return (Decimal(m_a.group(1).replace(",", "")), "amount")
+        except (InvalidOperation, ValueError):
+            return None
+    return None
+
+
+# Sprint 15I-L: a PURE settlement ('Received Rs.X from <party>',
+# 'Paid <party> Rs.X') carries no transaction value of its own - a
+# stated cash-discount rate there has no amount due to apply to and
+# must refuse rather than relabel the settlement figure. The amount
+# can sit between the verb and the direction word ('Received Rs.9,800
+# from Ram', 'Paid him Rs.9,800'), so the relationship is tested
+# structurally, never as a contiguous phrase.
+
+
+def _rate_is_paid_based(low: str, rate: Decimal) -> bool:
+    """True when the rate token is followed by 'on the (amount) paid'
+    / 'on the paid amount' - the rate applies to the PAID figure itself
+    (gross), never to an amount due. Read from the full text window
+    after the token (the 24-char rate label truncates the phrase).
+    """
+    for m in _PERCENT_TOKEN.finditer(low):
+        try:
+            if Decimal(m.group(1)) == rate:
+                after = low[m.end():m.end() + 60]
+                if re.search(r"on\s+(?:the\s+)?(?:amount\s+paid|"
+                             r"paid\s+amount|amount)\b", after):
+                    return True
+        except (InvalidOperation, ValueError):
+            continue
+    for m in _WORD_PERCENT_TOKEN.finditer(low):
+        try:
+            if Decimal(m.group(1)) == rate:
+                after = low[m.end():m.end() + 60]
+                if re.search(r"on\s+(?:the\s+)?(?:amount\s+paid|"
+                             r"paid\s+amount|amount)\b", after):
+                    return True
+        except (InvalidOperation, ValueError):
+            continue
+    return False
+_SETTLEMENT_VALUE_RE = re.compile(
+    r"\b(?:goods|stock|purchased|purchase|purchases|bought|sold|sale|"
+    r"wages|rent|salary|electricity|telephone|stationery|carriage|"
+    r"postage|commission|insurance|interest|machinery|furniture|"
+    r"equipment|computer|vehicle|building|drawings|loan)\b")
+
+
+def _settlement_only_text(low: str) -> bool:
+    """True when the text is a settlement with no transaction value."""
+    if _SETTLEMENT_VALUE_RE.search(low):
+        return False
+    received = (re.search(r"\breceived\b", low)
+                and re.search(r"\bfrom\b", low))
+    paid = (re.search(r"\bpaid\b", low)
+            and re.search(r"\b(?:to|him|her|them)\b", low))
+    return bool(received or paid)
+
 
 def _detect_explicit_discount(question: str,
                               amounts: List[Decimal])\
@@ -1495,7 +1659,15 @@ def _detect_explicit_discount(question: str,
     received = "discount received" in low or "received discount" in low
     settlement_only = ("full settlement" in low or "settlement of" in low
                        or "in settlement of" in low or "account of" in low)
-    if not (allowed or received or settlement_only) or len(amounts) < 2:
+    # Sprint 15I-L: an explicit CASH-discount AMOUNT can appear BEFORE
+    # the 'cash discount' noun ('allowed Rs.500 cash discount', 'received
+    # Rs.500 cash discount', 'after Rs.500 cash discount') - the same
+    # explicit-settlement evidence as the post-noun forms.
+    _cash_discount_before = re.search(
+        r"(?:allowed|received|after)\s+(?:rs\.?|\u20b9|inr)?\s*"
+        r"(\d[\d,]*(?:\.\d+)?)\s+cash\s+discount\b", low)
+    if not (allowed or received or settlement_only
+            or _cash_discount_before) or len(amounts) < 2:
         return None
     kind = "allowed" if allowed else ("received" if received else None)
     if kind is None and settlement_only:
@@ -1506,6 +1678,23 @@ def _detect_explicit_discount(question: str,
             kind = "allowed"
         elif "paid" in low:
             kind = "received"
+    if kind is None and _cash_discount_before:
+        # Sprint 15I-L before-noun direction (deterministic):
+        #   * 'paid ... and received ... cash discount' -> the supplier
+        #     granted us the discount (Discount Received);
+        #   * 'Received X from <party> after ... cash discount' -> the
+        #     debtor settled at a discount (Discount Allowed);
+        #   * 'Paid <party> ... after ... cash discount' -> supplier
+        #     discount (Discount Received);
+        #   * 'allowed ... cash discount' -> Discount Allowed.
+        if "paid" in low and "received" in low:
+            kind = "received"
+        elif "received" in low and "from " in low and "paid" not in low:
+            kind = "allowed"
+        elif "paid" in low and "to " in low:
+            kind = "received"
+        elif "allowed" in low:
+            kind = "allowed"
     if kind is None:
         return None
 
@@ -1549,6 +1738,16 @@ def _detect_explicit_discount(question: str,
                         m_span.group(1).replace(",", ""))
                 except (InvalidOperation, ValueError):
                     discount_amount = None
+    if discount_amount is None and _cash_discount_before:
+        # Sprint 15I-L: amount BEFORE the 'cash discount' noun ('allowed
+        # Rs.500 cash discount', 'after Rs.500 cash discount').
+        after = low[_cash_discount_before.end():_cash_discount_before.end() + 2]
+        if not after.lstrip().startswith("%"):
+            try:
+                discount_amount = Decimal(
+                    _cash_discount_before.group(1).replace(",", ""))
+            except (InvalidOperation, ValueError):
+                discount_amount = None
     party_total = None
     for ph in _SETTLEMENT_PHRASES:
         v = _amount_after(ph)
@@ -1638,7 +1837,11 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     # -- Trade discount ---------------------------------------------------
     # A '<n>%' token whose surrounding text says 'trade' (or says
     # 'discount' without saying 'cash') is a TRADE discount - it is
-    # deducted from the list price BEFORE the amount is posted.
+    # deducted from the list price BEFORE the amount is posted. Sprint
+    # 15I-L: 'less 10%' names a trade discount too; a rate on the
+    # SETTLEMENT side ('after allowing 10% discount', 'after receiving
+    # 5% discount', 'discount allowed at settlement') is a CASH discount
+    # and is never read as a trade discount.
     trade_rate: Optional[Decimal] = None
     for rate, label in percents:
         if "trade" in label:
@@ -1646,7 +1849,9 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             break
     if trade_rate is None:
         for rate, label in percents:
-            if "discount" in label and "cash discount" not in label:
+            if ("discount" in label or "less" in label) \
+                    and "cash discount" not in label \
+                    and not _CD_RATE_HINTS.search(label):
                 trade_rate = rate
                 break
     trade_amount = None
@@ -1661,8 +1866,61 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                        "trade_discount_rate": trade_rate},
             "result": trade_amount,
         })
+    # Sprint 15I-L: an explicit TRADE-discount AMOUNT ('less Rs.2,000
+    # trade discount', 'less Rs.2,000 TD', 'trade discount of Rs.2,000')
+    # nets the list price the same way as a rate and is NEVER recorded as
+    # a separate account. It only applies when the question names 'trade
+    # discount' (or the unambiguous 'TD' abbreviation) explicitly.
+    if trade_amount is None and re.search(
+            r"\btrade\s+discount\b|\btd\b", low):
+        m_td = re.search(
+            r"less\s+(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)"
+            r"\s+(?:trade\s+discount|td)\b", low)
+        if m_td is None:
+            m_td = re.search(
+                r"(?:trade\s+discount|td)\s+(?:of\s+)?"
+                r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)",
+                low)
+        if m_td is not None:
+            after = low[m_td.end():m_td.end() + 2]
+            if after.lstrip().startswith("%"):
+                m_td = None
+        if m_td is not None:
+            try:
+                td_amt = Decimal(m_td.group(1).replace(",", ""))
+            except (InvalidOperation, ValueError):
+                td_amt = None
+            if td_amt is not None and 0 < td_amt < list_price:
+                trade_amount = td_amt
+                steps.append({
+                    "calculation_id": "BK_TRADE_DISCOUNT_AMOUNT",
+                    "label": "Deduct Trade Discount",
+                    "formula": "Trade discount amount from the question",
+                    "inputs": {"list_price": list_price,
+                               "trade_discount_amount": td_amt},
+                    "result": td_amt,
+                })
+            elif td_amt is not None:
+                # impossible discount: the refusal below fires, never a
+                # negative journal.
+                trade_amount = td_amt
     net_value = list_price - trade_amount if trade_amount is not None \
         else list_price
+    if trade_amount is not None and (trade_amount <= 0
+                                     or trade_amount >= list_price):
+        return {
+            "status": REVIEW_REQUIRED, "steps": steps,
+            "list_price": list_price, "trade_discount_rate": trade_rate,
+            "trade_discount_amount": trade_amount, "net_value": None,
+            "paid_amount": None, "credit_amount": None,
+            "cash_discount_rate": None, "cash_discount_amount": None,
+            "cash_paid": None, "explicit_discount": None,
+            "concerns": concerns,
+            "why_not": ("The stated trade discount is impossible (it is not "
+                        "positive and smaller than the list price). FT-E "
+                        "never records it."),
+            "next_action": "Re-check the discount amount or rate.",
+        }
     steps.append({
         "calculation_id": "BK_NET_TRANSACTION_VALUE",
         "label": "Net Transaction Value",
@@ -1678,17 +1936,49 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     # discount rows instead.
     explicit_discount = _detect_explicit_discount(question, amounts)
 
+    # Sprint 15I-L: the stated CASH-discount AMOUNT ('discount allowed
+    # Rs.200', 'received Rs.500 cash discount') is a settlement figure -
+    # the naive paid-split must never read it as the paid amount. When a
+    # discount is mentioned but its amount cannot be read, the split is
+    # refused instead of silently dropping the discount.
+    cash_discount_amt: Optional[Decimal] = None
+    if explicit_discount is not None:
+        cash_discount_amt = explicit_discount["discount_amount"]
+    elif _cash_discount_amt_in(low) is not None:
+        cash_discount_amt = _cash_discount_amt_in(low)
+
     # -- paid vs credit split --------------------------------------------
     paid_amount: Optional[Decimal] = None
     credit_amount: Optional[Decimal] = None
+    # Sprint 15I-L: a settlement figure EXPLICITLY STATED in the
+    # question ('paid Rs.9,800', 'Received Rs.9,800 from Ram') is NET
+    # evidence - a cash-discount rate must apply to the amount due,
+    # never to the stated figure itself.
+    paid_stated = False
     if explicit_discount is None:
         explicit_paid = None
-        # an explicit paid amount ('paid Rs.4,000 immediately')
-        if len(amounts) >= 2 and ("paid" in low or "immediately" in low):
-            explicit_paid = amounts[-1]
+        # an explicit paid amount ('paid Rs.4,000 immediately'); a
+        # RECEIPT counts as a stated settlement only when it carries a
+        # resolvable discount amount or a settlement-side discount rate
+        # ('Received Rs.9,800 from Ram, after allowing 2% cash
+        # discount') - a plain receipt inside a multi-transaction text
+        # must never be merged into the previous transaction's amounts
+        # (Sprint 15I-L).
+        _received_settlement = ("received" in low
+                                and (cash_discount_amt is not None
+                                     or any(_CD_RATE_HINTS.search(label)
+                                            for _, label in percents)))
+        if len(amounts) >= 2 and ("paid" in low or "immediately" in low
+                                  or _received_settlement):
+            _paid_candidates = [a for a in amounts
+                                if cash_discount_amt is None
+                                or a != cash_discount_amt]
+            explicit_paid = (_paid_candidates[-1] if _paid_candidates
+                             else amounts[-1])
         fraction = _paid_fraction(question)
         if explicit_paid is not None and explicit_paid < net_value:
             paid_amount = explicit_paid
+            paid_stated = True
         elif fraction is not None:
             paid_amount = (net_value * fraction / Decimal(100)).quantize(
                 Decimal("0.01"))
@@ -1705,39 +1995,157 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                            "paid_amount": paid_amount},
                 "result": {"paid": paid_amount, "credit": credit_amount},
             })
+        # Sprint 15I-L: a discount WORD whose amount/rate cannot be read is
+        # missing required information - refuse instead of silently
+        # dropping the discount from the journal. Fires only when several
+        # figures are present (a single amount cannot hide a discount) and
+        # no discount amount or rate was resolvable.
+        if ("discount" in low and len(amounts) >= 2
+                and cash_discount_amt is None
+                and trade_amount is None
+                and not any("discount" in label for _, label in percents)
+                and re.search(
+                    r"\b(?:cash\s+)?discount\s+(?:allowed|received|of)\b"
+                    # a readable amount right after the discount word means
+                    # the discount IS resolvable ('discount allowed Rs.200')
+                    # - nothing is being silently dropped (Sprint 15I-L).
+                    r"(?!\s*(?:rs\.?|\u20b9|inr|\d))"
+                    r"|\b(?:allowed|received)\s+discount\b"
+                    r"(?!\s*(?:rs\.?|\u20b9|inr|\d))",
+                    low)):
+            concerns.append(
+                "A discount is mentioned but its amount cannot be read "
+                "deterministically. FT-E never silently drops it.")
 
     # -- Cash discount (paid portion only) --------------------------------
     cash_discount_rate: Optional[Decimal] = None
-    # ONLY a literal 'cash discount' phrase is a cash discount. A trade
+    # ONLY a literal 'cash discount' phrase (or an explicit settlement-side
+    # rate: 'after allowing 10% discount', 'after receiving 5% discount',
+    # 'discount allowed on the amount paid') is a cash discount. A trade
     # discount (or a plain 'discount' that is not cash) only nets the list
     # price and is never recorded as a cash discount - so 'for cash ... with
     # 10% trade discount' must NOT produce a cash-discount line.
+    cd_rate_label: Optional[str] = None
     for rate, label in percents:
-        if "cash discount" in label:
+        if "cash discount" in label or _CD_RATE_HINTS.search(label):
             cash_discount_rate = rate
+            cd_rate_label = label
             break
     cash_discount_amount = None
     cash_paid = paid_amount
     if cash_discount_rate is not None and paid_amount is not None:
-        cash_discount_amount = (paid_amount * cash_discount_rate
-                                / Decimal(100)).quantize(Decimal("0.01"))
-        cash_paid = paid_amount - cash_discount_amount
-        steps.append({
-            "calculation_id": "BK_CASH_DISCOUNT_AMOUNT",
-            "label": "Apply Cash Discount (paid portion only)",
-            "formula": "Cash discount = Paid x Cash discount %",
-            "inputs": {"paid_amount": paid_amount,
-                       "cash_discount_rate": cash_discount_rate},
-            "result": cash_discount_amount,
-        })
-        steps.append({
-            "calculation_id": "BK_CASH_PAID_NET",
-            "label": "Net cash paid",
-            "formula": "Cash paid = Paid - Cash discount",
-            "inputs": {"paid_amount": paid_amount,
-                       "cash_discount": cash_discount_amount},
-            "result": cash_paid,
-        })
+        # 'on the (amount) paid' / 'on the paid amount' anchors the rate
+        # to the PAID figure itself (gross): the discount is computed on
+        # that payment ('paid him Rs.3,000 immediately and 2% cash
+        # discount on the paid amount' -> 2% of 3,000 = 60), never
+        # reconciled against the transaction value (Sprint 15I-L).
+        paid_based_rate = _rate_is_paid_based(low, cash_discount_rate)
+        if _settlement_only_text(low) and explicit_discount is None \
+                and not paid_based_rate:
+            # a pure receipt/payment with a discount rate but NO stated
+            # amount due ('Received Rs.9,800 from Ram, after allowing 2%
+            # cash discount' with no 'his account of') - applying the
+            # rate to the settlement figure itself would silently invent
+            # a new cash amount, so it refuses (Sprint 15I-L).
+            concerns.append(
+                "A cash discount rate is stated but the amount due is not "
+                "given. FT-E never applies a discount rate to the "
+                "settlement figure itself.")
+        elif paid_stated and not paid_based_rate:
+            # the stated cash/paid figure is the NET settlement; the
+            # rate applies to the amount due (party total from the
+            # merged transaction value or an explicit settlement
+            # phrase). A non-reconciling combination is contradictory
+            # and refuses (never a guessed discount).
+            base = (explicit_discount["party_total"]
+                    if explicit_discount is not None else net_value)
+            expected_discount = (base * cash_discount_rate
+                                 / Decimal(100)).quantize(
+                                     Decimal("0.01"))
+            expected_cash = base - expected_discount
+            if expected_cash == paid_amount:
+                cash_discount_amount = expected_discount
+                cash_paid = paid_amount
+                if credit_amount is not None:
+                    credit_amount = max(Decimal(0), credit_amount
+                                        - expected_discount)
+                steps.append({
+                    "calculation_id": "BK_CASH_DISCOUNT_AMOUNT",
+                    "label": "Apply Cash Discount (settlement rate)",
+                    "formula": "Cash discount = Amount due x rate",
+                    "inputs": {"amount_due": base,
+                               "cash_discount_rate": cash_discount_rate,
+                               "stated_cash": paid_amount},
+                    "result": expected_discount,
+                })
+            else:
+                concerns.append(
+                    "The stated cash figure does not reconcile with the "
+                    "stated discount rate on the amount due. FT-E never "
+                    "applies the rate to the cash figure itself.")
+        else:
+            # a payment DERIVED from the question ('paid half
+            # immediately with 2% cash discount', or a full-cash
+            # transaction value 'Sold goods for cash Rs.10,000, discount
+            # allowed 2%') has no separate stated net - the rate applies
+            # to the derived payment/value.
+            cash_discount_amount = (paid_amount * cash_discount_rate
+                                    / Decimal(100)).quantize(
+                                        Decimal("0.01"))
+            cash_paid = paid_amount - cash_discount_amount
+            steps.append({
+                "calculation_id": "BK_CASH_DISCOUNT_AMOUNT",
+                "label": "Apply Cash Discount (paid portion only)",
+                "formula": "Cash discount = Paid x Cash discount %",
+                "inputs": {"paid_amount": paid_amount,
+                           "cash_discount_rate": cash_discount_rate},
+                "result": cash_discount_amount,
+            })
+            steps.append({
+                "calculation_id": "BK_CASH_PAID_NET",
+                "label": "Net cash paid",
+                "formula": "Cash paid = Paid - Cash discount",
+                "inputs": {"paid_amount": paid_amount,
+                           "cash_discount": cash_discount_amount},
+                "result": cash_paid,
+            })
+    # Sprint 15I-L: an amount-based cash discount from a merged
+    # settlement step ('Purchased goods from Rahul ... Paid him Rs.9,500
+    # and received Rs.500 cash discount'): the stated cash figure is the
+    # net cash out, the stated discount is the discount - the gross
+    # amount settled is cash + discount and the credit remainder shrinks
+    # by the discount. A combination that exceeds the transaction value
+    # is contradictory and refuses (never an invented discount).
+    elif (cash_discount_amt is not None and paid_amount is not None
+          and cash_discount_amount is None):
+        if paid_amount + cash_discount_amt > net_value:
+            concerns.append(
+                "The cash amount and the cash discount together exceed the "
+                "transaction value. FT-E never records them.")
+        else:
+            cash_discount_amount = cash_discount_amt
+            cash_paid = paid_amount
+            if credit_amount is not None:
+                credit_amount = max(Decimal(0), credit_amount
+                                    - cash_discount_amt)
+            steps.append({
+                "calculation_id": "BK_CASH_DISCOUNT_AMOUNT",
+                "label": "Apply Cash Discount (stated amount)",
+                "formula": "Cash discount from the question",
+                "inputs": {"paid_amount": paid_amount,
+                           "cash_discount_amount": cash_discount_amt},
+                "result": cash_discount_amt,
+            })
+
+    # Sprint 15I-L: a cash-discount rate without a payment step has
+    # nothing to apply it to ('allowed 5% cash discount at settlement'
+    # with no payment amount) - the discount is ambiguous and must not be
+    # silently dropped or guessed.
+    if cash_discount_rate is not None and paid_amount is None:
+        concerns.append(
+            "A cash discount is stated but no payment amount is given to "
+            "apply it to. FT-E never applies a discount without a "
+            "settlement step.")
 
     status = VERIFIED
     why_not = None
@@ -1757,6 +2165,20 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                        "discount": explicit_discount["discount_amount"]},
             "result": explicit_discount["party_total"],
         })
+        # Sprint 15I-L: expose the settlement numbers so a PURCHASE whose
+        # settlement step carried the discount ('Purchased goods from Rahul
+        # ... Paid him Rs.9,500 and received Rs.500 cash discount') can post
+        # the COMPOUND journal (Purchases Dr net / Cash Cr cash + Discount
+        # Received Cr discount [+ party Cr remainder]) instead of a
+        # settlement-only entry that would drop the purchase account. The
+        # remainder is the un-settled credit balance; a negative remainder
+        # means the numbers do not describe this transaction's settlement
+        # and the explicit path (not the compound path) stays authoritative.
+        paid_amount = explicit_discount["cash_amount"]
+        cash_discount_amount = explicit_discount["discount_amount"]
+        cash_paid = explicit_discount["cash_amount"]
+        remainder = net_value - paid_amount - cash_discount_amount
+        credit_amount = remainder if remainder > 0 else None
 
     return {
         "status": status, "steps": steps, "list_price": list_price,
@@ -2194,11 +2616,18 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     is_credit = any(isinstance(s, dict) and "party" in s
                     for s in (credit_specs if not is_sale else debit_specs))
 
-    # -- GST + discount is 15I-L scope -------------------------------------
-    if "discount" in low:
+    # -- GST + discount ----------------------------------------------------
+    # Sprint 15I-L: TRADE discount is deterministic with GST - the taxable
+    # value is the list price LESS the trade discount, and GST is computed
+    # on that net value (trade discount is never a separate journal line).
+    # A CASH discount / settlement discount (or a bare 'discount') is a
+    # settlement fact, not an invoice fact - FT-E never folds it into a GST
+    # journal (sprint rule 10) and refuses instead of guessing.
+    _gst_td = _gst_trade_discount(text)
+    if _gst_td is None and "discount" in low:
         return _refuse(
-            "A transaction combining GST with a trade/cash discount is "
-            "outside the verified 15I-K surface. FT-E never applies both "
+            "A transaction combining GST with a cash/settlement discount is "
+            "outside the verified GST surface. FT-E never applies both "
             "treatments on its own.",
             "Enter the GST transaction and the discount settlement as "
             "separate steps.")
@@ -2349,12 +2778,36 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             "transaction).",
             "Enter the single transaction amount; enter a partial payment "
             "as a separate step.")
-    stated = unlabeled[0]
-    if stated <= 0:
+    list_price = unlabeled[0]
+    if list_price <= 0:
         return _refuse(
             "The stated amount must be positive. FT-E never records a "
             "zero or negative transaction.",
             "Enter the correct positive amount.")
+    # Sprint 15I-L: trade discount nets the taxable value BEFORE GST. The
+    # inclusive/exclusive mode then applies to the POST-trade-discount
+    # amount (the invoice value is the discounted price).
+    stated = list_price
+    _gst_steps: List[Dict[str, Any]] = []
+    if _gst_td is not None:
+        td_amount, td_kind = _gst_td
+        if td_kind == "rate":
+            td_amount = (list_price * td_amount / Decimal(100)).quantize(
+                Decimal("0.01"))
+        if td_amount <= 0 or td_amount >= list_price:
+            return _refuse(
+                "The stated trade discount is impossible (not positive and "
+                "smaller than the list price). FT-E never records it.",
+                "Re-check the discount amount or rate.")
+        stated = list_price - td_amount
+        _gst_steps.append({
+            "calculation_id": "BK_GST_TRADE_DISCOUNT",
+            "label": "Trade discount nets the taxable value",
+            "formula": "Taxable value = List price - Trade discount",
+            "inputs": {"list_price": list_price,
+                       "trade_discount": td_amount},
+            "result": stated,
+        })
 
     comp_amt: Dict[str, Decimal] = dict(facts["comp_amounts"])
     if scheme == "IGST":
@@ -2527,7 +2980,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     total_debit = sum((l["amount"] for l in debit_lines), Decimal(0))
     total_credit = sum((l["amount"] for l in credit_lines), Decimal(0))
 
-    steps: List[Dict[str, Any]] = []
+    steps: List[Dict[str, Any]] = list(_gst_steps)
     if total_rate is not None:
         steps.append({
             "calculation_id": "BK_GST_RATE",
@@ -2607,6 +3060,103 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def discount_evidence(raw: str) -> Dict[str, Any]:
+    """Deterministic discount metadata for the content compiler (15I-L
+    section 16). Every field derives ONLY from explicit question wording;
+    a field that cannot be established deterministically is UNKNOWN - never
+    guessed. Returns {trade_discount, cash_discount, discount_percentage,
+    discount_amount, gross_amount, net_amount, settlement_amount}."""
+    unk = "UNKNOWN"
+    text = str(raw or "").strip()
+    if not text:
+        return {"trade_discount": unk, "cash_discount": unk,
+                "discount_percentage": unk, "discount_amount": unk,
+                "gross_amount": unk, "net_amount": unk,
+                "settlement_amount": unk}
+    low = " " + text.lower() + " "
+    if "discount" not in low and not re.search(r"\btd\b", low):
+        return {"trade_discount": "NONE", "cash_discount": "NONE",
+                "discount_percentage": unk, "discount_amount": unk,
+                "gross_amount": unk, "net_amount": unk,
+                "settlement_amount": unk}
+    has_trade = "trade discount" in low or bool(re.search(r"\btd\b", low))
+    has_cash = ("cash discount" in low or "discount allowed" in low
+                or "discount received" in low or "allowed discount" in low
+                or "received discount" in low)
+    out = {
+        "trade_discount": "YES" if has_trade else "NO",
+        "cash_discount": "YES" if has_cash else "NO",
+        "discount_percentage": unk,
+        "discount_amount": unk,
+        "gross_amount": unk,
+        "net_amount": unk,
+        "settlement_amount": unk,
+    }
+    for rate, label in _extract_percents(text):
+        if "discount" in label or re.search(r"\btd\b", label):
+            out["discount_percentage"] = rate
+            break
+    if has_trade:
+        m_td = re.search(
+            r"less\s+(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)"
+            r"\s+(?:trade\s+discount|td)\b", low)
+        if m_td is None:
+            m_td = re.search(
+                r"(?:trade\s+discount|td)\s+(?:of\s+)?"
+                r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)",
+                low)
+        if m_td:
+            try:
+                out["discount_amount"] = Decimal(
+                    m_td.group(1).replace(",", ""))
+            except (InvalidOperation, ValueError):
+                pass
+    elif has_cash and not has_trade:
+        # the amount must be anchored to the word 'discount': either
+        # directly AFTER it ('discount allowed Rs.200', 'discount of
+        # Rs.200', 'discount received Rs.200') or directly BEFORE it
+        # ('allowed Rs.500 cash discount', 'received Rs.500 discount').
+        # 'Received Rs.9,500 from him' is a receipt, never a discount
+        # amount - the cash figure is never misread as discount metadata
+        # (Sprint 15I-L).
+        m_cd = re.search(
+            r"discount\s+(?:of\s+|allowed\s+|received\s+)?"
+            r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)",
+            low)
+        if m_cd is None:
+            m_cd = re.search(
+                r"(?:allowed|received|after)\s+"
+                r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)"
+                r"\s+(?:cash\s+)?discount\b",
+                low)
+        if m_cd:
+            after = low[m_cd.end():m_cd.end() + 2]
+            if not after.lstrip().startswith("%"):
+                try:
+                    out["discount_amount"] = Decimal(
+                        m_cd.group(1).replace(",", ""))
+                except (InvalidOperation, ValueError):
+                    pass
+    res = resolve_transaction_amounts(text)
+    if res.get("status") == VERIFIED:
+        if res.get("list_price") is not None:
+            out["gross_amount"] = res["list_price"]
+        if res.get("net_value") is not None:
+            out["net_amount"] = res["net_value"]
+        if res.get("explicit_discount") is not None:
+            out["settlement_amount"] = res["explicit_discount"]["party_total"]
+        elif (res.get("paid_amount") is not None
+              and res.get("cash_discount_amount") is not None):
+            # the party's full settlement = cash settled + the cash
+            # discount allowed/received (Sprint 15I-L).
+            out["settlement_amount"] = (res["paid_amount"]
+                                        + res["cash_discount_amount"])
+        elif res.get("cash_paid") is not None:
+            out["settlement_amount"] = res["cash_paid"]
+
+    return out
+
+
 def generate_journal(question: str) -> Dict[str, Any]:
     """The deterministic journal entry for ONE transaction description.
 
@@ -2647,6 +3197,14 @@ def generate_journal(question: str) -> Dict[str, Any]:
             or ("% " in low_check)
             or ("received " in low_check
                 and "discount received" not in low_check)
+            # Sprint 15I-L: a TRADE discount on a goods purchase/sale with
+            # an explicit mode ('for cash' / 'on credit') is a full
+            # transaction, not a standalone discount entry - the amount-TD
+            # and word-percent forms carry no '%' token and must not trip
+            # the standalone-discount guard.
+            or ("trade discount" in low_check
+                and "goods" in low_check
+                and ("for cash" in low_check or "credit" in low_check))
         )
         if not _has_settlement_context:
             return {
@@ -2772,6 +3330,10 @@ def generate_journal(question: str) -> Dict[str, Any]:
                     "CAPITAL_ASSET_INTRODUCED", "EXPENSE",
                     "INTEREST_ON_CAPITAL"))
     sale = "SALE" in pattern["key"]
+    # Sprint 15I-L: a RECEIPT from a debtor is the settlement direction
+    # that is the mirror of a payment - the business receives cash and
+    # ALLOWS the discount, never Discount Received.
+    receipt = pattern["key"] == "RECEIVED_FROM"
     split = (credit_portion is not None and credit_portion > 0) \
         or (cash_discount is not None and cash_discount > 0)
 
@@ -2797,7 +3359,19 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "calculation_records": amounts.get("steps") or [],
             "total_debit": 0, "total_credit": 0, "balanced": True,
         }
-    if explicit is not None:
+    # Sprint 15I-L: a PURCHASE carrying an explicit discount amount from a
+    # merged settlement step posts the COMPOUND journal through the split
+    # machinery below - never a settlement-only entry that would drop the
+    # purchase account. The compound form is used ONLY when the settlement
+    # numbers reconcile exactly with the purchase value (net == cash +
+    # discount + remainder); any other combination keeps the explicit path.
+    compound_explicit = bool(
+        explicit is not None and purchase and not sale
+        and amounts.get("paid_amount") is not None
+        and amounts.get("cash_discount_amount") is not None
+        and net == (amounts["paid_amount"] + amounts["cash_discount_amount"]
+                    + (amounts.get("credit_amount") or Decimal(0))))
+    if explicit is not None and not compound_explicit:
         cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
         if explicit["kind"] == "allowed":
             party = (_resolve_bk_spec({"party": "giver"}, text, "giver")
@@ -2858,6 +3432,19 @@ def generate_journal(question: str) -> Dict[str, Any]:
             if cash_discount is not None and cash_discount > 0:
                 debit_lines.append(_line("Discount Allowed", cash_discount,
                                          "debit"))
+        elif receipt and split and cash_discount is not None \
+                and cash_discount > 0:
+            # a debtor settling with a cash discount: the business
+            # RECEIVES the net cash and ALLOWS the discount. A partial
+            # receipt combined with a cash discount is ambiguous (the
+            # receivable remainder must survive) and refuses instead of
+            # guessing (Sprint 15I-L).
+            if credit_portion is None or credit_portion <= 0:
+                cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
+                if cash_paid is not None and cash_paid > 0:
+                    debit_lines.append(_line(cash_acct, cash_paid, "debit"))
+                debit_lines.append(_line("Discount Allowed", cash_discount,
+                                         "debit"))
         else:
             for account in _resolve_side_specs(debit_specs, text,
                                                "receiver"):
@@ -2867,6 +3454,16 @@ def generate_journal(question: str) -> Dict[str, Any]:
         if sale:
             for account in _resolve_side_specs(credit_specs, text, "giver"):
                 credit_lines.append(_line(account, net, "credit"))
+        elif receipt and split and cash_discount is not None \
+                and cash_discount > 0 \
+                and (credit_portion is None or credit_portion <= 0):
+            # the debtor's account is settled for the gross amount
+            # (net cash received + the discount allowed).
+            party = (_resolve_bk_spec({"party": "giver"}, text, "giver")
+                     or _resolve_bk_spec({"party": "receiver"}, text,
+                                         "receiver"))
+            if party:
+                credit_lines.append(_line(party, net, "credit"))
         elif split:
             cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
             if cash_paid is not None and cash_paid > 0:
