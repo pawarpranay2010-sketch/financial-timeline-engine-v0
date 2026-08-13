@@ -136,6 +136,11 @@ _TRADITIONAL_OVERRIDES: Dict[str, str] = {
     "Postage": CLASS_NOMINAL, "Stationery": CLASS_NOMINAL,
     "Audit Fees": CLASS_NOMINAL, "Legal Fees": CLASS_NOMINAL,
     "Fuel": CLASS_NOMINAL, "Income Tax": CLASS_NOMINAL,
+    # Sprint 15I-J: expense accounts added with the synonym vocabulary -
+    # a single Capitalised word is otherwise read as a PERSONAL account
+    # ("Conveyance" would become a party). Nominal, like every expense.
+    "Conveyance": CLASS_NOMINAL, "Printing": CLASS_NOMINAL,
+    "Telephone Expenses": CLASS_NOMINAL,
     "Loss on Sale of Asset": CLASS_NOMINAL, "Profit on Sale of Asset":
         CLASS_NOMINAL, "Dividend Received": CLASS_NOMINAL,
     "Sales Returns": CLASS_NOMINAL, "Returns Inward": CLASS_NOMINAL,
@@ -462,6 +467,21 @@ BK_PATTERNS: List[Dict[str, Any]] = [
                  "insurance paid", "purchased stationery",
                  "bought stationery", "stationery purchased",
                  "paid telephone", "telephone bill paid",
+                 # Sprint 15I-J synonym + misspelling coverage - each
+                 # entry resolves through _EXPENSE_ACCOUNT_WORDS to the
+                 # ONE canonical expense account it names.
+                 "paid conveyance", "paid conveyance charges",
+                 "paid conveyance expenses",
+                 "paid transport", "paid transportation",
+                 "paid travelling expenses", "paid travel expenses",
+                 "paid transport charges", "paid transport expenses",
+                 "paid printing", "paid printing charges",
+                 "paid mobile", "paid mobile bill", "paid phone",
+                 "paid phone bill", "paid telephone charges",
+                 "paid telephone expenses",
+                 "paid electrisity", "paid sallery", "paid salery",
+                 "paid stionary", "paid telefone", "paid telphone",
+                 "paid convayance", "paid convayence",
                  # 'Paid for stationery in cash Rs.500' / 'Paid for repairs'
                  # - the expense word follows 'paid for' (Sprint 15E)
                  "paid for ",
@@ -482,7 +502,10 @@ BK_PATTERNS: List[Dict[str, Any]] = [
     {
         "key": "PAID_TO",
         "label": "Payment to a party",
-        "when": ("paid to", "paid cash to", "paid ... to"),
+        "when": ("paid to", "paid cash to", "paid ... to",
+                 # Sprint 15I-J: 'gave' wordings are student cash
+                 # payments to a party, not receipts.
+                 "gave cash to", "gave money to", "gave ... to"),
         "debit": [{"party": "giver"}], "credit": ["Cash", "Bank"],
     },
     {
@@ -638,6 +661,40 @@ _EXPENSE_ACCOUNT_WORDS: List[Tuple[str, str]] = [
     ("income tax", "Income Tax"), ("fuel", "Fuel"),
     ("telephone", "Telephone Expenses"), ("telephone bill",
                                               "Telephone Expenses"),
+    # Sprint 15I-J synonym layer (longest phrase first within each family;
+    # each entry has one explicit accounting meaning, pinned by the 15J
+    # coverage matrix - never a blind mapping).
+    ("transport charges", "Conveyance"),
+    ("transport expenses", "Conveyance"),
+    ("transportation", "Conveyance"),
+    ("transport", "Conveyance"),
+    ("conveyance charges", "Conveyance"),
+    ("conveyance expenses", "Conveyance"),
+    ("conveyance", "Conveyance"),
+    ("travelling expenses", "Conveyance"),
+    ("travel expenses", "Conveyance"),
+    ("travelling", "Conveyance"),
+    ("travel", "Conveyance"),
+    ("printing charges", "Printing"),
+    ("printing expenses", "Printing"),
+    ("printing", "Printing"),
+    ("mobile bill", "Telephone Expenses"),
+    ("mobile charges", "Telephone Expenses"),
+    ("mobile", "Telephone Expenses"),
+    ("phone bill", "Telephone Expenses"),
+    ("phone", "Telephone Expenses"),
+    ("telephone charges", "Telephone Expenses"),
+    ("telephone expenses", "Telephone Expenses"),
+    # Sprint 15I-J common student misspellings (exact-token only, with
+    # an explicit account meaning - never fuzzy matching).
+    ("electrisity", "Electricity"),
+    ("sallery", "Salaries"),
+    ("salery", "Salaries"),
+    ("stionary", "Stationery"),
+    ("telefone", "Telephone Expenses"),
+    ("telphone", "Telephone Expenses"),
+    ("convayance", "Conveyance"),
+    ("convayence", "Conveyance"),
 ]
 _INCOME_ACCOUNT_WORDS: List[Tuple[str, str]] = [
     ("commission", "Commission Received"), ("interest", "Interest Received"),
@@ -845,10 +902,19 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # after ANY prior journal, so a sale/other head + own-identity tail
     # ('Sold goods to Ram on credit Rs.12,000. Was paid Rs.5,000.') must
     # be refused the same way (Sprint 15I-D adversarial finding).
+    # Sprint 15I-J: bullets (\u2022 etc.) and a Capital-letter-joined 'and'
+    # ('Sold goods to Ram Rs.12,000 and Mohan was paid Rs.5,000.') are
+    # ALSO compound separators - without them the tail's own identity
+    # would be silently absorbed into the head transaction (a confident
+    # wrong journal). Lower-case 'and' joins ('cash and furniture') never
+    # split. Any part after the first is checked, so a 3+ part compound
+    # is refused too, never combined.
     _c_parts = re.split(
-        r";\s*| - |(?<=[a-z0-9)])\.\s+(?=[A-Z])", text)
-    if len(_c_parts) == 2:
-        _c_head, _c_tail = _c_parts
+        r";\s*| - |(?<=[a-z0-9)])\.\s+(?=[A-Z])|"
+        r"\s+and\s+(?=[A-Z])|\s*[\u2022\u25E6\u25AA]\s+(?=[A-Z])",
+        text)
+    if len(_c_parts) > 1:
+        _c_head, _c_tail = _c_parts[0], _c_parts[-1]
         _c_low = " " + _c_tail.lower() + " "
         _c_head_pattern = classify_bk_type(_c_head)
         _c_purchase_head = bool(_c_head_pattern) and \
@@ -1103,10 +1169,17 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # Registry-driven via the same expense words. Checked BEFORE the
     # subject-position receipt branch ('<Party> paid ...') so an expense
     # name can never be mistaken for a paying party (Sprint 15H).
+    # Sprint 15I-J: the passive-expense vocabulary now includes the
+    # synonym layer and the common misspellings, so 'Conveyance was
+    # paid', 'Transport was paid' and 'Electrisity bill was paid' resolve
+    # to the same EXPENSE_PAID treatment as their standard forms.
     m_exp = re.search(
         r"\b(rent|salary|salaries|wages|insurance|electricity|"
         r"advertisement|commission|interest|carriage|repairs|postage|"
-        r"stationery|audit fees|legal fees|income tax|fuel|telephone)\b"
+        r"stationery|audit fees|legal fees|income tax|fuel|telephone|"
+        r"conveyance|transport|transportation|printing|mobile|phone|"
+        r"telephone charges|transport charges|electrisity|sallery|salery|"
+        r"stionary|telefone|telphone|convayance|convayence)\b"
         r"\s+(?:was|were|has been|have been|had been|is|are)\s+paid\b",
         low)
     if m_exp:
@@ -1235,6 +1308,21 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Cash withdrawn from bank",
             "debit": ["Cash"], "credit": ["Bank"],
         }
+    # Sprint 15I-J: 'Deposited Rs.10,000 into bank' / 'Paid Rs.8,000 into
+    # the bank' - the amount sits between the verb and 'bank', so the
+    # contiguous registry phrases cannot match. The direction is
+    # structural (deposit/paid ... into bank = Bank Dr / Cash Cr), never
+    # inferred from the word 'cash'. A cheque deposit is handled by the
+    # cheque rules above, never here (no silent cheque-as-cash).
+    if re.search(
+            r"\b(?:deposited|depositing|paid)\b.*?\binto\s+"
+            r"(?:the\s+)?bank\b", low) \
+            and "cheque" not in low and "check" not in low:
+        return {
+            "key": "CASH_INTO_BANK",
+            "label": "Cash deposited into bank",
+            "debit": ["Bank"], "credit": ["Cash"],
+        }
     # Sprint 15I-F P1-C: opening a bank account ('Opened an account with
     # Bank of India Rs.20,000') is a deterministic BANK Dr / Cash Cr
     # transaction - the money moves from the till into the new account.
@@ -1263,10 +1351,16 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         # Deterministic - expense/income/cheque patterns are checked
         # BEFORE these keys, and a cheque wording never collapses into a
         # plain cash payment.
-        if cand["key"] == "PAID_TO" and re.search(r"\bpaid\b", low) \
+        if cand["key"] == "PAID_TO" and ("paid" in low or "gave" in low) \
                 and "cheque" not in low and "check" not in low \
                 and (re.search(r"\bpaid\s+[a-z]", low)
-                     or re.search(r"\bpaid\b.*\bto\b", low)):
+                     or re.search(r"\bpaid\b.*\bto\b", low)
+                     # Sprint 15I-J: 'gave' is a student verb for a cash
+                     # payment - 'Gave cash to Mohan Rs.5,000' / 'Gave
+                     # Rs.5,000 cash to Mohan' (the amount often sits
+                     # between the verb and the party).
+                     or re.search(r"\bgave\b.*\bto\b", low)
+                     or "gave cash to" in low or "gave money to" in low):
             return dict(cand)
         if cand["key"] == "RECEIVED_FROM" and "received" in low \
                 and "from" in low and "cheque" not in low \
@@ -1752,6 +1846,12 @@ def _split_transactions(question: str) -> List[str]:
             r"(?<=[0-9)])(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<=[0-9)]\s)(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<![A-Za-z])\n\s*(?=[A-Z])|"
+            # Sprint 15I-J: bullet separators (\u2022 / \u25E6 / \u25AA)
+            # are explicit transaction boundaries - a bullet followed by a
+            # Capital letter splits, so 'Rs.12,000 \u2022 Mohan was paid
+            # Rs.5,000.' never silently absorbs the second transaction
+            # into the first as a partial payment.
+            r"\s*[\u2022\u25E6\u25AA]\s+(?=[A-Z])|"
             r",\s+(?=returned (?:goods|stock)|goods returned|"
             r"purchases returns|purchases return|sales returns|"
             r"sales return)", part, flags=re.IGNORECASE))
@@ -2468,6 +2568,46 @@ def _party_role_in_journal(journal: Dict[str, Any],
     return "NEUTRAL"
 
 
+def _bank_continuation(segment: str,
+                       prior_journal: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Sprint 15I-J: a follow-up 'Deposited/Withdrew further cash
+    Rs.X' with no transaction identity of its own is a continuation of
+    the PREVIOUS transaction's bank context. Fires ONLY when (a) the
+    prior journal actually contains a Bank line, (b) the segment
+    carries an explicit direction verb + a continuation marker
+    (further/additional/more/again) + the word cash + exactly one
+    amount, and (c) the segment classifies to NOTHING on its own.
+    Returns the canonical single-transaction wording (so the existing
+    registered pipeline journals it), or None - a bare 'further cash'
+    without a direction verb, or without a bank context, is never
+    guessed. Deterministic; no invented amounts."""
+    if not prior_journal:
+        return None
+    has_bank = any((line.get("account") or "") == "Bank"
+                   for line in (prior_journal.get("debit_lines") or [])
+                   + (prior_journal.get("credit_lines") or []))
+    if not has_bank:
+        return None
+    low = " " + str(segment or "").lower() + " "
+    if not re.search(r"\b(?:further|additional|more|again)\b", low):
+        return None
+    if not re.search(r"\bcash\b", low):
+        return None
+    amounts, _ = _extract_amounts(segment)
+    if len(amounts) != 1:
+        return None
+    amount = str(amounts[0])
+    if amount.endswith(".0"):
+        amount = amount[:-2]
+    if re.search(r"\b(?:deposited|depositing|paid\s+into)\b.*\bcash\b",
+                 low):
+        return f"Deposited cash into bank Rs.{amount}"
+    if re.search(r"\b(?:withdrew|withdrawn|drew|drawn|took\s+out)\b.*"
+                 r"\bcash\b", low):
+        return f"Withdrew cash from bank Rs.{amount}"
+    return None
+
+
 def _reason_multi_transaction(text: str,
                               segments: List[str]) -> Dict[str, Any]:
     """Reason through a multi-transaction question (';'-separated).
@@ -2549,7 +2689,18 @@ def _reason_multi_transaction(text: str,
                 "total_debit": 0, "total_credit": 0, "balanced": True,
             }
         else:
-            journal = generate_journal(segment)
+            # Sprint 15I-J: a bank continuation step ('Deposited further
+            # cash Rs.5,000' after 'Opened an account with Bank of India
+            # Rs.20,000') with no identity of its own inherits ONLY the
+            # prior journal's bank context and its explicit direction
+            # verb - never an invented mode or amount.
+            _bank_cont = None
+            if i > 0 and classify_bk_type(segment) is None:
+                _bank_cont = _bank_continuation(segment, journals[-1])
+            if _bank_cont:
+                journal = generate_journal(_bank_cont)
+            else:
+                journal = generate_journal(segment)
         if (not _role_conflict and journal["status"] != VERIFIED
                 and i > 0 and _is_payment_step(raw_segment)):
             # payment/discount step -> re-run the discount pipeline over

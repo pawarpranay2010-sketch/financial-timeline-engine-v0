@@ -86,6 +86,10 @@ ACCOUNT_ROLES: Dict[str, str] = {
     "Postage": EXPENSE, "Stationery": EXPENSE, "Audit Fees": EXPENSE,
     "Legal Fees": EXPENSE, "Fuel": EXPENSE, "Rent Paid": EXPENSE,
     "Loss on Sale of Asset": EXPENSE, "Income Tax": EXPENSE,
+    # Sprint 15I-J vocabulary expansion: unambiguous FYJC expense accounts
+    # that student wording commonly names with synonyms.
+    "Conveyance": EXPENSE, "Printing": EXPENSE,
+    "Telephone Expenses": EXPENSE,
     # liabilities
     "Creditors": LIABILITY, "Loan": LIABILITY, "Bank Loan": LIABILITY,
     "Bills Payable": LIABILITY, "Outstanding Expenses": LIABILITY,
@@ -137,6 +141,21 @@ ACCOUNT_ALIASES: Dict[str, str] = {
     "purchase returns": "Purchase Returns", "returns outward": "Purchase Returns",
     "commission received": "Commission Received",
     "interest received": "Interest Received", "interest income": "Interest Received",
+    # Sprint 15I-J synonym layer - each alias has ONE explicit accounting
+    # meaning and is pinned by the 15J coverage matrix.
+    "conveyance": "Conveyance", "conveyance expenses": "Conveyance",
+    "conveyance charges": "Conveyance", "transport": "Conveyance",
+    "transportation": "Conveyance", "transport charges": "Conveyance",
+    "transport expenses": "Conveyance", "travelling": "Conveyance",
+    "travel": "Conveyance", "travelling expenses": "Conveyance",
+    "travel expenses": "Conveyance",
+    "printing": "Printing", "printing charges": "Printing",
+    "printing expenses": "Printing",
+    "telephone": "Telephone Expenses", "telephone bill": "Telephone Expenses",
+    "telephone expenses": "Telephone Expenses",
+    "telephone charges": "Telephone Expenses", "phone": "Telephone Expenses",
+    "phone bill": "Telephone Expenses", "mobile": "Telephone Expenses",
+    "mobile bill": "Telephone Expenses", "mobile charges": "Telephone Expenses",
     "discount received": "Discount Received",
     "bad debts recovered": "Bad Debts Recovered",
     "interest on drawings": "Interest on Drawings",
@@ -532,7 +551,11 @@ _ASSET_WORDS: List[Tuple[str, str]] = [
     ("office equipment", "Office Equipment"),
     ("machinery", "Machinery"),
     ("machine", "Machinery"),
+    # Sprint 15I-J common student misspellings (exact-token only).
+    ("machinary", "Machinery"),
     ("furniture", "Furniture"),
+    ("furnitures", "Furniture"),
+    ("furnature", "Furniture"),
     ("fixtures", "Furniture"),
     ("building", "Building"),
     ("land", "Land"),
