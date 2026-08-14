@@ -186,17 +186,32 @@ def test_b_understanding():
           "Current Ratio" in str(u.get("interpretation")),
           str(u.get("interpretation")))
 
-    # B2: ambiguous extraction (rate/discount token) surfaces a concern.
+    # B2: Sprint 15I-O - the FYJC book-keeping Study / Verify flow now
+    # routes through the hardened FT-E engine, which nets trade / cash
+    # discounts deterministically (15E/15I-L). A rate/discount token in a
+    # BOOK-KEEPING question is therefore no longer a "FT-E will not net
+    # it" concern: the flow resolves it and shows the canonical net
+    # journal. The concern surface is retained for the MATHS domain
+    # (where no discount-netting formula is registered).
     u = build_understanding(
         "Purchased goods from Rahul for Rs.10,000 on credit with 10% "
         "trade discount."
     )
-    check("B.ambiguous (10% discount) flags a concern",
-          len(u.get("concerns") or []) >= 1,
+    check("B.bookkeeping discount no longer flags a will-not-net concern",
+          not any("registered formula" in c
+                  for c in (u.get("concerns") or [])),
           str(u.get("concerns")))
-    check("B.concern explains FT-E will not net the discount",
-          any("registered formula" in c for c in (u.get("concerns") or [])),
-          str(u.get("concerns"))[:200])
+    flow = run_fyjc_student_flow(
+        "Purchased goods from Rahul for Rs.10,000 on credit with 10% "
+        "trade discount."
+    )
+    check("B.bookkeeping discount resolved by the hardened engine",
+          flow.get("status") == "VERIFIED"
+          and any("Purchases" in row and "9,000" in row
+                  for step in (flow.get("steps") or [])
+                  for row in (step.get("body") or [])),
+          str([(s.get("number"), s.get("body"))
+               for s in (flow.get("steps") or []) if s.get("number") == 5]))
 
     # B3: user correction - re-running with corrected wording changes the
     # outcome deterministically (student edits -> re-interpret).

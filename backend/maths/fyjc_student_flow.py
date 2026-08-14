@@ -18,11 +18,14 @@ Architectural rules (unchanged from Sprint 12F/13)
 * C++ remains the sole mathematical authority. Every numerical result
   in a Maths flow comes from verify_maths_answer (-> solve_strict ->
   C++). Python never performs a fallback calculation.
-* Accounting treatment comes from the Sprint 13 book-keeping reasoning
-  layer (classify_transaction and the verify_* functions). The pure
-  ledger/trial-balance arithmetic exposed here is VERIFICATION
-  arithmetic over the student's own postings - it never calculates a
-  financial result for the student.
+* Accounting treatment comes from the hardened FT-E book-keeping
+  engine (backend.maths.fyjc_bk_reasoning.reason_bk_question, routed
+  through hardened_bookkeeping_outcome) - the SAME authority the
+  QuestionBank / PracticeEngine path uses (Sprint 15I-O). The legacy
+  Sprint 13 classifier is never the authority for FYJC book-keeping
+  verification. The pure ledger/trial-balance arithmetic exposed here
+  is VERIFICATION arithmetic over the student's own postings - it
+  never calculates a financial result for the student.
 * No fabricated values, no silent substitution, no open-web fallback.
   BLOCKED / REVIEW_REQUIRED / UNSUPPORTED are valid, student-readable
   outcomes.
@@ -40,7 +43,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.maths.fyjc_maths import verify_maths_answer
 from backend.maths.fyjc_accounting import (
-    classify_transaction,
+    hardened_bookkeeping_outcome,
     post_ledger,
     build_trial_balance,
     verify_arithmetic,
@@ -151,7 +154,17 @@ def build_understanding(question: str) -> Dict[str, Any]:
             })
 
     concerns: List[str] = []
-    if q:
+    # Sprint 15I-O: rate/discount and multi-amount concerns are only
+    # raised for the MATHS domain. The FYJC book-keeping Study / Verify
+    # flow now routes through the hardened FT-E engine, which handles
+    # trade / cash discounts, GST and multi-amount settlements
+    # deterministically (15E/15I-K/15I-L) - a stale 'FT-E will not
+    # compute a discounted amount' warning next to a VERIFIED journal
+    # would be wrong. If the hardened engine cannot resolve a
+    # book-keeping question, it refuses with its own why_not /
+    # next_action in the accounting section.
+    is_bookkeeping = classification.get("domain") == DOMAIN_BOOKKEEPING
+    if q and not is_bookkeeping:
         for m in _PERCENT_RE.finditer(q):
             concerns.append(
                 f"'{m.group(0).strip()}' is a rate/discount. FT-E has no "
@@ -159,10 +172,7 @@ def build_understanding(question: str) -> Dict[str, Any]:
                 "a discounted amount. Enter the net amount if the question "
                 "asks for one."
             )
-        # A bookkeeping description with more than one amount is ambiguous
-        # to the golden-rule engine (it refuses rather than guess).
-        if classification.get("domain") == DOMAIN_BOOKKEEPING and \
-                len(_MULTI_AMOUNT_RE.findall(q)) > 1:
+        if len(_MULTI_AMOUNT_RE.findall(q)) > 1:
             concerns.append(
                 "More than one amount appears in this sentence. If the "
                 "amounts belong to different lines, enter the transaction "
@@ -376,12 +386,15 @@ def run_fyjc_accounting_flow(description: str,
                              amount: Any = None) -> Dict[str, Any]:
     """Run the student Book-Keeping journey for one transaction.
 
-    Steps 1-4 come from the Sprint 13 golden-rule engine; steps 5-8 are
-    the journal entry, ledger effect, trial-balance effect and
-    verification - all over the SAME engine treatment. No financial
-    result is ever calculated by Python.
+    Sprint 15I-O: the accounting TREATMENT comes exclusively from the
+    hardened FT-E engine (reason_bk_question via
+    hardened_bookkeeping_outcome) - the same authority the QuestionBank
+    / PracticeEngine path uses. Steps 5-8 are the journal entry, ledger
+    effect, trial-balance effect and verification over that SAME
+    canonical treatment. No financial result is ever calculated by
+    Python, and no accounting rule lives in this module.
     """
-    outcome = classify_transaction(description, amount)
+    outcome = hardened_bookkeeping_outcome(description, amount)
     status = outcome.get("status")
     resolved = status == VERIFIED
 

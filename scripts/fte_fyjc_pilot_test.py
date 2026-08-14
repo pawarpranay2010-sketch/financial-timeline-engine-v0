@@ -441,14 +441,19 @@ def check_safety(matrices: Dict[str, List[Dict]], maths_runs) -> List[Dict]:
         "detail": f"P20 -> {p20['actual']}",
     })
 
-    # 8. REVIEW_REQUIRED stays REVIEW_REQUIRED (B18 ambiguous, B19 discount)
+    # 8. REVIEW_REQUIRED stays REVIEW_REQUIRED (B18 ambiguous). B19 was
+    # the old 'trade-discount capability gap' case; Sprint 15I-O routes
+    # Study / Verify through the hardened engine (15E/15I-L), which nets
+    # the discount deterministically, so B19 is VERIFIED at the net
+    # amount rather than refused - a documented routing expectation.
     b18 = next(m for m in matrices["bk"] if m["id"] == "B18")
     b19 = next(m for m in matrices["bk"] if m["id"] == "B19")
     inv.append({
         "name": "8. Ambiguous transactions stay REVIEW_REQUIRED",
         "ok": b18["actual"] == "REVIEW_REQUIRED"
-        and b19["actual"] == "REVIEW_REQUIRED",
-        "detail": f"B18 -> {b18['actual']}, B19 -> {b19['actual']}",
+        and b19["actual"] == "VERIFIED",
+        "detail": f"B18 -> {b18['actual']}, B19 -> {b19['actual']} "
+                   f"(B19: discount netted by hardened engine, Sprint 15I-O)",
     })
 
     # 11. Determinism: identical input -> identical output

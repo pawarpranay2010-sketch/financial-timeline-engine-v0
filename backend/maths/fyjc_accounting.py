@@ -756,6 +756,69 @@ def _resolve_side(entries: List[Any], cash_or_bank: List[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def hardened_bookkeeping_outcome(description: str,
+                                 amount: Any = None) -> Dict[str, Any]:
+    """Route ONE bookkeeping question through the hardened FT-E engine
+    (backend.maths.fyjc_bk_reasoning.reason_bk_question) - the SAME
+    accounting authority the QuestionBank / PracticeEngine path uses -
+    and shape the canonical result into the legacy Study/Verify outcome
+    contract (debit_lines / credit_lines / rule / rule_key / status /
+    status_label / why_not / next_action) that run_fyjc_accounting_flow
+    and verify_journal_entry already consume.
+
+    Sprint 15I-O: the FYJC Study / Verify flow must use the hardened
+    engine as its ONLY bookkeeping authority. This adapter adds NO
+    accounting rules: every account, side, amount, status and refusal
+    comes verbatim from reason_bk_question(). It only translates
+    presentation fields (modern role for the FYJC class display, the
+    per-line golden-rule 'why' for the Debit/Credit decision step) that
+    the Study / Verify UI renders.
+
+    The lazy import keeps the module graph acyclic: fyjc_bk_reasoning
+    imports this module at module scope; reason_bk_question is only
+    needed at call time.
+    """
+    from backend.maths.fyjc_bk_reasoning import reason_bk_question
+
+    res = reason_bk_question(description, amount)
+    status = res.get("status") or REVIEW_REQUIRED
+
+    lines: List[Dict[str, Any]] = []
+    for line in (res.get("debit_lines") or []) + (res.get("credit_lines") or []):
+        account = line.get("account")
+        if not account:
+            continue
+        lines.append({
+            "account": account,
+            "side": line.get("side"),
+            "amount": line.get("amount"),
+            "role": account_role(account),
+            "side_hint": line.get("why"),
+            "class": line.get("class"),
+        })
+
+    rule = None
+    for line in (res.get("debit_lines") or []) + (res.get("credit_lines") or []):
+        if line.get("rule"):
+            rule = line["rule"]
+            break
+
+    return {
+        "status": status,
+        "status_label": (
+            res.get("status_label")
+            or STATUS_LABELS.get(status, status)
+        ),
+        "debit_lines": [line for line in lines if line["side"] == "debit"],
+        "credit_lines": [line for line in lines if line["side"] == "credit"],
+        "rule": rule,
+        "rule_key": None,
+        "why_not": res.get("why_not"),
+        "next_action": res.get("next_action"),
+        "authority_state": "bookkeeping",
+    }
+
+
 def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]:
     """Deterministically classify ONE transaction into a journal entry.
 
@@ -1103,9 +1166,13 @@ def verify_journal_entry(description: Optional[str],
     ]
 
     # -- direction check against the golden rule --------------------------
+    # Sprint 15I-O: the treatment reference is the hardened FT-E engine
+    # (reason_bk_question) - the same authority the QuestionBank /
+    # PracticeEngine path uses. The legacy classifier is never the
+    # reference for FYJC bookkeeping verification.
     reference: Optional[Dict[str, Any]] = None
     if description and str(description).strip():
-        reference = classify_transaction(description)
+        reference = hardened_bookkeeping_outcome(description)
         if reference["status"] == VERIFIED:
             ref_debits = {line["account"] for line in reference["debit_lines"]}
             ref_credits = {line["account"] for line in reference["credit_lines"]}

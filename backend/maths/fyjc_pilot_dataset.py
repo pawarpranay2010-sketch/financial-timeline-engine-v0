@@ -515,9 +515,12 @@ FYJC_PILOT_BK = [
         "source_kind": "typed",
         "difficulty": 1,
         "kind": "transaction",
-        "expected": {"status": "BLOCKED",
-                     "debit": {"Purchases"}, "credit": {"Rahul"}},
-        "note": "treatment is determinable but the amount is missing",
+        "expected": {"status": "BLOCKED"},
+        # Sprint 15I-O: the Study / Verify flow now routes through the
+        # hardened FT-E engine, whose verified invariant is that a
+        # refusal NEVER carries journal lines (15I-J/K/L safety gates) -
+        # a BLOCKED outcome shows no would-be accounts.
+        "note": "amount is missing; refusal carries no journal lines",
     },
     {
         "id": "B18",
@@ -537,11 +540,15 @@ FYJC_PILOT_BK = [
         "source_kind": "photo",
         "difficulty": 3,
         "kind": "transaction",
-        "expected": {"status": "REVIEW_REQUIRED"},
-        "human_reference": 9000,  # net of 10% discount - no registered
-        # formula can net it, so FT-E refuses rather than guess
-        "note": "trade-discount netting is not a registered formula - "
-                "documented capability gap",
+        "expected": {"status": "VERIFIED",
+                     "debit": {"Purchases"}, "credit": {"Rahul"}},
+        "human_reference": 9000,  # net of 10% discount
+        # Sprint 15I-O: trade-discount netting was added by 15E and
+        # verified by 15I-L; the Study / Verify flow now routes through
+        # the hardened engine, so this input is VERIFIED at the net
+        # amount (Purchases 9,000 / Rahul 9,000) instead of refusing.
+        "note": "trade discount netted deterministically by the hardened "
+                "engine (15E/15I-L) - capability gap closed",
     },
     {
         "id": "B20",
