@@ -810,8 +810,86 @@ _NON_PARTY_PAYMENT_SUBJECTS = (
 )
 
 
+# Sprint 15I-P: words that can NEVER be a LOWERCASE party. A lowercase
+# token is accepted as a party only when the surrounding transaction
+# structure already identifies it ('from <name>', 'to <name>', 'received
+# ... from <name>', 'paid ... to <name>') AND the token is an ordinary
+# person's name - never an arbitrary lowercase word (the bank, the
+# seller, cash, credit, ...). Capitalised proper nouns keep the existing
+# deterministic path untouched.
+_LOWERCASE_NON_PARTY_WORDS = frozenset({
+    # articles / pronouns / function words
+    "the", "a", "an", "his", "her", "their", "them", "him", "us", "you",
+    "me", "we", "they", "he", "she", "it", "i", "my", "our", "your",
+    "this", "that", "these", "those", "some", "any", "all", "each",
+    "every", "both", "such", "same", "who", "whom", "whose", "which",
+    "one", "two", "three",
+    # money / credit machinery
+    "cash", "bank", "cheque", "check", "credit", "loan", "overdraft",
+    "money", "amount", "payment", "paid", "price", "rate", "list",
+    "net", "gross",
+    # chart / account words
+    "goods", "stock", "inventory", "purchases", "purchase", "sales",
+    "sale", "returns", "return", "drawings", "capital", "assets",
+    "liabilities", "expenses", "expense", "income", "revenue", "profit",
+    "loss", "account", "accounts", "ledger", "journal",
+    # generic counterparty nouns (never proper names)
+    "party", "parties", "customer", "customers", "supplier", "suppliers",
+    "seller", "sellers", "vendor", "vendors", "buyer", "buyers",
+    "debtor", "debtors", "creditor", "creditors", "firm", "company",
+    "shop", "store", "business", "trader", "traders", "person", "people",
+    # expense / income words that could follow 'paid' / 'received'
+    "rent", "salary", "salaries", "wages", "commission", "interest",
+    "insurance", "electricity", "advertisement", "advertising",
+    "stationery", "repairs", "carriage", "freight", "postage", "tax",
+    "taxes", "fee", "fees", "discount", "dividend", "conveyance",
+    "travelling",
+})
+
+
+def _normalise_party_token(party: str) -> Optional[str]:
+    """Sprint 15I-P: gate + normalise a party token that is not already
+    a normal proper noun.
+
+    A lowercase token is only accepted when it is an ordinary person's
+    name - every word must be free of the ordinary-word blocklist
+    (never 'the seller', 'the shop', 'cash', 'bank', ...). Accepted
+    names are normalised deterministically: 'rahul' -> 'Rahul',
+    'ravi kumar' -> 'Ravi Kumar'. An ALL-CAPS token ('RAHUL') is the
+    same name in shouting case and is normalised the same way. Already
+    properly-cased tokens (first letter upper, not all caps) pass
+    through unchanged (historical behavior preserved).
+    """
+    if not party:
+        return None
+    words = [w for w in str(party).strip().split() if w]
+    if not words:
+        return None
+    first_upper = party[0].isupper()
+    if first_upper and not party.isupper():
+        # Already-capitalised token: keep the historical deterministic
+        # pass-through when it is already canonical Title Case
+        # ('Rahul', 'Sharma & Sons', "D'Souza"). A MIXED-CASE
+        # capitalised token ('RaHuL') is not a properly-cased proper
+        # noun and is normalised deterministically below, like
+        # lowercase and ALL-CAPS forms.
+        if party == party.title():
+            return party
+    if any(w.lower() in _LOWERCASE_NON_PARTY_WORDS for w in words):
+        return None
+    return " ".join(w[:1].upper() + w[1:].lower() for w in words)
+
+
 def _party_from_text(text: str) -> Optional[str]:
-    """Extract a Capitalised proper-noun party from the description."""
+    """Extract a party from the description.
+
+    Capitalised proper nouns keep the Sprint 15B/15F/15H deterministic
+    behavior. Sprint 15I-P additionally accepts a LOWERCASE name when the
+    surrounding structure clearly identifies the token as the party
+    ('from rahul', 'received ... from amit', 'paid ... to mehta',
+    'sold goods to kavita'); the token is gated against ordinary words so
+    FT-E never invents a party from an arbitrary lowercase word.
+    """
     if not text:
         return None
     low = text.lower()
@@ -827,26 +905,32 @@ def _party_from_text(text: str) -> Optional[str]:
         if marker in low:
             idx = low.index(marker) + len(marker)
             rest = text[idx:]
-            m = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
+            m = re.match(r"\s*([A-Za-z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
                          r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+worth\s+"
-                         r"|\s+and\s+|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)", rest)
+                         r"|\s+and\s+|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)",
+                         rest, re.IGNORECASE)
             if m:
                 party = m.group(1).strip().rstrip(".;,")
                 if party and not party.lower().endswith(
                         ("a/c", "account", "ltd", "limited")):
-                    return party
+                    party = _normalise_party_token(party)
+                    if party:
+                        return party
     # '<Party> paid ...' - the party is the SUBJECT of the payment verb
-    # (a receipt to the business: 'Mohan paid Rs.12,000'). The subject
-    # position before 'paid' is deterministic - never an invented name.
-    m_subj = re.match(r"\s*([A-Z][A-Za-z' .]{1,40}?)\s+paid\b",
-                      str(text or ""))
+    # (a receipt to the business: 'Mohan paid Rs.12,000', 'rahul paid
+    # Rs.12,000'). The subject position before 'paid' is deterministic -
+    # never an invented name.
+    m_subj = re.match(r"\s*([A-Za-z][A-Za-z' .]{1,40}?)\s+paid\b",
+                      str(text or ""), re.IGNORECASE)
     if m_subj:
         subject = _strip_aux_before_verb(
             m_subj.group(1).strip().rstrip(".;,"))
         # Sprint 15I-D: a bare auxiliary verb is never a party - 'Was paid
         # Rs.5,000.' has NO subject, so the aux must not become the account.
         if subject.lower() not in _NON_PARTY_PAYMENT_SUBJECTS:
-            return subject
+            subject = _normalise_party_token(subject)
+            if subject:
+                return subject
     return None
 
 

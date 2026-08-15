@@ -38,6 +38,7 @@ Pure module: no Streamlit, no AI, no network. Deterministic.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1070,6 +1071,73 @@ def _line_amount(line: Any) -> Optional[Decimal]:
     return parsed.value
 
 
+def _canonical_reference_amount(value: Any) -> Any:
+    """Normalise one hardened-engine line amount for exact comparison.
+
+    The hardened canonical journal carries Decimal amounts and the
+    student entry amounts are parsed to Decimal by _line_amount; the two
+    must share ONE numeric representation so a canonical amount and a
+    student-entered '10,000' compare equal. Unreadable values are kept
+    as-is (they can never match a Decimal and are reported as a
+    discrepancy instead of crashing).
+    """
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        parsed = parse_numeric_text(value)
+        if parsed.value is not None and not parsed.ambiguity:
+            return parsed.value
+        return value
+    return value
+
+
+def _journal_discrepancies(missing: Counter, extra: Counter,
+                           side_label: str,
+                           student_lines: List[Dict[str, Any]]) -> List[str]:
+    """Human-readable differences between the student's entry and the
+    hardened canonical journal on ONE side (debit / credit).
+
+    missing - canonical (account, amount) lines the student did not post.
+    extra   - student lines the canonical journal does not contain.
+    student_lines - the student's normalised lines for this side, used to
+    tell an AMOUNT MISMATCH ('the account was posted with a different
+    amount') from a genuinely MISSING line, and an EXTRA line from a
+    duplicated account.
+
+    Deterministic; only shapes the hardened engine's expectation into
+    student-readable prose - no accounting rule is applied here.
+    """
+    issues: List[str] = []
+    for (account, amount), count in sorted(missing.items()):
+        student_amounts = sorted(
+            {line["amount"] for line in student_lines
+             if line["account"] == account},
+            key=str)
+        repeat = f" (posted {count} times)" if count > 1 else ""
+        if student_amounts:
+            issues.append(
+                f"{side_label} {account}: Expected Rs.{amount:,.2f} but "
+                "you posted "
+                + " / ".join(f"Rs.{amt:,.2f}" for amt in student_amounts)
+                + repeat)
+        else:
+            issues.append(
+                f"Expected {side_label} line: {account} Rs.{amount:,.2f} "
+                "(missing from your entry)" + repeat)
+    for (account, amount), count in sorted(extra.items()):
+        if any(acc == account for (acc, _) in missing):
+            continue  # already reported as an amount mismatch
+        repeat = f" (posted {count} times)" if count > 1 else ""
+        issues.append(
+            f"Extra {side_label} line: {account} Rs.{amount:,.2f} "
+            "(not in the expected entry)" + repeat)
+    return issues
+
+
 def _normalise_entry(entry: Any) -> Tuple[List[Dict[str, Any]],
                                           List[Dict[str, Any]], bool]:
     """Normalise a student journal entry into (debit lines, credit lines,
@@ -1174,11 +1242,29 @@ def verify_journal_entry(description: Optional[str],
     if description and str(description).strip():
         reference = hardened_bookkeeping_outcome(description)
         if reference["status"] == VERIFIED:
-            ref_debits = {line["account"] for line in reference["debit_lines"]}
-            ref_credits = {line["account"] for line in reference["credit_lines"]}
-            student_debits = {line["account"] for line in canonical_debits}
-            student_credits = {line["account"] for line in canonical_credits}
-            if student_debits == ref_debits and student_credits == ref_credits:
+            # Sprint 15I-P: the student entry must match the hardened
+            # canonical journal EXACTLY - account identity, debit/credit
+            # side, amount and line multiplicity (duplicate lines are
+            # never collapsed). The hardened engine remains the sole
+            # authority: nothing is recomputed here, the canonical lines
+            # are compared verbatim. A balanced entry with the right
+            # accounts but a wrong amount is INCORRECT, never CORRECT.
+            ref_debit_counter = Counter(
+                (line["account"],
+                 _canonical_reference_amount(line["amount"]))
+                for line in reference["debit_lines"])
+            ref_credit_counter = Counter(
+                (line["account"],
+                 _canonical_reference_amount(line["amount"]))
+                for line in reference["credit_lines"])
+            student_debit_counter = Counter(
+                (line["account"], line["amount"])
+                for line in canonical_debits)
+            student_credit_counter = Counter(
+                (line["account"], line["amount"])
+                for line in canonical_credits)
+            if (student_debit_counter == ref_debit_counter
+                    and student_credit_counter == ref_credit_counter):
                 return {
                     "verdict": "CORRECT",
                     "status": VERIFIED,
@@ -1195,32 +1281,51 @@ def verify_journal_entry(description: Optional[str],
                     "total_credit": float(total_credit),
                     "discrepancy": None,
                 }
-            wrong_debits = sorted((student_debits - ref_debits) |
-                                  (ref_debits - student_debits))
-            wrong_credits = sorted((student_credits - ref_credits) |
-                                   (ref_credits - student_credits))
+            # -- exact discrepancy analysis -----------------------------
+            # The same lines posted on the OPPOSITE sides get the classic
+            # direction message; anything else is reported line-by-line
+            # (wrong amount / missing line / extra line).
+            fully_reversed = (
+                student_debit_counter == ref_credit_counter
+                and student_credit_counter == ref_debit_counter)
+            missing_debits = ref_debit_counter - student_debit_counter
+            missing_credits = ref_credit_counter - student_credit_counter
+            extra_debits = student_debit_counter - ref_debit_counter
+            extra_credits = student_credit_counter - ref_credit_counter
+            issues = _journal_discrepancies(
+                missing_debits, extra_debits, "debit", canonical_debits)
+            issues += _journal_discrepancies(
+                missing_credits, extra_credits, "credit", canonical_credits)
+            if fully_reversed:
+                ref_debit_accounts = sorted(
+                    {a for (a, _) in ref_debit_counter})
+                ref_credit_accounts = sorted(
+                    {a for (a, _) in ref_credit_counter})
+                what = ("The journal entry is balanced but the debit and "
+                        "credit sides are reversed.")
+                why_not = (
+                    "Expected debit: "
+                    f"{ref_debit_accounts}; expected credit: "
+                    f"{ref_credit_accounts}. Your entry posts the same "
+                    "lines on the opposite sides.")
+            else:
+                what = ("The journal entry is balanced but it does not "
+                        "match the expected entry exactly (accounts, "
+                        "side or amount).")
+                why_not = (" ".join(issues)
+                           or "Your entry differs from the expected "
+                              "journal entry.")
             return {
                 "verdict": "INCORRECT",
                 "status": REVIEW_REQUIRED,
                 "status_label": STATUS_LABELS[REVIEW_REQUIRED],
                 "authority_state": "bookkeeping",
-                "what": "The journal entry is balanced but the direction "
-                        "does not match the golden rule.",
+                "what": what,
                 "rule": reference["rule"],
-                "why_not": (
-                    "Expected debit: "
-                    f"{sorted(ref_debits)}; expected credit: "
-                    f"{sorted(ref_credits)}. "
-                    "Your entry differs on "
-                    + ("debit side: " + ", ".join(wrong_debits) + "; "
-                       if wrong_debits else "")
-                    + ("credit side: " + ", ".join(wrong_credits) + "."
-                       if wrong_credits else "")
-                ),
-                "next_action": ("Re-read the golden rule: assets and "
-                                "expenses debit; liabilities, capital and "
-                                "income credit; debit the receiver, credit "
-                                "the giver."),
+                "why_not": why_not,
+                "next_action": ("Re-read the golden rule and the expected "
+                                "journal entry: match every account, its "
+                                "side and its exact amount."),
                 "debit_lines": canonical_debits,
                 "credit_lines": canonical_credits,
                 "total_debit": float(total_debit),
