@@ -96,6 +96,16 @@ _TRANSACTION_VERBS = (
     "interest on drawings", "interest on capital",
     "loan", "drawings", "discount allowed",
     "discount received", "goods for personal use", "free samples",
+    # Sprint 15I-TX: the expanded FYJC surface - donations, return
+    # chains ('the same were returned'), settlement cheques, orders and
+    # goods-return variants. Routing only; the accounting authority is
+    # still the single hardened engine.
+    "donated", "donation", "donating",
+    "returned us goods", "returned us stock", "goods returned by",
+    "returned stock", "the same were returned", "the same goods",
+    "settled", "settlement", "cheque", "cheques",
+    "placed an order", "order for goods", "order of goods",
+    "executed our order",
 )
 _METRIC_HINTS = (
     "calculate", "compute", "find", "ratio", "margin", "percent", " %",

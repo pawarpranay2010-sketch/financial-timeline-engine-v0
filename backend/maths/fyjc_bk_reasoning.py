@@ -154,6 +154,10 @@ _TRADITIONAL_OVERRIDES: Dict[str, str] = {
         CLASS_NOMINAL, "Dividend Received": CLASS_NOMINAL,
     "Sales Returns": CLASS_NOMINAL, "Returns Inward": CLASS_NOMINAL,
     "Purchase Returns": CLASS_NOMINAL, "Returns Outward": CLASS_NOMINAL,
+    # Sprint 15I-TX: Donation A/c is the nominal expense debited when
+    # goods/cash are given away - a single Capitalised word would
+    # otherwise be read as a Personal account (a party).
+    "Donation": CLASS_NOMINAL,
 }
 
 # Named parties (Rahul, Mohan, ...) are ALWAYS Personal accounts.
@@ -602,7 +606,15 @@ BK_PATTERNS: List[Dict[str, Any]] = [
         "label": "Payment by cheque",
         "when": ("paid by cheque", "cheque paid", "issued a cheque",
                  "gave a cheque", "cheque issued", "by cheque", "by check",
-                 "cheque issued to", "cheque paid to", "paid ... by cheque"),
+                 "cheque issued to", "cheque paid to", "paid ... by cheque",
+                 # Sprint 15I-TX: settlement-cheque wording
+                 # ('Settled Mr. Roger Federer's account by issuing him a
+                 # cheque of Rs.41,500') is a payment to the party by
+                 # cheque - Dr party / Cr Bank, never a guess.
+                 "issued him a cheque", "issued her a cheque",
+                 "issued them a cheque", "issuing him a cheque",
+                 "issuing her a cheque", "issuing them a cheque",
+                 "settled by cheque", "settled by a cheque"),
         "debit": [{"party": "giver"}], "credit": ["Bank"],
     },
     {
@@ -782,6 +794,13 @@ def _resolve_bk_spec(spec: Any, text: str,
         return spec
     if isinstance(spec, dict):
         if spec.get("party"):
+            party = spec.get("party")
+            # a spec carrying a literal party name (already extracted by
+            # the rule, e.g. the '<Party> returned goods' subject form)
+            # resolves to that exact name; only the placeholder kinds
+            # ('giver' / 'receiver') re-run the text parser.
+            if isinstance(party, str) and party not in ("giver", "receiver"):
+                return party
             return _party_from_text(text)
         if spec.get("asset"):
             assets = named_assets(text)
@@ -901,6 +920,28 @@ def _party_from_text(text: str) -> Optional[str]:
     """
     if not text:
         return None
+    # Sprint 15I-TX: 'Settled Mr. Roger Federer's account by issuing him
+    # a cheque of Rs.41,500' / 'Settled the account of Mr. Roger Federer
+    # by cheque' - the party is the OWNER of the settled account, read
+    # from the possessive / 'of' form (never an invented name).
+    m_own = re.match(
+        r"\s*(?:settled|paid)\s+(?:the\s+)?"
+        r"([A-Za-z][A-Za-z' .]{1,40}?)'s\s+account\b",
+        str(text or ""), re.IGNORECASE)
+    if m_own:
+        party = _normalise_party_token(
+            m_own.group(1).strip().rstrip(".;,"))
+        if party:
+            return party
+    m_of = re.match(
+        r"\s*(?:settled|paid)\s+the\s+account\s+of\s+"
+        r"([A-Za-z][A-Za-z' .]{1,40}?)(?:\s+(?:by|for|with|at|on)\b|$)",
+        str(text or ""), re.IGNORECASE)
+    if m_of:
+        party = _normalise_party_token(
+            m_of.group(1).strip().rstrip(".;,"))
+        if party:
+            return party
     low = text.lower()
     for marker in ("on credit from ", "sold goods on credit to ",
                    "on credit to ", "purchased goods from ", "purchased from ",
@@ -1039,7 +1080,10 @@ def _returns_rule(text: str) -> Optional[Dict[str, Any]]:
         if name.lower() not in _RETURN_NONPARTY_WORDS:
             return {
                 "key": "SALES_RETURN", "label": "Goods returned by customer",
-                "debit": ["Sales Returns"], "credit": [name],
+                # the customer is a PARTY (Personal account) even though
+                # the name came from the subject position - the literal
+                # party spec keeps the line's class Personal.
+                "debit": ["Sales Returns"], "credit": [{"party": name}],
             }
     return None
 
@@ -1137,6 +1181,19 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                         "as a partial payment - enter the two "
                         "transactions separately."),
             }
+    # Sprint 15I-TX: placing an order is NOT a transaction - no journal
+    # entry is recorded until the goods are actually received/supplied.
+    if re.search(r"\bplaced\s+(?:an\s+)?order\b",
+                 " " + text.lower() + " "):
+        return {
+            "key": "ORDER_PLACED",
+            "label": "Order placed (not a transaction yet)",
+            "refuse": True, "debit": [], "credit": [],
+            "why": ("Placing an order is not a transaction: no journal "
+                    "entry is recorded until the goods are actually "
+                    "received or supplied. FT-E does not journal an "
+                    "order."),
+        }
     # fixed-asset rules first (Sprint 15B exact-account guarantee)
     for rule in (classify_transaction,):
         # asset purchases/sales are handled by the accounting engine's
@@ -1199,6 +1256,54 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     returns = _returns_rule(text)
     if returns is not None:
         return returns
+    # Sprint 15I-TX: business/personal-use split transactions
+    # ('Withdrew Rs.10,000 from Bank, out of which Rs.3,500 for personal
+    # use', 'Purchased goods worth Rs.10,000, out of which goods worth
+    # Rs.2,000 were taken for personal use') - every stated amount gets a
+    # deterministic role, resolved by _business_personal_split().
+    _bp_split = _business_personal_split(text)
+    if _bp_split is not None:
+        if _bp_split["kind"] == "bank_withdrawal":
+            return {
+                "key": "BANK_WITHDRAWAL_PERSONAL_SPLIT",
+                "label": "Bank withdrawal split: personal + office use",
+                "debit": ["Cash"], "credit": ["Bank"],
+            }
+        return {
+            "key": "GOODS_PURCHASE_PERSONAL_SPLIT",
+            "label": "Goods purchased: personal-use portion taken",
+            "debit": ["Purchases"], "credit": [{"party": "giver"}],
+        }
+    # Sprint 15I-TX: donations of goods (Donation A/c Dr / Purchases A/c
+    # Cr at the stated value) and cash donations (Donation A/c Dr / Cash
+    # A/c Cr). A donation carrying a stated PROFIT element is refused -
+    # the treatment of the profit portion is not deterministically
+    # established, so FT-E never invents it.
+    if re.search(r"\bdonat", low):
+        if re.search(
+                r"\b(?:including|with|at|less)\s+(?:a\s+)?profit\b"
+                r"|\bprofit\s+of\b|\bprofit\s+on\s+cost\b", low):
+            return {
+                "key": "DONATION_PROFIT_AMBIGUOUS",
+                "label": "Donated goods with a profit element",
+                "refuse": True, "debit": [], "credit": [],
+                "why": ("The donation carries a stated profit element on "
+                        "the goods. The treatment of that profit portion "
+                        "is not deterministically established in the "
+                        "verified FYJC surface - FT-E never invents it. "
+                        "State the cost of the goods donated."),
+            }
+        if "goods" in low:
+            return {
+                "key": "DONATION_OF_GOODS",
+                "label": "Goods donated",
+                "debit": ["Donation"], "credit": ["Purchases"],
+            }
+        return {
+            "key": "DONATION_CASH",
+            "label": "Cash donated",
+            "debit": ["Donation"], "credit": ["Cash", "Bank"],
+        }
     # 'for cash' decides the MODE even when a party is named
     # ('Sold goods to Mohan for cash', 'Purchased goods from Amit for
     # cash'). A named party is just the counterparty - the settlement
@@ -1506,6 +1611,21 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Bank account opened",
             "debit": ["Bank"], "credit": ["Cash"],
         }
+    # Sprint 15I-TX: 'paid Rs.500 for mobile recharge' / 'Paid Rs.4,000
+    # for shop rent' / 'Paid interest for loan by cheque' - the amount
+    # often sits between 'paid' and 'for', so the contiguous registry
+    # phrases cannot match. The REGISTERED expense word on either side
+    # of 'for' carries the account; FT-E never promotes an ordinary word
+    # into a party. A possessive-pronoun bill ('paid his mobile bill')
+    # marks a personal bill and is never silently booked as a business
+    # expense.
+    if "paid" in low and " for " in low:
+        if _expense_near_for(low) is not None:
+            return {
+                "key": "EXPENSE_PAID",
+                "label": "Expense paid",
+                "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
+            }
     for cand in BK_PATTERNS:
         when = cand["when"]
         phrases = when if isinstance(when, (tuple, list)) else (when,)
@@ -2004,6 +2124,13 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             except (InvalidOperation, ValueError):
                 pass
     percents = _extract_percents(question)
+
+    # Sprint 15I-TX: business/personal-use splits resolve BOTH stated
+    # figures deterministically (withdrawal/purchase total + personal-use
+    # portion), so the unresolved-amount gate below never fires on them.
+    _bp_split = _business_personal_split(question)
+    if _bp_split is not None:
+        return _resolve_business_personal_split(_bp_split, amounts)
 
     concerns: List[str] = []
     if ambiguous:
@@ -2535,7 +2662,19 @@ def _split_transactions(question: str) -> List[str]:
     _TITLE_RE = re.compile(r"\b(mr|mrs|ms|dr|prof|rev|st)\.\s+",
                            re.IGNORECASE)
     raw = str(question or "")
-    raw = _TITLE_RE.sub(lambda m: m.group(1).lower() + " \x01", raw)
+    # Sprint 15I-TX: the protected title keeps its ORIGINAL case and the
+    # \x01 sentinel is restored to '. ' - so 'Mr. Novak' survives the
+    # split as 'Mr. Novak' (never the broken 'mr . Novak' that made the
+    # capitalised-party detection in _returns_rule/_party_from_text
+    # miss a party that legitimately opens the sentence).
+    raw = _TITLE_RE.sub(lambda m: m.group(1) + "\x01", raw)
+    # Sprint 15I-TX: a comma-joined return chain ('X returned us goods
+    # worth Rs.6,500, and the same were returned to Y') is TWO return
+    # transactions - the customer-return and the subsequent supplier-
+    # return. Normalise the joiner into a ';' boundary so the second
+    # return is journaled independently and never silently swallowed by
+    # the first (15I-TX regression: Test 9-style returns).
+    raw = _RETURN_CHAIN_RE.sub("; the same were returned", raw)
     raw = re.split(r";\s*", raw)
     pieces: List[str] = []
     for part in raw:
@@ -2602,6 +2741,16 @@ def _split_transactions(question: str) -> List[str]:
         else:
             merged.append(seg)
     return merged
+
+
+# Sprint 15I-TX: a comma-joined '... and the same were returned to
+# <party>' continuation - the goods returned by a customer are then
+# returned to the supplier, a SECOND return transaction that must never
+# be silently absorbed by the first.
+_RETURN_CHAIN_RE = re.compile(
+    r",\s+and\s+the\s+same\s+(?:goods\s+)?(?:were|was|have been|"
+    r"had been|have\s+been|had\s+been)\s+returned\b",
+    re.IGNORECASE)
 
 
 _PRONOUN_RE = re.compile(r"\b(him|her|them|he|she|they)\b",
@@ -2773,6 +2922,16 @@ def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
         except (InvalidOperation, ValueError):
             continue
         before = low_rates[max(0, match.start() - 40):match.start()]
+        # Sprint 15I-TX: the look-back is truncated at the nearest
+        # preceding clause boundary (comma / semicolon / period) so a
+        # rate in a LATER clause is never labelled by a GST token from
+        # an EARLIER one - '... CGST and SGST @ 9% each, and issued a
+        # cheque for 50% of the amount' must not read the 50% as a
+        # second GST rate.
+        _cut = max(before.rfind(","), before.rfind(";"),
+                   before.rfind("."))
+        if _cut != -1:
+            before = before[_cut + 1:]
         if not _GST_TOKEN_RE.search(before):
             continue
         kind = "total"
@@ -2791,6 +2950,15 @@ def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
         if value is None:
             continue
         before = raw[max(0, match.start() - 30):match.start()].lower()
+        # Sprint 15I-TX: same clause-boundary rule as the rate labelling
+        # - an amount after a punctuation break belongs to its own
+        # clause and is never labelled by an earlier GST component
+        # ('... CGST Rs.900. Paid Rs.500 for something' -> the 500 is
+        # unlabeled, never a second CGST amount).
+        _cut = max(before.rfind(","), before.rfind(";"),
+                   before.rfind("."))
+        if _cut != -1:
+            before = before[_cut + 1:]
         comp = None
         last = None
         for cm in _GST_COMPONENT_RE.finditer(before):
@@ -2896,6 +3064,19 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     # a party spec on the money side means a credit transaction
     is_credit = any(isinstance(s, dict) and "party" in s
                     for s in (credit_specs if not is_sale else debit_specs))
+
+    # Sprint 15I-TX: a GST transaction carrying a PARTIAL payment step
+    # (cheque for X%, half paid, issued a cheque in his favour, ...)
+    # must not post the full consideration to the party/cash - splitting
+    # a GST journal across cash/party is outside the verified surface,
+    # so FT-E refuses instead of silently dropping the payment step.
+    if _gst_partial_payment(text):
+        return _refuse(
+            "The GST transaction also carries a partial payment step "
+            "(cheque or payment fraction). FT-E does not split a GST "
+            "journal across cash/party in the verified surface - enter "
+            "the GST purchase/sale and the payment as separate steps.",
+            "Enter the GST transaction, then the payment separately.")
 
     # -- GST + discount ----------------------------------------------------
     # Sprint 15I-L: TRADE discount is deterministic with GST - the taxable
@@ -3447,6 +3628,327 @@ def discount_evidence(raw: str) -> Dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Sprint 15I-TX helpers - business/personal splits, return-chain
+# continuations, contextual expenses and GST partial-payment guards.
+# All deterministic; nothing here duplicates an accounting rule - every
+# account, side and amount still comes from the single hardened engine.
+# ---------------------------------------------------------------------------
+
+
+def _personal_amount_in(low: str) -> Optional[Decimal]:
+    """The stated personal-use figure inside a business/personal split
+    clause, read before or after the personal-use phrase. None when it
+    cannot be read deterministically (the caller then refuses)."""
+    # The clause between the personal-use figure and the personal/private
+    # marker may carry a title period ('used by Mr. Carlos Alcaraz for
+    # personal use') - only semicolons/newlines are real clause breaks.
+    m = re.search(
+        r"\b(?:rs\.?|\u20b9|inr)?\s*([\d,]+(?:\.\d+)?)\s+(?:were|"
+        r"was|have been|has been)\s+(?:used|utilised|taken)"
+        r"[^;\n]{0,50}?\b(?:personal|private)\b"
+        r"|\b(?:rs\.?|\u20b9|inr)?\s*([\d,]+(?:\.\d+)?)"
+        r"\s+for\s+(?:personal|private)\s+(?:use|expenses|purpose)\b"
+        r"|\b(?:for|used for)\s+(?:personal|private)\s+(?:use|"
+        r"expenses|purpose)\b\s*(?:rs\.?|\u20b9|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+        low)
+    if not m:
+        return None
+    val = next((g for g in m.groups() if g), None)
+    if val is None:
+        return None
+    try:
+        return Decimal(val.replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _business_personal_split(question: str) -> Optional[Dict[str, Any]]:
+    """Deterministic business/personal-use split: a bank withdrawal
+    with an explicitly stated personal-use portion, or a goods purchase
+    where an explicitly stated goods value was taken for personal use.
+    Every stated amount gets a role; None when the wording does not
+    anchor both figures (the caller then refuses - never a guess)."""
+    text = str(question or "").strip()
+    if not text:
+        return None
+    low = " " + text.lower() + " "
+    amounts, _ = _extract_amounts(question)
+    if len(amounts) != 2:
+        return None
+    total, personal = amounts[0], amounts[1]
+    if total <= 0 or personal <= 0 or personal >= total:
+        return None
+    if not re.search(
+            r"\b(?:personal|private)\s+(?:use|expenses|purpose)\b",
+            low):
+        return None
+    # --- bank withdrawal -------------------------------------------------
+    if re.search(
+            r"\b(?:withdrew|withdrawn|drew)\b.*?\bfrom\s+"
+            r"(?:the\s+)?bank\b", low):
+        m_w = re.search(
+            r"\b(?:withdrew|withdrawn|drew)\b\s*(?:rs\.?|\u20b9|inr)?"
+            r"\s*([\d,]+(?:\.\d+)?)", low)
+        if m_w is None:
+            return None
+        try:
+            w_amt = Decimal(m_w.group(1).replace(",", ""))
+        except (InvalidOperation, ValueError):
+            w_amt = None
+        p_amt = _personal_amount_in(low)
+        if w_amt == total and p_amt == personal:
+            return {"kind": "bank_withdrawal", "total": total,
+                    "personal": personal, "business": total - personal,
+                    "mode": "bank", "party": None}
+        return None
+    # --- goods purchase with personal-use portion ------------------------
+    if not any(k in low for k in (
+            "purchased goods", "bought goods", "goods purchased",
+            "goods bought", "goods worth", "purchased stock",
+            "bought stock", "stock worth")):
+        return None
+    m_g = re.search(
+        r"\b(?:purchased|bought)\b\s+(?:goods|stock)\b[^.;]{0,80}?"
+        r"\b(?:rs\.?|\u20b9|inr)?\s*([\d,]+(?:\.\d+)?)", low)
+    if m_g is None:
+        m_g = re.search(
+            r"\b(?:goods|stock)\s+worth\s*(?:rs\.?|\u20b9|inr)?"
+            r"\s*([\d,]+(?:\.\d+)?)", low)
+    if m_g is None:
+        return None
+    try:
+        g_amt = Decimal(m_g.group(1).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        g_amt = None
+    p_amt = _personal_amount_in(low)
+    if g_amt != total or p_amt != personal:
+        return None
+    if re.search(r"\bfor cash\b", low) \
+            and not re.search(r"\bon credit\b", low):
+        mode = "cash"
+    elif re.search(r"\bon credit\b", low) \
+            or re.search(r"\bfrom\b", low):
+        mode = "credit"
+    else:
+        return None
+    party = _party_from_text(text) if mode == "credit" else None
+    if mode == "credit" and party is None:
+        return None
+    return {"kind": "goods_purchase", "total": total,
+            "personal": personal, "business": total - personal,
+            "mode": mode, "party": party}
+
+
+def _resolve_business_personal_split(
+        split: Dict[str, Any],
+        amounts: List[Decimal]) -> Dict[str, Any]:
+    """The amount-resolver result for a business/personal split - both
+    stated figures are consumed by deterministic roles, so the
+    unresolved-amount gate never fires on them."""
+    total = split["total"]
+    personal = split["personal"]
+    business = split["business"]
+    steps: List[Dict[str, Any]] = [
+        {"calculation_id": "BK_SPLIT_TOTAL",
+         "label": "Total withdrawal / purchase",
+         "formula": "Total from the question",
+         "inputs": {"total": total}, "result": total},
+        {"calculation_id": "BK_SPLIT_PERSONAL",
+         "label": "Personal-use portion",
+         "formula": "Personal-use amount from the question",
+         "inputs": {"personal": personal}, "result": personal},
+        {"calculation_id": "BK_SPLIT_BUSINESS",
+         "label": "Business / office portion",
+         "formula": "Business = Total - Personal-use",
+         "inputs": {"total": total, "personal": personal},
+         "result": business},
+    ]
+    return {
+        "status": VERIFIED, "steps": steps,
+        "list_price": total, "trade_discount_rate": None,
+        "trade_discount_amount": None, "net_value": total,
+        "paid_amount": None, "credit_amount": None,
+        "cash_discount_rate": None, "cash_discount_amount": None,
+        "cash_paid": None, "explicit_discount": None,
+        "split": split, "concerns": [],
+        "why_not": None,
+        "next_action": "Post this entry in your journal and verify it.",
+    }
+
+
+def _build_personal_split_journal(
+        text: str, pattern: Dict[str, Any],
+        amounts: Dict[str, Any]) -> Dict[str, Any]:
+    """The compound journal for a business/personal-use split: both the
+    business portion and the personal-use (drawings) portion post in ONE
+    balanced entry. Every amount comes from the question; the business
+    remainder is the derived difference (traced, never silent)."""
+    split = amounts["split"]
+    total = split["total"]
+    personal = split["personal"]
+    business = split["business"]
+    party_accounts: set = set()
+
+    def _line(account: str, amount: Decimal, side: str) -> Dict[str, Any]:
+        cls = CLASS_PERSONAL if account in party_accounts \
+            else traditional_class_for(account)
+        return {
+            "account": account, "class": cls,
+            "rule": TRADITIONAL_GOLDEN_RULES[cls],
+            "why": side_decision_for(account, side, cls),
+            "amount": amount, "side": side,
+        }
+
+    debit_lines: List[Dict[str, Any]] = []
+    credit_lines: List[Dict[str, Any]] = []
+    if split["kind"] == "bank_withdrawal":
+        debit_lines.append(_line("Cash", total, "debit"))
+        debit_lines.append(_line("Drawings", personal, "debit"))
+        credit_lines.append(_line("Bank", total, "credit"))
+        credit_lines.append(_line("Cash", personal, "credit"))
+    else:
+        debit_lines.append(_line("Purchases", business, "debit"))
+        debit_lines.append(_line("Drawings", personal, "debit"))
+        if split["mode"] == "cash":
+            cash_acct = ("Bank" if _resolve_cash_bank(text) == "Bank"
+                         else "Cash")
+            credit_lines.append(_line(cash_acct, total, "credit"))
+        else:
+            party = split.get("party")
+            party_accounts.add(party)
+            credit_lines.append(_line(party, total, "credit"))
+
+    total_debit = sum((l["amount"] for l in debit_lines), Decimal(0))
+    total_credit = sum((l["amount"] for l in credit_lines), Decimal(0))
+    narration_parts: List[str] = []
+    for line in debit_lines:
+        narration_parts.append(f"{line['account']} A/c Dr "
+                               f"{_fmt_amt(line['amount'])}")
+    for line in credit_lines:
+        narration_parts.append(f"To {line['account']} A/c "
+                               f"{_fmt_amt(line['amount'])}")
+    return {
+        "status": VERIFIED, "date": None,
+        "particulars": " / ".join(l["account"] for l in debit_lines)
+                       + " A/c Dr",
+        "debit_lines": debit_lines, "credit_lines": credit_lines,
+        "narration": "Being " + "; ".join(narration_parts) + ".",
+        "why_not": None,
+        "next_action": "Post this entry in your journal and verify it.",
+        "calculation_records": amounts.get("steps") or [],
+        "total_debit": total_debit, "total_credit": total_credit,
+        "balanced": total_debit == total_credit,
+    }
+
+
+def _expense_near_for(low: str) -> Optional[str]:
+    """The REGISTERED expense word adjacent to 'for' in a 'paid ...
+    for ...' / 'paid <expense> ... for ...' clause, or None. A
+    possessive-pronoun bill ('paid his mobile bill') is a personal bill,
+    never silently booked as a business expense (Sprint 15I-TX)."""
+    # Sprint 15I-TX: the amount between 'paid' and 'for' carries a
+    # currency period ('paid rs.500 for ...') - a '[^.;]' clause class
+    # would stop at the 'rs.' dot and miss the clause entirely. Only
+    # semicolons/newlines are real clause breaks here.
+    # The tail after 'for' is GREEDY so the registered expense word
+    # ('paid rs.500 for MOBILE recharge') is inside the scanned clause -
+    # a non-greedy tail would stop at 'for' and miss the expense word.
+    m = re.search(r"\bpaid\b[^;\n]{0,80}?\bfor\b[^;\n]{0,80}\b", low)
+    if m is None:
+        return None
+    clause = m.group(0)
+    for phrase, account in _EXPENSE_ACCOUNT_WORDS:
+        for mm in re.finditer(
+                r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", clause):
+            before = clause[max(0, mm.start() - 10):mm.start()]
+            if re.search(r"\b(?:his|her|their|its|my|our)\b\s*$", before):
+                continue
+            return account
+    return None
+
+
+_GST_PARTIAL_PAYMENT_RE = re.compile(
+    r"\b(?:issued|gave|issuing|giving)\s+(?:a|the|him|her|them)"
+    r"(?:\s+(?:bearer|crossed|blank|post[- ]?dated))?\s+cheque\b"
+    r"|\b(?:paid|paying)\s+(?:him|her|them)\b"
+    r"|\b(?:half|quarter|one[- ]?third|two[- ]?third|1/3|1/4|50%)"
+    r"\s+of\s+the\s+amount\b"
+    r"|\bfor\s+(?:50%|half|quarter|one[- ]?third|1/3rd)\b"
+    r"|\bin\s+his\s+favour\s+for\b"
+    r"|\b(?:paid|received)\s+(?:half|50%)\b"
+    r"|\bpartly\s+paid\b",
+    re.IGNORECASE)
+
+
+def _gst_partial_payment(text: str) -> bool:
+    """True when a GST transaction carries a PARTIAL payment step (a
+    cheque issued for a fraction, a stated fraction of the amount, or a
+    payment to the party). The verified GST surface posts only the FULL
+    consideration; a partial payment would silently change the party /
+    bank split, so the caller refuses instead of dropping the step."""
+    low = " " + str(text or "").lower() + " "
+    return bool(_GST_PARTIAL_PAYMENT_RE.search(low))
+
+
+def _return_chain_continuation(
+        segment: str,
+        prior: Optional[Dict[str, Any]]
+) -> Optional[Tuple[Optional[str], Optional[Dict[str, Any]]]]:
+    """Sprint 15I-TX: 'the same were returned to <party>' continues the
+    previous goods entry (a purchase or a sales return): the returned
+    goods' VALUE is inherited from that entry (never invented) and the
+    continuation journals as a PURCHASE_RETURN. Returns (rewritten_segment,
+    None) to journal the continuation; (None, refusal) when the goods
+    identity is unclear; None when the segment is not a continuation."""
+    if not re.match(r"^\s*(?:and\s+)?the\s+same\b", segment,
+                    re.IGNORECASE):
+        return None
+    prior_accounts = {
+        l.get("account") for l in
+        ((prior or {}).get("debit_lines") or [])
+        + ((prior or {}).get("credit_lines") or [])}
+    prior_amount = None
+    if prior is not None:
+        for l in ((prior or {}).get("debit_lines") or []) \
+                + ((prior or {}).get("credit_lines") or []):
+            if l.get("amount") is not None:
+                prior_amount = l.get("amount")
+                break
+    if prior is None or not (
+            "Purchases" in prior_accounts
+            or "Sales Returns" in prior_accounts):
+        return (None, {
+            "status": REVIEW_REQUIRED,
+            "why_not": ("'The same were returned' refers to goods from the "
+                        "previous transaction, but the previous transaction "
+                        "is not a goods purchase or a goods return here. "
+                        "FT-E never guesses which goods are being returned."),
+            "next_action": ("State the return fully, e.g. 'Sold goods to "
+                            "Mohan; Mohan returned goods worth Rs.6,500; "
+                            "the same were returned to Rahul.'"),
+            "debit_lines": [], "credit_lines": [],
+            "narration": None, "calculation_records": [],
+            "total_debit": 0, "total_credit": 0, "balanced": True,
+        })
+    party = _party_from_text(segment)
+    if not party or prior_amount is None:
+        return (None, {
+            "status": REVIEW_REQUIRED,
+            "why_not": ("The returned-goods continuation does not name the "
+                        "party receiving the return, or the previous goods "
+                        "entry has no value to carry over. FT-E never "
+                        "invents either."),
+            "next_action": "Name the party and enter the return amount.",
+            "debit_lines": [], "credit_lines": [],
+            "narration": None, "calculation_records": [],
+            "total_debit": 0, "total_credit": 0, "balanced": True,
+        })
+    return (f"Returned goods worth Rs.{_fmt_amt(prior_amount)} "
+            f"to {party}.", None)
+
+
 def generate_journal(question: str) -> Dict[str, Any]:
     """The deterministic journal entry for ONE transaction description.
 
@@ -3460,6 +3962,24 @@ def generate_journal(question: str) -> Dict[str, Any]:
         return {
             "status": BLOCKED, "why_not": "No transaction was provided.",
             "next_action": "Type or photograph the transaction description.",
+            "debit_lines": [], "credit_lines": [], "narration": None,
+            "calculation_records": [], "total_debit": 0,
+            "total_credit": 0, "balanced": True,
+        }
+
+    # Sprint 15I-TX: a standalone 'the same were returned to <party>'
+    # continuation has no identified goods (the 'same' refers to an
+    # earlier transaction) - REVIEW_REQUIRED, never a confident return
+    # journal built on an unidentified goods value.
+    if re.match(r"^\s*(?:and\s+)?the\s+same\b", text, re.IGNORECASE):
+        return {
+            "status": REVIEW_REQUIRED,
+            "why_not": ("'The same were returned' refers to goods from an "
+                        "earlier transaction, but this question does not "
+                        "identify which goods. FT-E never guesses."),
+            "next_action": ("State the return fully, e.g. 'Sold goods to "
+                            "Mohan; Mohan returned goods worth Rs.6,500; "
+                            "the same were returned to Rahul.'"),
             "debit_lines": [], "credit_lines": [], "narration": None,
             "calculation_records": [], "total_debit": 0,
             "total_credit": 0, "balanced": True,
@@ -3586,6 +4106,12 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "calculation_records": amounts.get("steps") or [],
             "total_debit": 0, "total_credit": 0, "balanced": True,
         }
+
+    # Sprint 15I-TX: business/personal-use split journal (a compound
+    # entry built from the split resolution - every stated amount is
+    # consumed by a deterministic role).
+    if amounts.get("split") is not None:
+        return _build_personal_split_journal(text, pattern, amounts)
 
     net = amounts["net_value"]
     paid = amounts.get("paid_amount")
@@ -4263,18 +4789,35 @@ def _reason_multi_transaction(text: str,
                 "total_debit": 0, "total_credit": 0, "balanced": True,
             }
         else:
-            # Sprint 15I-J: a bank continuation step ('Deposited further
-            # cash Rs.5,000' after 'Opened an account with Bank of India
-            # Rs.20,000') with no identity of its own inherits ONLY the
-            # prior journal's bank context and its explicit direction
-            # verb - never an invented mode or amount.
-            _bank_cont = None
-            if i > 0 and classify_bk_type(segment) is None:
-                _bank_cont = _bank_continuation(segment, journals[-1])
-            if _bank_cont:
-                journal = generate_journal(_bank_cont)
-            else:
+            # Sprint 15I-TX: a 'the same were returned to <party>'
+            # continuation ('X returned us goods ... and the same were
+            # returned to Y') inherits the returned-goods VALUE from the
+            # previous goods entry (a purchase or a sales return) - never
+            # invented. Standalone or after any other transaction the
+            # goods identity is unclear -> REVIEW_REQUIRED (Test 9-style
+            # return chains).
+            _cont = _return_chain_continuation(
+                segment, journals[-1] if journals else None)
+            if _cont is not None and _cont[0] is not None:
+                segment = _cont[0]
+                resolved_segments[-1] = segment
                 journal = generate_journal(segment)
+            elif _cont is not None:
+                journal = _cont[1]
+            else:
+                # Sprint 15I-J: a bank continuation step ('Deposited
+                # further cash Rs.5,000' after 'Opened an account with
+                # Bank of India Rs.20,000') with no identity of its own
+                # inherits ONLY the prior journal's bank context and its
+                # explicit direction verb - never an invented mode or
+                # amount.
+                _bank_cont = None
+                if i > 0 and classify_bk_type(segment) is None:
+                    _bank_cont = _bank_continuation(segment, journals[-1])
+                if _bank_cont:
+                    journal = generate_journal(_bank_cont)
+                else:
+                    journal = generate_journal(segment)
         if (not _role_conflict and journal["status"] != VERIFIED
                 and i > 0 and _is_payment_step(raw_segment)):
             # payment/discount step -> re-run the discount pipeline over
