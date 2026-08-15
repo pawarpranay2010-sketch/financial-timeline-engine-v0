@@ -50,6 +50,7 @@ Pure module: no Streamlit, no AI, no network. Deterministic.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -1894,6 +1895,89 @@ def _detect_explicit_discount(question: str,
     }
 
 
+def _last_amount_bound_party(question: str) -> Optional[str]:
+    """The party named by a trailing 'to <Name>' / 'from <Name>' clause
+    attached to the LAST stated figure, or None. Sprint 15I-S: 'Paid
+    Rs.9,000 to Mohan and Rs.8,000 to Rahul.' binds the second figure to
+    Rahul - the paid-split's 'last amount is the payment' heuristic must
+    never consume a figure the wording claims for a DIFFERENT party.
+    Deterministic; only a Capitalised name reads as a party ('to the
+    bank' never does)."""
+    raw = " " + str(question or "") + " "
+    # the LAST stated figure is the one the paid-split would consume -
+    # check the clause attached to it specifically.
+    last_num = None
+    for match in re.finditer(r"\d[\d,]*(?:\.\d+)?", raw):
+        last_num = match
+    if last_num is None:
+        return None
+    tail = raw[last_num.end():]
+    relation = re.match(r"\s*(?:to|from)\s+", tail, flags=re.IGNORECASE)
+    if not relation:
+        return None
+    body = tail[relation.end():]
+    _continuation = re.compile(
+        r"(?:,|\.|;|and\b|immediately\b|at once\b|in cash\b|"
+        r"for cash\b|on credit\b|in full\b|on account\b|"
+        r"in settlement\b|with\b)", re.IGNORECASE)
+    m1 = re.match(r"([A-Za-z][A-Za-z'.]*)", body)
+    if not m1:
+        return None
+    first = m1.group(1).rstrip(".")
+    after_first = body[m1.end():].lstrip()
+    name = first
+    if not _continuation.match(after_first):
+        m2 = re.match(r"([A-Za-z][A-Za-z'.]*)", after_first)
+        if m2:
+            second = m2.group(1).rstrip(".")
+            after_second = after_first[m2.end():].lstrip()
+            if not after_second or _continuation.match(after_second):
+                name = f"{first} {second}"
+                after_first = after_second
+    # the party clause must end cleanly right after the captured name -
+    # otherwise the following words belong to the verb phrase, not the
+    # party ('paid Rs.5,000 to Rahul immediately' names Rahul, never
+    # 'Rahul Immediately').
+    if after_first and not _continuation.match(after_first):
+        return None
+    # _normalise_party_token gates the name against ordinary words
+    # ('to the bank', 'from customers') and normalises case
+    # ('rahul' -> 'Rahul'); None means it is not a real party.
+    return _normalise_party_token(name)
+
+
+def _paid_list_binds_multiple(question: str) -> bool:
+    """True when the payment verb binds MORE THAN ONE stated figure
+    ('paid Rs.20,000 and Rs.18,000 to Rahul'). Both figures are then
+    payments - neither has a deterministically established role, so the
+    paid-split must never claim one of them as 'the' payment (Sprint
+    15I-S). The figures must be joined by 'and' under the SAME paid
+    clause; a legitimate single payment after a purchase ('... on
+    credit, paid Rs.5,000 immediately') is never matched, and a
+    settlement phrase ('paid Rs.9,500 in full settlement of his account
+    of Rs.10,000') is routed through the explicit-discount branch, never
+    here."""
+    low = " " + str(question or "").lower() + " "
+    _amt = r"(?:rs\.?|\u20b9|inr)?\s*\d[\d,]*(?:\.\d+)?"
+    # 'paid Rs.X and Rs.Y' - the paid verb introduces the pair.
+    if re.search(
+            r"\bpaid\s+" + _amt + r"\s+and\s+" + _amt, low):
+        return True
+    # 'Rs.X and Rs.Y ... paid' - the paid verb follows the pair within
+    # the same clause ('.' / ';' end the clause).
+    if re.search(
+            _amt + r"\s+and\s+" + _amt
+            + r"\s+[^.;]{0,40}?\bpaid\b", low):
+        return True
+    # 'paid ... Rs.X and Rs.Y' - the paid verb precedes the pair with
+    # wording between ('paid to Rahul Rs.X and Rs.Y', 'paid him
+    # Rs.X and Rs.Y') but still inside the same clause.
+    if re.search(
+            r"\bpaid\b[^.;]{0,60}?" + _amt + r"\s+and\s+" + _amt, low):
+        return True
+    return False
+
+
 def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     """The discount/payment pipeline for one transaction description.
 
@@ -1993,6 +2077,14 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                 r"(?:trade\s+discount|td)\s+(?:of\s+)?"
                 r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)",
                 low)
+        if m_td is None:
+            # Sprint 15I-S: the stated amount directly BEFORE the noun
+            # ('with Rs.2,000 trade discount', 'Rs.2,000 trade discount')
+            # is the same deterministic TD amount - it is netted, never
+            # silently dropped as an unresolved figure.
+            m_td = re.search(
+                r"(?:rs\.?|\u20b9|inr)?\s*(\d[\d,]*(?:\.\d+)?)"
+                r"\s+(?:trade\s+discount|td)\b", low)
         if m_td is not None:
             after = low[m_td.end():m_td.end() + 2]
             if after.lstrip().startswith("%"):
@@ -2067,8 +2159,8 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     # evidence - a cash-discount rate must apply to the amount due,
     # never to the stated figure itself.
     paid_stated = False
+    explicit_paid: Optional[Decimal] = None
     if explicit_discount is None:
-        explicit_paid = None
         # an explicit paid amount ('paid Rs.4,000 immediately'); a
         # RECEIPT counts as a stated settlement only when it carries a
         # resolvable discount amount or a settlement-side discount rate
@@ -2291,6 +2383,83 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         cash_paid = explicit_discount["cash_amount"]
         remainder = net_value - paid_amount - cash_discount_amount
         credit_amount = remainder if remainder > 0 else None
+
+    # Sprint 15I-S: unresolved multi-amount gate. Every figure stated in
+    # the question must be consumed by a DETERMINISTIC role (list price,
+    # an explicit trade/cash discount amount, a stated payment, a
+    # full-settlement pair, or a started-business asset component). A
+    # stated amount that no role consumes is UNRESOLVED - FT-E never
+    # picks one amount over another by position ('first amount wins' is
+    # forbidden), so the transaction is REVIEW_REQUIRED instead of a
+    # confident journal built on the first figure.
+    #
+    # The gate fires only for ONE transaction description (after
+    # payment-step re-joining, _split_transactions returns a single
+    # segment). A multi-transaction question is resolved per-segment by
+    # the book-keeping authority, where this same gate applies to every
+    # segment - the whole-text resolver is never the authority for a
+    # combined wording, and the canonical-lineage layer (which consults
+    # it for metadata) must not see a VERIFIED multi-transaction
+    # question as ambiguous.
+    if status == VERIFIED and len(_split_transactions(question)) == 1:
+        consumed: Counter = Counter()
+        if explicit_discount is not None:
+            # full settlement: the stated cash amount and the party total
+            # are the two figures (list_price IS the settlement cash
+            # here); a stated discount amount is consumed as well.
+            consumed[explicit_discount["cash_amount"]] += 1
+            consumed[explicit_discount["party_total"]] += 1
+            if explicit_discount["discount_amount"] in amounts:
+                consumed[explicit_discount["discount_amount"]] += 1
+        else:
+            consumed[list_price] += 1
+            if trade_amount is not None and trade_rate is None:
+                # explicit trade-discount AMOUNT ('less Rs.2,000 trade
+                # discount') - the stated figure fills that role.
+                consumed[trade_amount] += 1
+            if cash_discount_amt is not None:
+                consumed[cash_discount_amt] += 1
+            if paid_stated and explicit_paid is not None:
+                # Sprint 15I-S: the last figure must not be claimed by a
+                # DIFFERENT party ('paid Rs.9,000 to Mohan and Rs.8,000
+                # to Rahul') - the paid-split would otherwise consume
+                # Rahul's figure as cash paid on Mohan's transaction.
+                # Likewise 'paid Rs.X and Rs.Y' binds BOTH figures to the
+                # payment - neither role is deterministic, so the paid
+                # figure is not consumed and the gate refuses instead of
+                # building a journal on a positional pick.
+                bound = _last_amount_bound_party(question)
+                primary = _party_from_text(question)
+                if (bound is None or primary is None
+                        or bound == _normalise_party_token(primary)) \
+                        and not _paid_list_binds_multiple(question):
+                    consumed[explicit_paid] += 1
+            # started business: every stated figure is a named asset
+            # component (Cash / Furniture / Bank ...) - the deterministic
+            # breakdown consumes them all when it reconciles with the
+            # stated total.
+            startup = _startup_asset_breakdown(question)
+            if startup is not None and startup.get("total") == sum(amounts):
+                consumed = Counter(amounts)
+        unresolved = Counter(amounts) - consumed
+        if unresolved:
+            def _fmt_figure(a: Decimal) -> str:
+                return f"Rs.{float(a):,.2f}".rstrip("0").rstrip(".")
+            all_figures = ", ".join(_fmt_figure(a) for a in sorted(amounts))
+            un_figures = ", ".join(_fmt_figure(a) for a in sorted(unresolved))
+            plural = "s" if len(unresolved) > 1 else ""
+            concerns.append(
+                "Several amounts are present (" + all_figures + ") but "
+                "FT-E cannot assign every one a deterministic role ("
+                + un_figures + " remain" + plural + " unexplained). It "
+                "never chooses one amount over another - clarify which "
+                "figure is the transaction amount.")
+            status = REVIEW_REQUIRED
+            why_not = "; ".join(concerns)
+            next_action = ("Re-type the transaction so each amount has a "
+                           "clear role (amount, discount, payment, "
+                           "settlement), or split it into separate "
+                           "transactions.")
 
     return {
         "status": status, "steps": steps, "list_price": list_price,
@@ -4124,7 +4293,7 @@ def _reason_multi_transaction(text: str,
                 else:
                     prior_role = "NEUTRAL"
                 continue
-            if merged["status"] == VERIFIED:
+            elif merged["status"] == VERIFIED:
                 # the merge would silently change the prior transaction
                 # (mode/family flip or a dropped stated amount) - never
                 # reinterpret or repair the previous journal (Sprint
@@ -4144,6 +4313,12 @@ def _reason_multi_transaction(text: str,
                     "narration": None, "calculation_records": [],
                     "total_debit": 0, "total_credit": 0, "balanced": True,
                 }
+            else:
+                # Sprint 15I-S: the merged resolution itself refuses
+                # (unresolved multi-amount / ambiguous role) - surface
+                # that refusal instead of the lone segment's status so
+                # the whole question refuses with the merged verdict.
+                journal = merged
         if journal["status"] != VERIFIED:
             status = journal["status"]
             refusal = _refusal(
