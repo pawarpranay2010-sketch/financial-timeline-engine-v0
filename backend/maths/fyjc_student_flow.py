@@ -154,6 +154,11 @@ def build_understanding(question: str) -> Dict[str, Any]:
             })
 
     concerns: List[str] = []
+    # Sprint 15I-R: informational notes are kept SEPARATE from blocking
+    # concerns. The UI presents blocking concerns in the 'Almost there'
+    # clarification panel; informational notes are shown neutrally and
+    # never stop a VERIFIED result from displaying.
+    info_notes: List[str] = []
     # Sprint 15I-O: rate/discount and multi-amount concerns are only
     # raised for the MATHS domain. The FYJC book-keeping Study / Verify
     # flow now routes through the hardened FT-E engine, which handles
@@ -180,11 +185,11 @@ def build_understanding(question: str) -> Dict[str, Any]:
             )
 
     if classification.get("domain") == DOMAIN_BOOKKEEPING and fact_rows:
-        concerns.insert(0, (
+        info_notes.append(
             "This looks like a book-keeping question. The numbers are kept "
             "as facts, but the accounting treatment comes from the "
             "transaction wording, not from the numbers alone."
-        ))
+        )
 
     requested_uncertain = bool(classification.get("requested_uncertain"))
     if requested_uncertain:
@@ -202,6 +207,7 @@ def build_understanding(question: str) -> Dict[str, Any]:
         "facts": fact_rows,
         "interpretation": _interpretation(classification, fact_rows, q),
         "concerns": concerns,
+        "info_notes": info_notes,
         "status": (
             REVIEW_REQUIRED if (concerns or requested_uncertain) else
             (VERIFIED if classification.get("domain") != DOMAIN_UNRECOGNISED
@@ -426,8 +432,12 @@ def run_fyjc_accounting_flow(description: str,
         "number": 2,
         "title": "Classify Accounts",
         "body": [
-            (f"{row['account']} → {row['modern_role']} "
-             f"(FYJC class: {row['traditional_class']})")
+            # Sprint 15I-R: a party (no modern role) is displayed as a
+            # Personal Account - never 'None (FYJC class: Personal)'.
+            (f"{row['account']} → Personal Account"
+             if row["modern_role"] is None
+             else f"{row['account']} → {row['modern_role']} "
+                  f"(FYJC class: {row['traditional_class']})")
             for row in classification_rows
         ] or ["—"],
     })

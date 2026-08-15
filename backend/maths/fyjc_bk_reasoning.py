@@ -165,7 +165,11 @@ def traditional_class_for(account: str) -> str:
     Override table wins; a non-chart account that reads as a proper noun
     (Capitalised, no internal spaces) is a Personal account (Rahul,
     Mohan, ...). Everything else falls back to Nominal defensively but
-    should never be used to build an entry.
+    should never be used to build an entry. Multi-word party names are
+    classified Personal through the line builders' party context
+    (_line(..., party=True)) - never by broadening this name-based
+    fallback, which the 15G canonical authority also uses to separate a
+    genuine party from an invented account.
     """
     if not account:
         return CLASS_PERSONAL
@@ -186,12 +190,16 @@ def golden_rule_for(account: str) -> str:
     return TRADITIONAL_GOLDEN_RULES[traditional_class_for(account)]
 
 
-def side_decision_for(account: str, side: str) -> str:
+def side_decision_for(account: str, side: str,
+                      cls: Optional[str] = None) -> str:
     """Student-readable WHY for debiting/crediting one account.
 
-    Traditional FYJC language - never corporate terminology.
+    Traditional FYJC language - never corporate terminology. An explicit
+    class wins when the caller already resolved it (the journal line
+    builders pass the party-resolved class so a multi-word party name is
+    never read as a Nominal account).
     """
-    cls = traditional_class_for(account)
+    cls = cls or traditional_class_for(account)
     if side in ("debit", "Dr"):
         if cls == CLASS_REAL:
             return (f"{account} (Real A/c): it comes in - Debit what comes "
@@ -960,6 +968,26 @@ def _resolve_side_specs(specs: List[Any], text: str,
         keep = _resolve_cash_bank(text)
         return [a for a in resolved if a == keep]
     return resolved
+
+
+def _party_accounts_for(specs: List[Any], text: str,
+                        party_kind: str) -> set:
+    """The accounts a spec list resolves that are PARTIES (any spec whose
+    placeholder is {'party': ...}). Sprint 15I-R: the journal line
+    builders use this to classify a resolved party as a Personal account
+    regardless of its name shape ('Ravi Kumar' is a person, never a
+    Nominal account). Presentation metadata only - journal decisions are
+    unchanged. The name-based traditional_class_for() fallback stays
+    strict because the 15G canonical authority also uses it to separate a
+    genuine party from an invented account.
+    """
+    out: set = set()
+    for spec in specs:
+        if isinstance(spec, dict) and spec.get("party"):
+            account = _resolve_bk_spec(spec, text, party_kind)
+            if account:
+                out.add(account)
+    return out
 
 
 _RETURN_NONPARTY_WORDS = {"goods", "stock", "the", "he", "she", "they",
@@ -3008,13 +3036,20 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     components_out = [(f"{prefix} {comp}", amt)
                       for comp, amt in raw_components]
 
+    # Sprint 15I-R: accounts resolved from a {'party': ...} spec are
+    # Personal accounts regardless of name shape ('Ravi Kumar' is a
+    # person, never a Nominal account). Presentation metadata only -
+    # journal decisions are unchanged; the name-based fallback stays
+    # strict for the 15G canonical authority.
+    party_accounts: set = set()
+
     def _line(account: str, amount: Decimal, side: str) -> Dict[str, Any]:
-        cls = traditional_class_for(account)
+        cls = CLASS_PERSONAL if account in party_accounts else traditional_class_for(account)
         return {
             "account": account,
             "class": cls,
             "rule": TRADITIONAL_GOLDEN_RULES[cls],
-            "why": side_decision_for(account, side),
+            "why": side_decision_for(account, side, cls),
             "amount": amount,
             "side": side,
         }
@@ -3033,6 +3068,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                     "The credit sale does not name the customer. FT-E "
                     "never invents a person's name.",
                     "Add the customer's name.")
+            party_accounts.add(party)
             debit_lines.append(_line(party, total, "debit"))
         else:
             debit_lines.append(_line(cash_acct, total, "debit"))
@@ -3057,6 +3093,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                     "The credit purchase does not name the supplier. FT-E "
                     "never invents a person's name.",
                     "Add the supplier's name.")
+            party_accounts.add(party)
             credit_lines.append(_line(party, total, "credit"))
         else:
             credit_lines.append(_line(cash_acct, total, "credit"))
@@ -3394,13 +3431,20 @@ def generate_journal(question: str) -> Dict[str, Any]:
     debit_lines: List[Dict[str, Any]] = []
     credit_lines: List[Dict[str, Any]] = []
 
+    # Sprint 15I-R: accounts resolved from a {'party': ...} spec are
+    # Personal accounts regardless of name shape ('Ravi Kumar' is a
+    # person, never a Nominal account). Presentation metadata only -
+    # journal decisions are unchanged; the name-based fallback stays
+    # strict for the 15G canonical authority.
+    party_accounts: set = set()
+
     def _line(account: str, amount: Decimal, side: str) -> Dict[str, Any]:
-        cls = traditional_class_for(account)
+        cls = CLASS_PERSONAL if account in party_accounts else traditional_class_for(account)
         return {
             "account": account,
             "class": cls,
             "rule": TRADITIONAL_GOLDEN_RULES[cls],
-            "why": side_decision_for(account, side),
+            "why": side_decision_for(account, side, cls),
             "amount": amount,
             "side": side,
         }
@@ -3468,6 +3512,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                     debit_lines.append(_line("Discount Allowed",
                                              explicit["discount_amount"],
                                              "debit"))
+                party_accounts.add(party)
                 credit_lines.append(_line(party, explicit["party_total"],
                                           "credit"))
         else:
@@ -3475,6 +3520,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                                      "receiver")
                      or _resolve_bk_spec({"party": "giver"}, text, "giver"))
             if party:
+                party_accounts.add(party)
                 debit_lines.append(_line(party, explicit["party_total"],
                                          "debit"))
                 credit_lines.append(_line(cash_acct, explicit["cash_amount"],
@@ -3509,6 +3555,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                 party = _resolve_bk_spec({"party": "receiver"}, text,
                                          "receiver")
                 if party:
+                    party_accounts.add(party)
                     debit_lines.append(_line(party, credit_portion, "debit"))
             cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
             if cash_paid is not None and cash_paid > 0:
@@ -3532,11 +3579,15 @@ def generate_journal(question: str) -> Dict[str, Any]:
         else:
             for account in _resolve_side_specs(debit_specs, text,
                                                "receiver"):
+                if account in _party_accounts_for(debit_specs, text, "receiver"):
+                    party_accounts.add(account)
                 debit_lines.append(_line(account, net, "debit"))
 
         # --- credit side -------------------------------------------------
         if sale:
             for account in _resolve_side_specs(credit_specs, text, "giver"):
+                if account in _party_accounts_for(credit_specs, text, "giver"):
+                    party_accounts.add(account)
                 credit_lines.append(_line(account, net, "credit"))
         elif receipt and split and cash_discount is not None \
                 and cash_discount > 0 \
@@ -3547,6 +3598,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                      or _resolve_bk_spec({"party": "receiver"}, text,
                                          "receiver"))
             if party:
+                party_accounts.add(party)
                 credit_lines.append(_line(party, net, "credit"))
         elif split:
             cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
@@ -3558,6 +3610,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             if credit_portion is not None and credit_portion > 0:
                 party = _resolve_bk_spec({"party": "giver"}, text, "giver")
                 if party:
+                    party_accounts.add(party)
                     credit_lines.append(_line(party, credit_portion,
                                               "credit"))
                 else:
@@ -3565,6 +3618,8 @@ def generate_journal(question: str) -> Dict[str, Any]:
                                               "credit"))
         else:
             for account in _resolve_side_specs(credit_specs, text, "giver"):
+                if account in _party_accounts_for(credit_specs, text, "giver"):
+                    party_accounts.add(account)
                 credit_lines.append(_line(account, net, "credit"))
 
     # fall back to the Sprint 13 golden-rule engine when our IR produced no

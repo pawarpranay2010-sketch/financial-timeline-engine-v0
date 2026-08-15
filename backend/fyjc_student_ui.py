@@ -119,6 +119,14 @@ _FYJC_CSS = """
   border-radius:10px; padding:.55rem .85rem; background: rgba(138,148,166,.08);
   margin:.4rem 0; }
 .fte-fyjc-note { color: var(--fte-muted, #8a94a6); font-size: .85rem; }
+.fte-fyjc-journal { width: 100%; border-collapse: collapse; margin: .2rem 0; }
+.fte-fyjc-journal th { text-align: left; font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--fte-muted, #8a94a6); padding: .25rem .4rem;
+  border-bottom: 1px solid var(--fte-border, #2b3550); }
+.fte-fyjc-journal td { padding: .32rem .4rem;
+  border-bottom: 1px solid rgba(43,53,80,.45); }
+.fte-fyjc-journal td.amt { text-align: right; font-variant-numeric: tabular-nums; }
+.fte-fyjc-whyline { margin: .32rem 0; }
 
 /* ---- Input-mode selector: segmented pills with an obvious selected state */
 div[data-testid="stRadio"] { margin: .15rem 0; }
@@ -406,6 +414,17 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
     else:
         st.caption("No 'Concept: value' facts were parsed from the text.")
 
+    # Sprint 15I-R: informational notes are neutral hints, never a
+    # warning - a VERIFIED result must not be framed as 'almost there'.
+    info_notes = understanding.get("info_notes") or []
+    for note in info_notes:
+        st.markdown(
+            f'<div class="fte-fyjc-note">{_esc(note)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Only BLOCKING concerns raise the 'Almost there' clarification
+    # panel (an unregistered maths rate, an uncertain requested figure).
     concerns = understanding.get("concerns") or []
     if concerns:
         st.markdown(
@@ -605,19 +624,124 @@ def _render_blocked_manual_entry(flow: Dict[str, Any]) -> None:
             st.warning("Enter at least one value to continue.")
 
 
+def _fmt_rupee(value: Any) -> str:
+    """Format an engine amount as ₹ for the student view."""
+    try:
+        return f"\u20b9{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _render_journal_table(outcome: Dict[str, Any]) -> None:
+    """A clean Debit | Amount | Credit | Amount table from the canonical
+    journal lines (verbatim engine data - no accounting here)."""
+    debits = outcome.get("debit_lines") or []
+    credits = outcome.get("credit_lines") or []
+    n = max(len(debits), len(credits))
+    rows = []
+    for i in range(n):
+        d = debits[i] if i < len(debits) else {}
+        c = credits[i] if i < len(credits) else {}
+        d_acct = _esc(d.get("account") or "")
+        d_amt = _fmt_rupee(d.get("amount")) if d.get("account") else ""
+        c_acct = _esc(c.get("account") or "")
+        c_amt = _fmt_rupee(c.get("amount")) if c.get("account") else ""
+        rows.append(
+            f"<tr><td>{d_acct}</td><td class='amt'>{d_amt}</td>"
+            f"<td>{c_acct}</td><td class='amt'>{c_amt}</td></tr>"
+        )
+    st.markdown(
+        '<div class="fte-fyjc-card"><table class="fte-fyjc-journal">'
+        "<tr><th>Debit</th><th>Amount</th><th>Credit</th><th>Amount</th></tr>"
+        + "".join(rows) + "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_amount_breakdown(outcome: Dict[str, Any]) -> None:
+    """A 'Trade discount' breakdown straight from the engine's deterministic
+    calculation records (BK_LIST_PRICE -> BK_TRADE_DISCOUNT_AMOUNT ->
+    BK_NET_TRANSACTION_VALUE). Read-only; no arithmetic is done here."""
+    records = {
+        r.get("calculation_id"): r
+        for r in (outcome.get("calculation_records") or [])
+    }
+    if "BK_TRADE_DISCOUNT_AMOUNT" not in records:
+        return
+    list_price = records.get("BK_LIST_PRICE", {}).get("result")
+    td = records.get("BK_TRADE_DISCOUNT_AMOUNT", {})
+    net = records.get("BK_NET_TRANSACTION_VALUE", {}).get("result")
+    if list_price is None or net is None:
+        return
+    st.markdown("**Trade discount**")
+    st.markdown(f"- List price: {_fmt_rupee(list_price)}")
+    rate = (td.get("inputs") or {}).get("trade_discount_rate")
+    if rate is not None:
+        st.markdown(
+            f"- Trade discount: {_esc(rate)}% = {_fmt_rupee(td.get('result'))}"
+        )
+    st.markdown(f"- Net amount: {_fmt_rupee(net)}")
+
+
+def _render_accounting_answer(flow: Dict[str, Any]) -> None:
+    """Sprint 15I-R: the ANSWER comes first - the canonical journal - so a
+    verified book-keeping result is immediately readable."""
+    st.markdown('<div class="fte-fyjc-title">2 · Answer</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
+        f'{_esc(flow.get("status_label"))}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("**Journal Entry**")
+    _render_journal_table(flow.get("outcome") or {})
+
+
+def _render_accounting_why(flow: Dict[str, Any]) -> None:
+    """Sprint 15I-R: a simple per-line explanation sourced from the engine's
+    own WHY text (never duplicated in the UI), then the golden rule, then
+    the trade-discount breakdown when the engine produced one."""
+    outcome = flow.get("outcome") or {}
+    st.markdown('<div class="fte-fyjc-title">Why?</div>',
+                unsafe_allow_html=True)
+    for line in (outcome.get("debit_lines") or []) + \
+            (outcome.get("credit_lines") or []):
+        account = line.get("account")
+        if not account:
+            continue
+        side = "Debit" if line.get("side") == "debit" else "Credit"
+        hint = line.get("side_hint") or line.get("rule") or ""
+        st.markdown(
+            f'<div class="fte-fyjc-whyline"><b>{side} {_esc(account)} '
+            f'{_fmt_rupee(line.get("amount"))}</b> — {_esc(hint)}</div>',
+            unsafe_allow_html=True,
+        )
+    rule = outcome.get("rule")
+    if rule:
+        st.markdown(f"**Golden rule applied:** {_esc(rule)}")
+    _render_amount_breakdown(outcome)
+
+
 def _render_accounting_flow(flow: Dict[str, Any]) -> None:
+    status = flow.get("status")
+    if status == "VERIFIED":
+        # Sprint 15I-R: Answer -> Why? -> detailed reasoning (expander).
+        _render_accounting_answer(flow)
+        _render_accounting_why(flow)
+        with st.expander("▸ Show detailed reasoning"):
+            st.caption(
+                "The full 8-step working — kept for anyone who wants the "
+                "audit trail."
+            )
+            _render_steps(flow.get("steps") or [])
+            _render_audit(flow.get("audit") or {})
+        return
+
     st.markdown(
         '<div class="fte-fyjc-title">2 · Book-Keeping — reasoning</div>',
         unsafe_allow_html=True,
     )
-    status = flow.get("status")
-    if status == "VERIFIED":
-        st.markdown(
-            f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
-            f'{_esc(flow.get("status_label"))}</div>',
-            unsafe_allow_html=True,
-        )
-    elif status == "BLOCKED":
+    if status == "BLOCKED":
         st.markdown(
             f'<div class="fte-fyjc-card">{_chip("BLOCKED", "red")} '
             f'{_esc(flow.get("status_label"))}</div>',
@@ -769,96 +893,126 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
     q = effective_question(st.session_state)
     result = st.session_state.get(K_ACCT_VERIFY) or {}
 
-    st.markdown("Choose the check you want to perform:")
-
-    # --- Journal entry check ---------------------------------------------
-    with st.expander("Check a journal entry (Debit = Credit + direction)"):
-        row1 = st.columns(2)
-        with row1[0]:
-            d1a = st.text_input("Debit account 1", key="fte_fyjc_jd1a",
-                                placeholder="Purchases")
-            d1v = st.text_input("Debit amount 1", key="fte_fyjc_jd1v",
-                                placeholder="10000")
-        with row1[1]:
-            c1a = st.text_input("Credit account 1", key="fte_fyjc_jc1a",
-                                placeholder="Rahul")
-            c1v = st.text_input("Credit amount 1", key="fte_fyjc_jc1v",
-                                placeholder="10000")
-        row2 = st.columns(2)
-        with row2[0]:
-            d2a = st.text_input("Debit account 2", key="fte_fyjc_jd2a")
-            d2v = st.text_input("Debit amount 2", key="fte_fyjc_jd2v")
-        with row2[1]:
-            c2a = st.text_input("Credit account 2", key="fte_fyjc_jc2a")
-            c2v = st.text_input("Credit amount 2", key="fte_fyjc_jc2v")
-        if st.button("Verify journal entry", key="fte_fyjc_jv_btn",
-                     width="stretch"):
-            jv = verify_student_journal(
-                q,
-                [d1a, d2a], [d1v, d2v], [c1a, c2a], [c1v, c2v],
-            )
-            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
-            result["journal"] = jv
-            _save_acct_verify(result)
-            st.rerun()
-        jv = result.get("journal")
-        if jv:
-            _render_journal_verdict(jv, entries)
-
-    # --- Ledger balance check --------------------------------------------
-    with st.expander("Check a ledger balance"):
-        lr = st.columns(2)
-        with lr[0]:
-            acc = st.text_input("Account", key="fte_fyjc_lacc",
-                                placeholder="Cash")
-        with lr[1]:
-            bal = st.text_input("Your balance", key="fte_fyjc_lbal",
-                                placeholder="50000")
-        side = st.selectbox("Side", ["Dr", "Cr"], key="fte_fyjc_lside")
-        if st.button("Verify ledger balance", key="fte_fyjc_lv_btn",
-                     width="stretch"):
-            lv = verify_student_ledger(acc, bal, side, entries)
-            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
-            result["ledger"] = lv
-            _save_acct_verify(result)
-            st.rerun()
-        lv = result.get("ledger")
-        if lv:
-            _render_verdict_entry(lv)
-
-    # --- Trial balance check ---------------------------------------------
-    with st.expander("Check a trial balance (one line per account)"):
-        st.caption(
-            "One account per line: `Account, Dr amount, Cr amount` — "
-            "e.g. `Cash, 50000, 0` and `Capital, 0, 50000`."
-        )
-        tb_text = st.text_area(
-            "Your trial balance lines", key="fte_fyjc_tb_lines", height=90,
-            placeholder="Cash, 50000, 0\nCapital, 0, 50000",
-        )
-        if st.button("Verify trial balance", key="fte_fyjc_tbv_btn",
-                     width="stretch"):
-            tv = verify_student_trial_balance(tb_text, entries)
-            result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
-            result["trial_balance"] = tv
-            _save_acct_verify(result)
-            st.rerun()
-        tv = result.get("trial_balance")
-        if tv:
-            _render_verdict_entry(tv)
-
-    # --- Built-in consistency summary ------------------------------------
-    if flow.get("verification"):
-        v = flow["verification"]
+    # Sprint 15I-R: a verified engine answer leads with the FT-E check.
+    verification = flow.get("verification") or {}
+    if flow.get("status") == "VERIFIED" and verification:
         st.markdown(
-            f"**FT-E's own check:** Debit {v.get('total_debit'):,.2f} = "
-            f"Credit {v.get('total_credit'):,.2f} — {v.get('verdict')}"
+            f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
+            f'FT-E verified this entry</div>',
+            unsafe_allow_html=True,
         )
-    if not (outcome.get("debit_lines") or outcome.get("credit_lines")):
-        st.caption(
-            "The transaction was not resolved, so reference checks are "
-            "limited — fix the description above first."
-        )
+        td = verification.get("total_debit")
+        tc = verification.get("total_credit")
+        if td is not None and tc is not None:
+            st.markdown(
+                f"**Debit {td:,.2f} = Credit {tc:,.2f}** — the entry is "
+                "balanced."
+            )
+
+    # Sprint 15I-R: the student self-checks move behind one expander. The
+    # checks themselves (journal / ledger / trial balance) are unchanged.
+    with st.expander("▸ Check my answer"):
+        st.markdown("Choose the check you want to perform:")
+
+        # --- Journal entry check -----------------------------------------
+        with st.expander(
+                "Check a journal entry (Debit = Credit + direction)"):
+            row1 = st.columns(2)
+            with row1[0]:
+                d1a = st.text_input("Debit account 1", key="fte_fyjc_jd1a",
+                                    placeholder="Purchases")
+                d1v = st.text_input("Debit amount 1", key="fte_fyjc_jd1v",
+                                    placeholder="10000")
+            with row1[1]:
+                c1a = st.text_input("Credit account 1",
+                                    key="fte_fyjc_jc1a",
+                                    placeholder="Rahul")
+                c1v = st.text_input("Credit amount 1",
+                                    key="fte_fyjc_jc1v",
+                                    placeholder="10000")
+            row2 = st.columns(2)
+            with row2[0]:
+                d2a = st.text_input("Debit account 2",
+                                    key="fte_fyjc_jd2a")
+                d2v = st.text_input("Debit amount 2",
+                                    key="fte_fyjc_jd2v")
+            with row2[1]:
+                c2a = st.text_input("Credit account 2",
+                                    key="fte_fyjc_jc2a")
+                c2v = st.text_input("Credit amount 2",
+                                    key="fte_fyjc_jc2v")
+            if st.button("Verify journal entry", key="fte_fyjc_jv_btn",
+                         width="stretch"):
+                jv = verify_student_journal(
+                    q,
+                    [d1a, d2a], [d1v, d2v], [c1a, c2a], [c1v, c2v],
+                )
+                result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
+                result["journal"] = jv
+                _save_acct_verify(result)
+                st.rerun()
+            jv = result.get("journal")
+            if jv:
+                _render_journal_verdict(jv, entries)
+
+        # --- Ledger balance check ----------------------------------------
+        with st.expander("Check a ledger balance"):
+            lr = st.columns(2)
+            with lr[0]:
+                acc = st.text_input("Account", key="fte_fyjc_lacc",
+                                    placeholder="Cash")
+            with lr[1]:
+                bal = st.text_input("Your balance", key="fte_fyjc_lbal",
+                                    placeholder="50000")
+            side = st.selectbox("Side", ["Dr", "Cr"],
+                                key="fte_fyjc_lside")
+            if st.button("Verify ledger balance", key="fte_fyjc_lv_btn",
+                         width="stretch"):
+                lv = verify_student_ledger(acc, bal, side, entries)
+                result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
+                result["ledger"] = lv
+                _save_acct_verify(result)
+                st.rerun()
+            lv = result.get("ledger")
+            if lv:
+                _render_verdict_entry(lv)
+
+        # --- Trial balance check -----------------------------------------
+        with st.expander(
+                "Check a trial balance (one line per account)"):
+            st.caption(
+                "One account per line: `Account, Dr amount, Cr amount` — "
+                "e.g. `Cash, 50000, 0` and `Capital, 0, 50000`."
+            )
+            tb_text = st.text_area(
+                "Your trial balance lines", key="fte_fyjc_tb_lines",
+                height=90,
+                placeholder="Cash, 50000, 0\nCapital, 0, 50000",
+            )
+            if st.button("Verify trial balance", key="fte_fyjc_tbv_btn",
+                         width="stretch"):
+                tv = verify_student_trial_balance(tb_text, entries)
+                result = dict(st.session_state.get(K_ACCT_VERIFY) or {})
+                result["trial_balance"] = tv
+                _save_acct_verify(result)
+                st.rerun()
+            tv = result.get("trial_balance")
+            if tv:
+                _render_verdict_entry(tv)
+
+        # --- Built-in consistency summary --------------------------------
+        if flow.get("verification"):
+            v = flow["verification"]
+            st.markdown(
+                f"**FT-E's own check:** Debit {v.get('total_debit'):,.2f} = "
+                f"Credit {v.get('total_credit'):,.2f} — {v.get('verdict')}"
+            )
+        if not (outcome.get("debit_lines")
+                or outcome.get("credit_lines")):
+            st.caption(
+                "The transaction was not resolved, so reference checks are "
+                "limited — fix the description above first."
+            )
 
 
 def _render_journal_verdict(jv: Dict[str, Any],

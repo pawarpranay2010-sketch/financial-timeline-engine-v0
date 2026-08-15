@@ -796,6 +796,11 @@ def hardened_bookkeeping_outcome(description: str,
             "role": account_role(account),
             "side_hint": line.get("why"),
             "class": line.get("class"),
+            # Sprint 15I-R: pass the per-line golden rule through so the
+            # Study / Verify 'Why?' section can show the rule that matches
+            # the account type ('Credit the giver' for a party, never
+            # 'credit incomes and gains'). Presentation only.
+            "rule": line.get("rule"),
         })
 
     rule = None
@@ -817,6 +822,12 @@ def hardened_bookkeeping_outcome(description: str,
         "why_not": res.get("why_not"),
         "next_action": res.get("next_action"),
         "authority_state": "bookkeeping",
+        # Sprint 15I-R: the engine's deterministic calculation records
+        # (e.g. BK_LIST_PRICE -> BK_TRADE_DISCOUNT_AMOUNT ->
+        # BK_NET_TRANSACTION_VALUE) are passed through for the student
+        # 'Trade discount' breakdown. Read-only presentation data from
+        # the hardened engine - no arithmetic is done here.
+        "calculation_records": res.get("calculation_records") or [],
     }
 
 
