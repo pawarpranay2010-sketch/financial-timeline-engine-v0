@@ -237,6 +237,13 @@ _PERCENT_TOKEN = re.compile(r"\b(\d+(?:\.\d+)?)\s*%")
 # 'trade'/'cash discount' exactly like a '%' token.
 _WORD_PERCENT_TOKEN = re.compile(
     r"\b(\d+(?:\.\d+)?)\s+per(?:[\- ])?cent\b")
+
+# Sprint 15I-UZ (D2): a two-letter abbreviation ('T.D.', 'C.D.') is NEVER
+# a sentence boundary - '12% T.D. He issued a bearer cheque ...' is ONE
+# transaction, not a sale plus a separate payment sentence. The dotted
+# abbreviation is swapped to sentinel characters before splitting and
+# restored to exact dotted form afterwards.
+_ABBREV_RE = re.compile(r"\b([A-Za-z])\.([A-Za-z])\.(?=\s)")
 _FRACTION_WORDS = {
     "half": "50", "one-half": "50", "one half": "50",
     "quarter": "25", "one-fourth": "25", "one fourth": "25",
@@ -335,10 +342,26 @@ def _paid_fraction(text: str) -> Optional[Decimal]:
     '...at 25% trade discount; paid three-fourths immediately' must pay
     75%, never the 25% of the discount)."""
     low = " " + str(text or "").lower() + " "
+    _customer_cheque = _customer_issued_cheque(low)
     for word, fraction in _FRACTION_WORDS.items():
         if f" {word} " in low:
             if ("paid" in low or "cash" in low or "immediately" in low
                     or "at once" in low):
+                return Decimal(fraction)
+    # Sprint 15I-UZ (D5): a word fraction OF THE AMOUNT with a payment
+    # mode ('half of the amount by cheque', 'half the amount paid by
+    # bank') - the fraction of the transaction value actually paid.
+    for word, fraction in _FRACTION_WORDS.items():
+        if f" {word} " in low and re.search(
+                r"\b(?:of\s+the\s+)?(?:amount|total|transaction|payment)\b",
+                low):
+            if any(k in low for k in ("cheque", "check", "paid", "bank",
+                                      "immediately", "at once")):
+                # a cheque ISSUED BY THE CUSTOMER in a sale is received
+                # only on deposit (a later step) - never the business's
+                # own payment fraction.
+                if _customer_cheque and "paid" not in low:
+                    continue
                 return Decimal(fraction)
     # percent-based payment fractions: a '<n>%' token is the PAID portion
     # only when its immediate neighbourhood says 'paid'/'immediately'/'at
@@ -360,6 +383,156 @@ def _paid_fraction(text: str) -> Optional[Decimal]:
                 return Decimal(m.group(1))
             except (InvalidOperation, ValueError):
                 continue
+    # Sprint 15I-UZ (D5): a percent OF THE AMOUNT with an explicit
+    # payment clause ('issued a cheque in his favour for 50% of the
+    # amount', 'paid 50% of the total by bank').
+    for m in _PERCENT_TOKEN.finditer(low):
+        after = low[m.end():m.end() + 40]
+        if re.match(r"\s*(?:of|for)\s+(?:the\s+)?(?:amount|total|"
+                    r"transaction|purchase price)", after):
+            window = low[max(0, m.start() - 40):m.end() + 12]
+            if "discount" in window:
+                continue
+            if _customer_cheque:
+                continue
+            try:
+                return Decimal(m.group(1))
+            except (InvalidOperation, ValueError):
+                continue
+    return None
+
+
+# Sprint 15I-UZ direction helpers. The transaction DIRECTION (sale vs
+# purchase) is established by the VERB before any word-list match, so a
+# sale sentence ('Sold goods worth Rs.X to <party>') can never fall
+# through to the purchase patterns (D1). Bare 'goods worth' (no verb) is
+# the established credit-purchase form only when no sale verb is present.
+_SALE_STRONG_HINTS = (
+    "sold goods", "goods sold", "sold stock", "stock sold", "sold to",
+    "credit sale", "sold on credit", "sold goods to",
+    "sold goods on credit", "sold goods worth", "sold stock worth",
+    "sold goods for cash", "sold for cash", "sale of goods", "cash sale",
+    "goods sold to", "sold goods in cash",
+)
+_PURCHASE_STRONG_HINTS = (
+    "purchased goods", "bought goods", "goods purchased", "goods bought",
+    "purchased stock", "bought stock", "stock purchased", "stock bought",
+    "purchased goods worth", "bought goods worth", "purchased stock worth",
+    "stock worth", "purchased goods for cash", "bought goods for cash",
+    "goods purchased for cash", "purchased goods by cheque",
+    "bought goods by cheque", "purchased goods on credit",
+    "credit purchase", "goods bought for cash", "purchased stock for cash",
+)
+
+
+def _sale_direction_in(low: str) -> bool:
+    """True when the text deterministically states a SALE direction."""
+    return any(k in low for k in _SALE_STRONG_HINTS)
+
+
+def _purchase_direction_in(low: str) -> bool:
+    """True when the text deterministically states a PURCHASE direction."""
+    return any(k in low for k in _PURCHASE_STRONG_HINTS)
+
+
+def _direction_scan_text(low: str) -> str:
+    """Lowercased text with abbreviation dots removed ('Mr.', 'Rs.',
+    'T.D.', 'C.D.') so direction regexes can cross party/currency
+    boundaries deterministically ('Sold goods purchased from Mr. Roger
+    Federer of Rs.25,000 (cost price) to Mr. Novak Djokovic' must read
+    the 'to <party>' clause). Used ONLY for direction/recipient
+    detection - never for amounts or account names."""
+    t = re.sub(r"\b(?:mr|mrs|ms|dr|prof|rev|st)\.(?=\s|$)", "", low)
+    t = re.sub(r"\b(?:rs|inr)\.(?=\s|\d|$)", "", t)
+    t = _ABBREV_RE.sub(lambda m: m.group(1) + m.group(2), t)
+    return t
+
+
+def _customer_issued_cheque(low: str) -> bool:
+    """True when a CUSTOMER (not the business) issued the cheque - a sale
+    clause like 'He issued a bearer cheque ...' is received only on
+    deposit (a later step) and is never the business's own payment."""
+    if not _sale_direction_in(low):
+        return False
+    return bool(re.search(
+        r"\b(?:he|she|they|the customer|the buyer)\b[^.;]*?"
+        r"\b(?:issued|gave|handed|sent)\b[^.;]*?\bcheque\b", low))
+
+
+def _cheque_amount_in(low: str) -> Optional[Decimal]:
+    """The figure stated as 'cheque of Rs.X' / 'cheque for Rs.X', or None.
+    A '%' right after it means a rate, never a money amount."""
+    m = re.search(
+        r"\b(?:cheque|check)\s+(?:of|for)\s*(?:rs\.?|\u20b9|inr)?\s*"
+        r"(\d[\d,]*(?:\.\d+)?)", low)
+    if not m:
+        return None
+    after = low[m.end():m.end() + 2]
+    if after.lstrip().startswith("%"):
+        return None
+    try:
+        return Decimal(m.group(1).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _account_balance_figure(low: str) -> Optional[Decimal]:
+    """The STATED account balance ('his account of Rs.X', 'balance of
+    Rs.X'). A receipt/payment against this figure is a partial (or at-par)
+    settlement - the difference is never an invented discount (D4)."""
+    m = re.search(
+        r"\b(?:account|balance)\s+of\s*(?:rs\.?|\u20b9|inr)?\s*"
+        r"(\d[\d,]*(?:\.\d+)?)", low)
+    if not m:
+        return None
+    after = low[m.end():m.end() + 2]
+    if after.lstrip().startswith("%"):
+        return None
+    try:
+        return Decimal(m.group(1).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+# Sprint 15I-UZ (D3): profit-on-cost vs profit-on-selling-price. The rate
+# may precede ('at 30% profit on cost') or follow ('profit of 30% on
+# cost') the profit noun.
+_PROFIT_ON_COST_RE = re.compile(
+    r"(?:(\d+(?:\.\d+)?)\s*(?:%|percent)\s*profit|profit\s+of\s+"
+    r"(\d+(?:\.\d+)?)\s*(?:%|percent))\s+on\s+(?:the\s+)?"
+    r"(?:cost\s+price|cost)\b")
+_PROFIT_ON_SELLING_RE = re.compile(
+    r"(?:(\d+(?:\.\d+)?)\s*(?:%|percent)\s*profit|profit\s+of\s+"
+    r"(\d+(?:\.\d+)?)\s*(?:%|percent))\s+on\s+(?:the\s+)?"
+    r"(?:selling\s+price|sale\s+price|selling)\b")
+
+
+def _profit_on_cost(text: str) -> Optional[Tuple[Decimal, str]]:
+    """(rate, kind) for profit wording - kind is 'on_cost', 'on_selling'
+    or 'ambiguous'. None when no profit wording exists at all."""
+    low = " " + str(text or "").lower() + " "
+    m = _PROFIT_ON_COST_RE.search(low)
+    if m:
+        raw = m.group(1) or m.group(2)
+        try:
+            rate = Decimal(raw)
+        except (InvalidOperation, ValueError):
+            return (None, "ambiguous")
+        if 0 < rate < Decimal(1000):
+            return (rate, "on_cost")
+        return (None, "ambiguous")
+    m = _PROFIT_ON_SELLING_RE.search(low)
+    if m:
+        raw = m.group(1) or m.group(2)
+        try:
+            rate = Decimal(raw)
+        except (InvalidOperation, ValueError):
+            return (None, "ambiguous")
+        if 0 < rate < Decimal(100):
+            return (rate, "on_selling")
+        return (None, "ambiguous")
+    if re.search(r"\bprofit\b", low):
+        return (None, "ambiguous")
     return None
 
 
@@ -943,7 +1116,23 @@ def _party_from_text(text: str) -> Optional[str]:
         if party:
             return party
     low = text.lower()
-    for marker in ("on credit from ", "sold goods on credit to ",
+    # Sprint 15I-UZ (D1): a SALE with a named buyer ('Sold goods
+    # [purchased from X] ... to Y') resolves the party from the BUYER
+    # clause - the supplier in the provenance clause is never the
+    # receiver account, and 'purchased goods from ' must not fire before
+    # 'sold ... to ' (the old order captured the supplier and a trailing
+    # 'of' -> 'Mr. Roger Federer Of').
+    _sale_with_buyer = bool(
+        re.search(r"\bsold\b", low)
+        and re.search(r"\bsold\b[^.;]*?\bto\b\s+[a-z]",
+                      _direction_scan_text(low)))
+    if _sale_with_buyer:
+        markers = ("sold goods on credit to ", "sold goods to ",
+                   "on credit to ", "sold to ", " to ",
+                   # cheque-in-favour wording (Sprint 15F)
+                   "in favour of ", "in favor of ", "cheque in favour of ")
+    else:
+        markers = ("on credit from ", "sold goods on credit to ",
                    "on credit to ", "purchased goods from ", "purchased from ",
                    "bought goods from ", "bought from ", "sold goods to ",
                    "paid to ", "received from ", "sold to ",
@@ -951,7 +1140,8 @@ def _party_from_text(text: str) -> Optional[str]:
                    "received cash from ", "paid cash to ", "paid ",
                    "from ", " to ",
                    # cheque-in-favour wording (Sprint 15F)
-                   "in favour of ", "in favor of ", "cheque in favour of "):
+                   "in favour of ", "in favor of ", "cheque in favour of ")
+    for marker in markers:
         if marker in low:
             idx = low.index(marker) + len(marker)
             rest = text[idx:]
@@ -1349,18 +1539,59 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         "sold goods to", "goods sold to", "sold goods worth",
         "sold stock worth",
     )
+    # Sprint 15I-UZ (D1): the transaction DIRECTION is decided by the
+    # VERB before any word-list match. 'Sold goods worth Rs.X to
+    # <party>' is a SALE - the bare 'goods worth' purchase keyword must
+    # never flip it into a purchase. When both a sale verb and a
+    # purchase verb appear, the wording is only a sale when the purchase
+    # phrase is provenance INSIDE the sale clause ('Sold goods
+    # [purchased from X] to Y'); otherwise the direction is genuinely
+    # ambiguous and FT-E refuses (never guesses).
+    sale_verb = _sale_direction_in(low)
+    purchase_verb = _purchase_direction_in(low)
+    direction = None
+    if sale_verb and purchase_verb:
+        scan = _direction_scan_text(low)
+        m_sale_start = re.search(r"\bsold\b", scan)
+        m_to = re.search(r"\bsold\b[^.;]*?\bto\b\s+[a-z]", scan)
+        m_from = re.search(
+            r"\b(?:purchased|bought)\b[^.;]*?\bfrom\b\s+[a-z]", scan)
+        provenance = bool(m_sale_start and m_to and m_from
+                          and m_sale_start.start() <= m_from.start()
+                          and m_from.end() < m_to.end())
+        if provenance:
+            direction = "sale"
+        else:
+            return {
+                "key": "DIRECTION_CONTRADICTORY",
+                "label": "Purchase and sale wording both present",
+                "refuse": True, "debit": [], "credit": [],
+                "why": ("The description contains BOTH purchase and sale "
+                        "wording and FT-E cannot deterministically decide "
+                        "which direction the goods moved. It never guesses "
+                        "a direction - split it into two transactions."),
+            }
+    elif sale_verb:
+        direction = "sale"
+    elif purchase_verb:
+        direction = "purchase"
+    elif "goods worth" in low or "stock worth" in low:
+        # 'Goods worth Rs.X from <party>' (no verb) is the established
+        # credit-purchase form (Sprint 15E).
+        direction = "purchase"
     # 'Goods costing Rs.10,000 sold ... for cash Rs.12,000' is a sale; the
     # COST figure is not the sale value (dropped in the amount pipeline).
     costing_sale = "costing" in low and any(k in low for k in (
         "sold", "sale ", "sales"))
     if has_cash_mode and not has_credit_mode:
-        if any(k in low for k in goods_purchase_words):
+        if direction != "sale" and any(k in low for k in goods_purchase_words):
             return {
                 "key": "PURCHASE_GOODS_CASH",
                 "label": "Goods purchased for cash",
                 "debit": ["Purchases"], "credit": ["Cash", "Bank"],
             }
-        if any(k in low for k in goods_sale_words) or costing_sale:
+        if direction == "sale" and (any(k in low for k in goods_sale_words)
+                                    or costing_sale):
             # 'Sold goods to Mohan ... ; received cash for half at once' is
             # a CREDIT sale with a PARTIAL collection (Mohan stays a
             # debtor for the unpaid balance). The 'cash' word describes the
@@ -1369,8 +1600,8 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             # 'for cash' (Sprint 15F: Mohan never becomes a debtor for a
             # true cash sale, and never disappears from a partial one).
             _sale_party = bool(re.search(
-                r"\bsold\b[^.;]*?\bto\b\s+[a-z]", low)) \
-                or "sold to" in low
+                r"\bsold\b[^.;]*?\bto\b\s+[a-z]",
+                _direction_scan_text(low))) or "sold to" in low
             _partial_collection = bool(_paid_fraction(question)) \
                 or "half" in low or "quarter" in low
             if _sale_party and _partial_collection \
@@ -1391,13 +1622,13 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # Rahul'). A party named with credit wording never becomes a cash
     # transaction (Sprint 15F: 'on account' = 'on credit').
     if has_credit_mode and not has_cash_mode:
-        if any(k in low for k in goods_purchase_words):
+        if direction != "sale" and any(k in low for k in goods_purchase_words):
             return {
                 "key": "PURCHASE_GOODS_CREDIT",
                 "label": "Goods purchased on credit",
                 "debit": ["Purchases"], "credit": [{"party": "giver"}],
             }
-        if any(k in low for k in goods_sale_words):
+        if direction == "sale" and any(k in low for k in goods_sale_words):
             return {
                 "key": "SALE_GOODS_CREDIT",
                 "label": "Goods sold on credit",
@@ -1630,6 +1861,13 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         when = cand["when"]
         phrases = when if isinstance(when, (tuple, list)) else (when,)
         if any(phrase in low for phrase in phrases):
+            # Sprint 15I-UZ (D1): the direction decided by the verb wins
+            # over a matching word list - a sale sentence never matches a
+            # purchase pattern (and vice versa).
+            if direction == "sale" and "PURCHASE" in cand["key"]:
+                continue
+            if direction == "purchase" and "SALE" in cand["key"]:
+                continue
             return dict(cand)
         # Sprint 15C P0 fallbacks: the amount often sits BETWEEN the verb
         # and the party ('Paid Rahul Rs.8,000 in cash', 'Paid Rs.8,000 to
@@ -1653,6 +1891,21 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 and "from" in low and "cheque" not in low \
                 and "check" not in low:
             return dict(cand)
+    # Sprint 15I-UZ (D1): 'Sold goods worth Rs.X to <party>' - the amount
+    # sits between the goods word and 'to', so no contiguous phrase can
+    # match, but a named recipient is the SAME credit-sale evidence as
+    # 'Sold goods to Ram' (never a purchase, never a refusal - a sale
+    # sentence can never fall through to the 'goods worth' purchase
+    # pattern). With no named recipient the sale stays in the ambiguity
+    # layer (REVIEW_REQUIRED) - the cash/credit mode is never guessed.
+    if direction == "sale" and any(k in low for k in goods_sale_words):
+        if re.search(r"\bsold\b[^.;]*?\bto\b\s+[a-z]",
+                     _direction_scan_text(low)):
+            return {
+                "key": "SALE_GOODS_CREDIT",
+                "label": "Goods sold on credit",
+                "debit": [{"party": "receiver"}], "credit": ["Sales"],
+            }
     return None
 
 
@@ -1890,8 +2143,15 @@ def _detect_explicit_discount(question: str,
                or bool(re.search(r"allowed\s+[A-Za-z][A-Za-z' ]{0,40}?\s+discount",
                                  low)))
     received = "discount received" in low or "received discount" in low
+    # Sprint 15I-UZ (D4): a discount is derived ONLY from genuine
+    # SETTLEMENT wording. 'against his account of Rs.X' / 'in part
+    # payment of' / 'on account' describe a PARTIAL receipt/payment - the
+    # shortfall is never an invented discount.
     settlement_only = ("full settlement" in low or "settlement of" in low
-                       or "in settlement of" in low or "account of" in low)
+                       or "in settlement of" in low
+                       or "settling his account" in low
+                       or "settled his account" in low
+                       or "final settlement" in low)
     # Sprint 15I-L: an explicit CASH-discount AMOUNT can appear BEFORE
     # the 'cash discount' noun ('allowed Rs.500 cash discount', 'received
     # Rs.500 cash discount', 'after Rs.500 cash discount') - the same
@@ -2125,6 +2385,17 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                 pass
     percents = _extract_percents(question)
 
+    # Sprint 15I-UZ (D3): profit evidence - 'at Y% profit on cost price'
+    # (sale value = cost x (1 + Y%)) vs 'profit on selling price' (sale
+    # value = cost / (1 - Y%)). A profit wording whose convention cannot
+    # be read deterministically is never silently dropped - it stays a
+    # concern that forces REVIEW_REQUIRED.
+    profit_rate: Optional[Decimal] = None
+    profit_kind: Optional[str] = None
+    _profit_info = _profit_on_cost(question)
+    if _profit_info is not None:
+        profit_rate, profit_kind = _profit_info
+
     # Sprint 15I-TX: business/personal-use splits resolve BOTH stated
     # figures deterministically (withdrawal/purchase total + personal-use
     # portion), so the unresolved-amount gate below never fires on them.
@@ -2157,6 +2428,56 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         "result": list_price,
     })
 
+    # Sprint 15I-UZ (D3): profit-on-cost / profit-on-selling-price
+    # modifier. The stated figure is the COST; the posted sale value is
+    # cost x (1 + profit%) for profit ON COST, or cost / (1 - profit%)
+    # for profit ON SELLING PRICE. Both are deterministic FYJC
+    # conventions - the stated profit percentage is never dropped.
+    _sale_dir_text = _sale_direction_in(low)
+    if profit_rate is not None and profit_kind == "on_cost" and _sale_dir_text:
+        list_price = (list_price * (Decimal(100) + profit_rate)
+                      / Decimal(100)).quantize(Decimal("0.01"))
+        steps.append({
+            "calculation_id": "BK_PROFIT_ON_COST",
+            "label": "Apply Profit on Cost",
+            "formula": "Selling price = Cost x (1 + Profit on cost %)",
+            "inputs": {"cost": amounts[0], "profit_on_cost": profit_rate},
+            "result": list_price,
+        })
+    elif profit_rate is not None and profit_kind == "on_selling" \
+            and _sale_dir_text:
+        if profit_rate >= Decimal(100):
+            concerns.append(
+                "The stated profit on selling price is 100% or more - "
+                "the selling price cannot be derived. FT-E never "
+                "guesses it.")
+        elif "costing" in low or "cost price" in low:
+            list_price = (list_price * Decimal(100)
+                          / (Decimal(100) - profit_rate)).quantize(
+                              Decimal("0.01"))
+            steps.append({
+                "calculation_id": "BK_PROFIT_ON_SELLING",
+                "label": "Apply Profit on Selling Price",
+                "formula": ("Selling price = Cost / (1 - Profit on "
+                            "selling price %)"),
+                "inputs": {"cost": amounts[0],
+                           "profit_on_selling": profit_rate},
+                "result": list_price,
+            })
+        else:
+            concerns.append(
+                "Profit on selling price is stated but the COST figure "
+                "is not identifiable. FT-E never guesses the base.")
+    elif profit_rate is not None and profit_kind in ("on_cost", "on_selling") \
+            and not _sale_dir_text:
+        concerns.append(
+            "Profit wording appears outside a sale - FT-E never guesses "
+            "the convention.")
+    elif profit_rate is None and profit_kind == "ambiguous":
+        concerns.append(
+            "Profit is mentioned but its percentage or convention cannot "
+            "be read deterministically. FT-E never silently drops it.")
+
     # -- Trade discount ---------------------------------------------------
     # A '<n>%' token whose surrounding text says 'trade' (or says
     # 'discount' without saying 'cash') is a TRADE discount - it is
@@ -2175,6 +2496,16 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             if ("discount" in label or "less" in label) \
                     and "cash discount" not in label \
                     and not _CD_RATE_HINTS.search(label):
+                trade_rate = rate
+                break
+    # Sprint 15I-UZ (D2): the 'T.D.' abbreviation ('worth Rs.X @ 12%
+    # T.D.') is the same trade-discount rate as 'trade discount' - it is
+    # applied, never silently ignored. A 'C.D.' label is a cash-discount
+    # hint and never becomes a trade discount here.
+    if trade_rate is None:
+        for rate, label in percents:
+            if (re.search(r"\bt\.?d\.?\b", label)
+                    and not re.search(r"\bc\.?d\.?\b", label)):
                 trade_rate = rate
                 break
     trade_amount = None
@@ -2281,6 +2612,10 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     # -- paid vs credit split --------------------------------------------
     paid_amount: Optional[Decimal] = None
     credit_amount: Optional[Decimal] = None
+    # Sprint 15I-UZ: payment-fraction role (pre-declared so the central
+    # rate-consumption gate below can reference it even when the
+    # explicit-discount path applies).
+    fraction: Optional[Decimal] = None
     # Sprint 15I-L: a settlement figure EXPLICITLY STATED in the
     # question ('paid Rs.9,800', 'Received Rs.9,800 from Ram') is NET
     # evidence - a cash-discount rate must apply to the amount due,
@@ -2307,6 +2642,16 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             explicit_paid = (_paid_candidates[-1] if _paid_candidates
                              else amounts[-1])
         fraction = _paid_fraction(question)
+        # Sprint 15I-UZ (D5): an explicit cheque amount ('issued a cheque
+        # of Rs.20,000 in his favour') is a stated payment step - the
+        # figure is consumed as the paid portion. A cheque issued BY THE
+        # CUSTOMER in a sale is received only on deposit and is never the
+        # business's own payment.
+        _cheque_amt = _cheque_amount_in(low)
+        if _cheque_amt is not None and _cheque_amt in amounts \
+                and not _customer_issued_cheque(low):
+            explicit_paid = _cheque_amt
+            paid_stated = True
         if explicit_paid is not None and explicit_paid < net_value:
             paid_amount = explicit_paid
             paid_stated = True
@@ -2478,6 +2823,32 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             "apply it to. FT-E never applies a discount without a "
             "settlement step.")
 
+    # Sprint 15I-UZ (central invariant): every stated RATE/percent must
+    # be consumed by a deterministic role (trade discount, cash discount,
+    # payment fraction, profit). A rate with no role is silently-ignored
+    # evidence - REVIEW_REQUIRED, never a confident journal.
+    consumed_rates: set = set()
+    if trade_rate is not None:
+        consumed_rates.add(trade_rate)
+    if cash_discount_rate is not None:
+        consumed_rates.add(cash_discount_rate)
+    if profit_rate is not None:
+        consumed_rates.add(profit_rate)
+    if fraction is not None:
+        consumed_rates.add(fraction)
+    # Sprint 15I-UZ: GST rates are consumed by the GST journal authority
+    # (_gst_facts/_gst_journal) whenever GST evidence is deterministically
+    # established - they are never "unassigned" by the non-GST roles here.
+    _gst_facts_here = _gst_facts(question)
+    if _gst_facts_here is not None:
+        for _rate, _kind in _gst_facts_here.get("rates") or []:
+            consumed_rates.add(_rate)
+    for rate, _label in percents:
+        if rate not in consumed_rates:
+            concerns.append(
+                f"A stated rate ({_label.strip() or rate}%) could not be "
+                "assigned a deterministic accounting role. FT-E never "
+                "silently ignores it.")
     status = VERIFIED
     why_not = None
     next_action = "Post this entry in your journal and verify it."
@@ -2539,7 +2910,12 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             if explicit_discount["discount_amount"] in amounts:
                 consumed[explicit_discount["discount_amount"]] += 1
         else:
-            consumed[list_price] += 1
+            if list_price in amounts:
+                consumed[list_price] += 1
+            elif amounts:
+                # profit-on-cost: the posted value is cost x (1 + p) -
+                # the STATED figure is the cost and is consumed.
+                consumed[amounts[0]] += 1
             if trade_amount is not None and trade_rate is None:
                 # explicit trade-discount AMOUNT ('less Rs.2,000 trade
                 # discount') - the stated figure fills that role.
@@ -2561,6 +2937,14 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                         or bound == _normalise_party_token(primary)) \
                         and not _paid_list_binds_multiple(question):
                     consumed[explicit_paid] += 1
+            # Sprint 15I-UZ (D4): the stated account balance ('his
+            # account of Rs.X' / 'against his account of Rs.X') is a
+            # deterministic role - the received/paid figure is a partial
+            # (or at-par) settlement and the difference is never an
+            # invented discount. Both stated figures are consumed.
+            _balance_fig = _account_balance_figure(low)
+            if _balance_fig is not None and _balance_fig in amounts:
+                consumed[_balance_fig] += 1
             # started business: every stated figure is a named asset
             # component (Cash / Furniture / Bank ...) - the deterministic
             # breakdown consumes them all when it reconciles with the
@@ -2662,6 +3046,13 @@ def _split_transactions(question: str) -> List[str]:
     _TITLE_RE = re.compile(r"\b(mr|mrs|ms|dr|prof|rev|st)\.\s+",
                            re.IGNORECASE)
     raw = str(question or "")
+    # Sprint 15I-UZ (D2): protect two-letter abbreviations ('T.D.',
+    # 'C.D.', 'N.E.F.T.') so the '.' inside them is never treated as a
+    # sentence boundary ('at 12% T.D.' must stay ONE transaction - it is
+    # the trade-discount rate, not the end of a sentence). The \x02
+    # sentinel is restored to '.' after splitting.
+    raw = _ABBREV_RE.sub(lambda m: m.group(1) + "\x02" + m.group(2) + "\x02",
+                         raw)
     # Sprint 15I-TX: the protected title keeps its ORIGINAL case and the
     # \x01 sentinel is restored to '. ' - so 'Mr. Novak' survives the
     # split as 'Mr. Novak' (never the broken 'mr . Novak' that made the
@@ -2709,8 +3100,8 @@ def _split_transactions(question: str) -> List[str]:
             r",\s+(?=returned (?:goods|stock)|goods returned|"
             r"purchases returns|purchases return|sales returns|"
             r"sales return)", part, flags=re.IGNORECASE))
-    segments = [seg.replace("\x01", ". ").strip() for seg in pieces
-                if seg.strip()]
+    segments = [seg.replace("\x01", ". ").replace("\x02", ".").strip()
+                for seg in pieces if seg.strip()]
     # Sprint 15I-K: a trailing segment that is ONLY a GST component
     # ('CGST @ 9% and SGST @ 9%', 'SGST Rs.900', '• IGST @ 18%') belongs
     # to the previous transaction's GST clause - textbooks often
@@ -3985,6 +4376,26 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "total_credit": 0, "balanced": True,
         }
 
+    # Sprint 15I-UZ (D2): the T.D./C.D. abbreviation protection keeps an
+    # order question with discount/GST wording ONE segment, so the order
+    # refusal must fire BEFORE the GST path - placing an order is not a
+    # transaction even when it quotes rates (the GST path would otherwise
+    # produce a less accurate refusal).
+    if re.search(r"\bplaced\s+(?:an\s+)?order\b",
+                 " " + text.lower() + " "):
+        return {
+            "status": REVIEW_REQUIRED,
+            "why_not": ("Placing an order is not a transaction: no journal "
+                        "entry is recorded until the goods are actually "
+                        "received or supplied. FT-E does not journal an "
+                        "order."),
+            "next_action": ("Record the journal when the goods are actually "
+                            "received or supplied."),
+            "debit_lines": [], "credit_lines": [], "narration": None,
+            "calculation_records": [], "total_debit": 0,
+            "total_credit": 0, "balanced": True,
+        }
+
     # Sprint 15I-K: when ANY GST evidence is present, ONLY the GST path may
     # journal - the plain patterns would silently drop the tax.
     _gst_facts_here = _gst_facts(text)
@@ -4312,10 +4723,32 @@ def generate_journal(question: str) -> Dict[str, Any]:
                     credit_lines.append(_line("Creditors", credit_portion,
                                               "credit"))
         else:
-            for account in _resolve_side_specs(credit_specs, text, "giver"):
-                if account in _party_accounts_for(credit_specs, text, "giver"):
-                    party_accounts.add(account)
-                credit_lines.append(_line(account, net, "credit"))
+            # Sprint 15I-UZ (D5): a purchase whose FULL value is settled
+            # by an explicit payment step ('and paid the full amount by
+            # cheque', '... and paid by cheque', 'for cash') credits the
+            # cash/bank account - the creditor is fully paid and must not
+            # remain credited.
+            # Sprint 15I-UZ (D5): ONLY a goods purchase (PURCHASE_GOODS_*)
+            # settles against the cash/bank account when fully paid - the
+            # 'purchase' flag also covers START_BUSINESS / CAPITAL_INTRODUCED,
+            # which must always credit Capital, never Cash.
+            _full_payment_credit = (
+                "PURCHASE" in pattern["key"] and paid is not None
+                and net is not None and paid == net
+                and re.search(
+                    r"\b(?:cheque|check|paid|for cash|cash)\b",
+                    " " + text.lower() + " ")
+                and "on credit" not in (" " + text.lower() + " "))
+            if _full_payment_credit:
+                cash_acct = "Bank" if cash_or_bank == "Bank" else "Cash"
+                credit_lines.append(_line(cash_acct, net, "credit"))
+            else:
+                for account in _resolve_side_specs(
+                        credit_specs, text, "giver"):
+                    if account in _party_accounts_for(
+                            credit_specs, text, "giver"):
+                        party_accounts.add(account)
+                    credit_lines.append(_line(account, net, "credit"))
 
     # fall back to the Sprint 13 golden-rule engine when our IR produced no
     # usable lines for a recognised pattern (should not happen for the
