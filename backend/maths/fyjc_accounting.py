@@ -785,9 +785,18 @@ def hardened_bookkeeping_outcome(description: str,
     # authority. For clean inputs the wrapper is a pass-through, so
     # historical behavior is byte-identical; it never adds accounting
     # rules of its own.
-    from backend.maths.fyjc_normalization import vy_harden
+    #
+    # Sprint 15I-WF: the boundary is now the transaction orchestrator
+    # (backend.maths.fyjc_orchestration.orchestrate), which composes the
+    # SAME hardened authority through a transaction graph (segments,
+    # facts, authority routing, amount ownership, dependencies, merge
+    # verification). For clean inputs it is a byte-identical pass-through;
+    # it only NARROWS - it refuses a question whose stated facts cannot
+    # all receive a deterministic accounting role (a dishonoured cheque,
+    # a bill of exchange, a duplicated amount claim, a dropped segment).
+    from backend.maths.fyjc_orchestration import orchestrate
 
-    res = vy_harden(description, amount)
+    res = orchestrate(description, amount)
     status = res.get("status") or REVIEW_REQUIRED
 
     lines: List[Dict[str, Any]] = []
@@ -834,6 +843,12 @@ def hardened_bookkeeping_outcome(description: str,
         # 'Trade discount' breakdown. Read-only presentation data from
         # the hardened engine - no arithmetic is done here.
         "calculation_records": res.get("calculation_records") or [],
+        # Sprint 15I-WF: the transaction-orchestrator graph payload
+        # (segments, authority routing, amount ownership, dependencies,
+        # merge verification, invariants). Read-only presentation data;
+        # the verdict itself is composed by the orchestrator before this
+        # adapter runs.
+        "orchestration": res.get("orchestration"),
     }
 
 
