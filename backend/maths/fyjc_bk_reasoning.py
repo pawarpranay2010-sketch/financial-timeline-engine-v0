@@ -85,7 +85,15 @@ from backend.maths.student_sandbox import STATUS_WORDS
 # NOT_SUPPORTED (outside the supported FYJC boundary).
 NOT_SUPPORTED = "NOT_SUPPORTED"
 
-SUPPORTED_STATUSES = (VERIFIED, BLOCKED, REVIEW_REQUIRED, NOT_SUPPORTED)
+# Sprint 15I-VY: a stated MATHEMATICAL contradiction (payment + outstanding
+# != transaction value, GST components inconsistent with the stated rate,
+# discount inconsistent with the stated base) is a deterministic INPUT
+# error, distinct from ambiguity (REVIEW_REQUIRED) and from being outside
+# the supported FYJC surface (NOT_SUPPORTED). Always zero journal lines.
+INVALID_INPUT_MATH = "INVALID_INPUT_MATH"
+
+SUPPORTED_STATUSES = (VERIFIED, BLOCKED, REVIEW_REQUIRED, NOT_SUPPORTED,
+                      INVALID_INPUT_MATH)
 
 # ---------------------------------------------------------------------------
 # Traditional FYJC account classes + Golden Rules (syllabus language)

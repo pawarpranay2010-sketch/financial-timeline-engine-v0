@@ -779,9 +779,15 @@ def hardened_bookkeeping_outcome(description: str,
     imports this module at module scope; reason_bk_question is only
     needed at call time.
     """
-    from backend.maths.fyjc_bk_reasoning import reason_bk_question
+    # Sprint 15I-VY: the production boundary applies the deterministic
+    # linguistic normalization + mathematical contradiction validation
+    # (backend.maths.fyjc_normalization.vy_harden) BEFORE the hardened
+    # authority. For clean inputs the wrapper is a pass-through, so
+    # historical behavior is byte-identical; it never adds accounting
+    # rules of its own.
+    from backend.maths.fyjc_normalization import vy_harden
 
-    res = reason_bk_question(description, amount)
+    res = vy_harden(description, amount)
     status = res.get("status") or REVIEW_REQUIRED
 
     lines: List[Dict[str, Any]] = []

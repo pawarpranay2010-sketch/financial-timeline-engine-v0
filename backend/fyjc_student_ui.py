@@ -67,6 +67,7 @@ from backend.fyjc_student_session import (
     upload_recovery_note,
 )
 from backend.maths.fyjc_student_flow import (
+    INVALID_INPUT_MATH,
     build_understanding,
     run_fyjc_student_flow,
     run_fyjc_maths_flow,
@@ -747,6 +748,14 @@ def _render_accounting_flow(flow: Dict[str, Any]) -> None:
             f'{_esc(flow.get("status_label"))}</div>',
             unsafe_allow_html=True,
         )
+    elif status == INVALID_INPUT_MATH:
+        # Sprint 15I-VY: a stated MATHEMATICAL contradiction is its own
+        # refusal class - never framed as a vague "REVIEW REQUIRED".
+        st.markdown(
+            f'<div class="fte-fyjc-card">{_chip("INVALID INPUT (MATH)", "red")} '
+            f'{_esc(flow.get("status_label"))}</div>',
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown(
             f'<div class="fte-fyjc-card">{_chip("REVIEW REQUIRED", "amber")} '
@@ -1191,7 +1200,8 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
 
 def _render_refusal(flow: Dict[str, Any]) -> None:
     status = flow.get("status")
-    tone = "red" if status == "BLOCKED" else "amber"
+    tone = ("red" if status in ("BLOCKED", INVALID_INPUT_MATH)
+            else "amber")
     st.markdown(
         '<div class="fte-fyjc-title">FT-E couldn’t solve this one</div>',
         unsafe_allow_html=True,

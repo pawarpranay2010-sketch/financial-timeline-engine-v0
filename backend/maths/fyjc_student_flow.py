@@ -42,6 +42,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from backend.maths.fyjc_maths import verify_maths_answer
+from backend.maths.fyjc_bk_reasoning import INVALID_INPUT_MATH
 from backend.maths.fyjc_accounting import (
     hardened_bookkeeping_outcome,
     post_ledger,
