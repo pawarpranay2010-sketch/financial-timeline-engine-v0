@@ -106,6 +106,16 @@ _TRANSACTION_VERBS = (
     "settled", "settlement", "cheque", "cheques",
     "placed an order", "order for goods", "order of goods",
     "executed our order",
+    # Sprint 15I-DISC: discrepancy / reconciliation / rectification
+    # wording routes to the Book-Keeping flow, where the Discrepancy
+    # Authority resolves it deterministically (BRS adjustments, a
+    # dishonoured cheque, an omitted transaction, a rectification
+    # entry). Routing only; the accounting authority is unchanged.
+    "dishonoured", "dishonour", "bounced", "cheque was returned",
+    "bank charges", "bank reconciliation", "reconciliation statement",
+    "pass book", "cash book", "omitted", "rectify", "rectification",
+    "wrongly", "suspense account", "suspense a/c", "undercast",
+    "overcast", "standing instruction",
 )
 _METRIC_HINTS = (
     "calculate", "compute", "find", "ratio", "margin", "percent", " %",

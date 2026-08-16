@@ -43,11 +43,21 @@ Composition contract (safety-first):
     (byte-identical behaviour for every historical gate input) and the
     graph payload is attached for the Study/Verify UI.
   * When a stated fact cannot be deterministically assigned an accounting
-    role - a dishonoured/bounced cheque (Discrepancy Authority missing),
-    a bill of exchange (Bills Authority missing), a duplicated amount
-    claim, or a silently dropped segment - the orchestrator REFUSES with
+    role - a dishonoured/bounced cheque that the Discrepancy Authority
+    cannot resolve (no prior record, no amount, no party), a bill of
+    exchange (Bills Authority missing), a duplicated amount claim, or a
+    silently dropped segment - the orchestrator REFUSES with
     REVIEW_REQUIRED / NOT_SUPPORTED and zero journal lines. It never
     invents an answer and never lets one authority override another.
+
+Sprint 15I-DISC adds the Discrepancy Authority (implemented):
+  * a question routed to the Discrepancy Authority (dishonour / BRS /
+    omission / rectification wording) is resolved by THAT authority
+    deterministically - normalization + contradiction gates first, then
+    the discrepancy treatment. It composes journals in the hardened
+    engine's format, so clean non-discrepancy inputs are untouched;
+  * the Discrepancy Authority never weakens a 15I-VY refusal (unsafe
+    party tokens and mathematical contradictions still refuse first).
 
 Pure module: no Streamlit, no AI, no network. Deterministic.
 """
@@ -100,11 +110,16 @@ AUTHORITIES: Dict[str, Dict[str, Any]] = {
     },
     "DISCREPANCY_AUTHORITY": {
         "name": "Discrepancy Authority",
-        "implemented": False,
+        "implemented": True,
         "base": False,
-        "scope": ("dishonour / reversal / cheque-bounce events - NOT "
-                  "implemented yet; a stated dishonour fact must refuse, "
-                  "never silently disappear"),
+        "scope": ("discrepancy / reconciliation / reversal / omission / "
+                  "rectification (Sprint 15I-DISC): BRS single-case "
+                  "adjustments, dishonoured cheques with an established "
+                  "prior receipt, omitted transactions, and rectification "
+                  "of wrong account / wrong amount / wrong side with "
+                  "Suspense only when the trial-balance difference is "
+                  "explicitly established. A dishonour with no reliable "
+                  "prior record refuses - history is never invented."),
     },
     "ADJUSTMENT_AUTHORITY": {
         "name": "Adjustment Authority",
@@ -848,6 +863,10 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         _fmt_amt,
         _refusal,
     )
+    from backend.maths.fyjc_discrepancy import (
+        detect_discrepancy,
+        discrepancy_outcome,
+    )
     from backend.maths.fyjc_normalization import (
         normalize_fyjc_text,
         vy_harden,
@@ -855,6 +874,17 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
 
     raw = str(question or "")
     normalized = normalize_fyjc_text(raw)
+
+    # -- Sprint 15I-DISC: discrepancy routing ------------------------------
+    # A question carrying a discrepancy topic (dishonour / BRS / omission /
+    # rectification) is owned by the Discrepancy Authority. It runs the
+    # SAME normalization + contradiction gates first (so no 15I-VY refusal
+    # is weakened) and then resolves the topic deterministically. Non-
+    # discrepancy questions take the existing path below UNCHANGED
+    # (byte-identical historical behavior).
+    topic = detect_discrepancy(raw)
+    if topic:
+        return _orchestrate_discrepancy(raw, amount, topic)
 
     hardened = vy_harden(raw, amount)
 
@@ -1011,6 +1041,113 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
 
     # -- VERIFIED pass-through (byte-identical) ----------------------------
     result = dict(hardened)
+    result["orchestration"] = graph_payload
+    return result
+
+
+def _orchestrate_discrepancy(raw: str, amount: Any,
+                             topic: Dict[str, Any]) -> Dict[str, Any]:
+    """Sprint 15I-DISC production path: resolve a discrepancy-routed
+    question through the Discrepancy Authority and attach the transaction-
+    graph payload (authority = discrepancy-authority).
+
+    The authority's OWN normalization + contradiction gates run first
+    inside discrepancy_outcome, so no 15I-VY refusal is weakened and the
+    Discrepancy Authority never invents an account, amount, party or
+    historical state. The graph payload is presentation data only - the
+    verdict is composed by the authority before this adapter runs.
+    """
+    from backend.maths.fyjc_bk_reasoning import REVIEW_REQUIRED, _refusal
+    from backend.maths.fyjc_discrepancy import discrepancy_outcome
+    from backend.maths.fyjc_normalization import normalize_fyjc_text
+
+    normalized = normalize_fyjc_text(raw)
+    result = discrepancy_outcome(raw, amount)
+
+    graph = build_transaction_graph(
+        raw, normalized=normalized.text, normalization=normalized.provenance)
+
+    journals: List[Dict[str, Any]] = []
+    if isinstance(result.get("journals"), list):
+        journals = result["journals"]
+    elif result.get("journal") and result.get("status") == "VERIFIED":
+        journals = [result["journal"]]
+
+    merge_lines: List[Dict[str, Any]] = []
+    for seg_index, journal in enumerate(journals):
+        for side in ("debit_lines", "credit_lines"):
+            for line in journal.get(side) or []:
+                account = line.get("account")
+                if not account:
+                    continue
+                merge_lines.append({
+                    "account": account,
+                    "side": "debit" if side == "debit_lines" else "credit",
+                    "amount": str(line.get("amount")),
+                    "segment": seg_index,
+                    "authority": "DISCREPANCY_AUTHORITY",
+                })
+
+    discrepancy = result.get("discrepancy") or {}
+    invented_history = bool(discrepancy.get("invented_history"))
+    duplicate_correction = bool(discrepancy.get("duplicate_correction"))
+    debit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                       if l["side"] == "debit"), Decimal(0))
+    credit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                        if l["side"] == "credit"), Decimal(0))
+
+    graph_payload = {
+        "authority": "discrepancy-authority",
+        "topic": discrepancy.get("topic") or topic.get("topics"),
+        "case": discrepancy.get("case"),
+        "normalization": graph.normalization,
+        "segments": [
+            {
+                "index": node.index,
+                "text": node.text,
+                "classification": (node.classification or {}).get("key"),
+                "base_authority": node.base_authority,
+                "cooperating": node.cooperating,
+                "facts": [
+                    {
+                        "kind": f.kind,
+                        "value": str(f.value) if f.kind != "party"
+                                 else f.value,
+                        "original": f.original,
+                        "role": f.role,
+                        "authority": f.authority,
+                    }
+                    for f in node.facts
+                ],
+            }
+            for node in graph.segments
+        ],
+        "dependencies": graph.dependencies,
+        "ownership": graph.ownership,
+        "contradictions": graph.contradictions,
+        "violations": [],
+        "discrepancy": discrepancy,
+        "merge": {
+            "lines": merge_lines,
+            "conflicts": [],
+            "balanced": debit_total == credit_total,
+        },
+        "invariants": {
+            "unsafe_confident": 0 if result.get("status") != "VERIFIED"
+                else (1 if not (debit_total == credit_total) else 0),
+            "dropped_valid_segments": 0,
+            "unresolved_amounts_guessed": 0,
+            "duplicated_amount_ownership": 0,
+            "authority_conflicts_verified": 0,
+            "invented_accounts": 0,
+            "unbalanced_verified": (0 if debit_total == credit_total
+                                     else 1),
+            "invented_historical_state": 1 if invented_history else 0,
+            "duplicate_correction": 1 if duplicate_correction else 0,
+            "flow_verdict_eq_discrepancy_authority": True,
+            "deterministic": True,
+        },
+    }
     result["orchestration"] = graph_payload
     return result
 

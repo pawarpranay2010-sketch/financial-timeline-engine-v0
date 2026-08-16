@@ -49,6 +49,15 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
+# Sprint 15I-DISC: the INVALID_INPUT_MATH status is the 15I-VY
+# contradiction layer's verdict constant (defined by the hardened engine
+# and used by math_contradiction here). It is re-exported from this
+# boundary module so the Discrepancy Authority - which runs the SAME
+# contradiction gate first - reads the status from the same place. The
+# import is cycle-free: the hardened engine and its module-scope imports
+# never import this module at module scope.
+from backend.maths.fyjc_bk_reasoning import INVALID_INPUT_MATH  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Normalization tables (deterministic)
 # ---------------------------------------------------------------------------

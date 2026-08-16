@@ -849,6 +849,11 @@ def hardened_bookkeeping_outcome(description: str,
         # the verdict itself is composed by the orchestrator before this
         # adapter runs.
         "orchestration": res.get("orchestration"),
+        # Sprint 15I-DISC: the Discrepancy Authority payload (topic, case,
+        # reconciliation effect, correction model, history gate). Read-only
+        # presentation data for the Study / Verify UI - the verdict is
+        # composed by the authority before this adapter runs.
+        "discrepancy": res.get("discrepancy"),
     }
 
 

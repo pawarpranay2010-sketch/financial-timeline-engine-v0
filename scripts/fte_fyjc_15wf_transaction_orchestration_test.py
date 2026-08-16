@@ -28,11 +28,19 @@ Locks in the Sprint 15I-WF orchestration layer:
     inputs pass through byte-identically.
 
 New safety boundaries introduced by 15I-WF (all refuse, never guess):
-  * dishonour / cheque-bounce (Discrepancy Authority missing) - the
-    stated fact must never silently disappear from a VERIFIED journal;
+  * dishonour / cheque-bounce - the stated fact must never silently
+    disappear from a VERIFIED journal;
   * bills of exchange (Bills Authority missing) - never booked as cash;
   * asset transactions carrying GST or trade-discount wording that the
     Asset Authority does not consume (authority-boundary conflict).
+
+Sprint 15I-DISC (implemented) extends the dishonour boundary: the
+Discrepancy Authority now resolves a dishonour whose prior receipt is
+ESTABLISHED in the input (reversal + customer-balance reinstatement,
+plus the sale is never dropped), while a dishonour with no reliable
+prior record still refuses - history is never invented. PART G, PART L,
+PART P.4 and PART Q are updated to lock in that post-15I-DISC surface;
+all non-discrepancy expectations are unchanged.
 
 Exit code 0 = all checks pass.
 """
@@ -47,6 +55,9 @@ from backend.maths.fyjc_accounting import (  # noqa: E402
     hardened_bookkeeping_outcome,
 )
 from backend.maths.fyjc_bk_reasoning import reason_bk_question  # noqa: E402
+from backend.maths.fyjc_discrepancy import (  # noqa: E402
+    discrepancy_outcome,
+)
 from backend.maths.fyjc_normalization import vy_harden  # noqa: E402
 from backend.maths.fyjc_orchestration import (  # noqa: E402
     authority_report,
@@ -279,37 +290,54 @@ def test_f_return_chain():
 
 
 # ---------------------------------------------------------------------------
-# PART G - payment + later dishonour (Discrepancy Authority missing)
+# PART G - payment + later dishonour (Discrepancy Authority implemented)
 # ---------------------------------------------------------------------------
 def test_g_payment_dishonour():
-    print("PART G - PAYMENT + LATER DISHONOUR")
+    print("PART G - PAYMENT + LATER DISHONOUR (Discrepancy Authority)")
+    # 15I-DISC: a dishonour whose prior receipt is ESTABLISHED in the
+    # input is resolved by the Discrepancy Authority - the receipt is
+    # reversed and the customer balance reinstated. It is never treated
+    # as a new unrelated receipt.
     q1 = ("Received a cheque from Ram for Rs.10,000 which was later "
           "dishonoured")
     r1 = orchestrate(q1)
-    check("G.1 dishonour refuses", r1.get("status") == REVIEW_REQUIRED,
-          r1.get("status"))
-    check("G.2 zero journal lines", lines(r1) == [], str(lines(r1)))
-    check("G.3 unresolved_event_fact reported",
-          len(violations_of(r1, "unresolved_event_fact")) >= 1,
+    check("G.1 dishonour VERIFIED (prior receipt established)",
+          r1.get("status") == VERIFIED, r1.get("status"))
+    check("G.2 receipt + reversal journal",
+          lines(r1) == [("Bank", "10000"), ("Ram", "10000"),
+                        ("Ram", "10000"), ("Bank", "10000")],
+          str(lines(r1)))
+    check("G.3 resolved by Discrepancy Authority (no unresolved event)",
+          (r1.get("orchestration") or {}).get("authority")
+          == "discrepancy-authority"
+          and len(violations_of(r1, "unresolved_event_fact")) == 0,
           str(violations_of(r1, "unresolved_event_fact")))
-    check("G.4 Discrepancy Authority named",
-          "Discrepancy Authority" in (r1.get("why_not") or ""),
-          str(r1.get("why_not"))[:100])
     q2 = ("Sold goods to Ram for Rs.10,000 and received a cheque which "
           "was dishonoured")
     r2 = orchestrate(q2)
-    check("G.5 dropped-sale dishonour refuses",
-          r2.get("status") == REVIEW_REQUIRED, r2.get("status"))
-    check("G.6 zero journal lines", lines(r2) == [], str(lines(r2)))
-    # control: a plain cheque settlement still VERIFIEDs
-    q3 = ("Received from Ram Rs.10,000 by cheque in full settlement of "
-          "his account of Rs.10,000")
+    check("G.4 sale + dishonour VERIFIED (sale never dropped)",
+          r2.get("status") == VERIFIED, r2.get("status"))
+    check("G.5 sale + receipt + reversal journal",
+          lines(r2) == [("Ram", "10000"), ("Bank", "10000"),
+                        ("Ram", "10000"), ("Sales", "10000"),
+                        ("Ram", "10000"), ("Bank", "10000")],
+          str(lines(r2)))
+    # 15I-DISC section-6 history gate: no reliable prior record -> the
+    # orchestrator still refuses and never reconstructs the history.
+    q3 = "Ram's cheque of Rs.5,000 was dishonoured"
     r3 = orchestrate(q3)
-    check("G.7 plain cheque settlement VERIFIED",
-          r3.get("status") == VERIFIED, r3.get("status"))
-    check("G.8 cheque journal",
-          lines(r3) == [("Bank", "10000"), ("Ram", "10000")],
-          str(lines(r3)))
+    check("G.6 missing-history dishonour refuses",
+          r3.get("status") == REVIEW_REQUIRED, r3.get("status"))
+    check("G.7 zero journal lines", lines(r3) == [], str(lines(r3)))
+    # control: a plain cheque settlement still VERIFIEDs
+    q4 = ("Received from Ram Rs.10,000 by cheque in full settlement of "
+          "his account of Rs.10,000")
+    r4 = orchestrate(q4)
+    check("G.8 plain cheque settlement VERIFIED",
+          r4.get("status") == VERIFIED, r4.get("status"))
+    check("G.9 cheque journal",
+          lines(r4) == [("Bank", "10000"), ("Ram", "10000")],
+          str(lines(r4)))
 
 
 # ---------------------------------------------------------------------------
@@ -447,14 +475,20 @@ def test_k_duplicated_ownership():
 # ---------------------------------------------------------------------------
 def test_l_dropped_segment():
     print("PART L - DROPPED SEGMENT DETECTION")
-    # the sale would be silently dropped without the orchestrator - the
-    # hardened authority alone journals only the cheque receipt
+    # 15I-DISC: the Discrepancy Authority now resolves the dishonour
+    # chain, so sale + cheque receipt + reversal are ALL journaled - the
+    # sale is never dropped. The hardened authority alone would still
+    # journal only the cheque receipt (checked below).
     q = ("Sold goods to Ram for Rs.10,000 and received a cheque which was "
          "dishonoured")
     r = orchestrate(q)
-    check("L.1 refuses (never drops the sale)",
-          r.get("status") == REVIEW_REQUIRED, r.get("status"))
-    check("L.2 zero journal lines", lines(r) == [], str(lines(r)))
+    check("L.1 sale + dishonour VERIFIED (sale never dropped)",
+          r.get("status") == VERIFIED, r.get("status"))
+    check("L.2 full chain journaled (sale + receipt + reversal)",
+          lines(r) == [("Ram", "10000"), ("Bank", "10000"),
+                       ("Ram", "10000"), ("Sales", "10000"),
+                       ("Ram", "10000"), ("Bank", "10000")],
+          str(lines(r)))
     raw = reason_bk_question(q)
     check("L.3 raw authority alone would have dropped it",
           raw.get("status") == VERIFIED
@@ -597,9 +631,10 @@ def test_p_streamlit():
           [e.stack_trace for e in at.exception] + [md[:120]])
     md = ask("Received a cheque from Ram for Rs.10,000 which was later "
              "dishonoured")
-    check("P.4 dishonour refuses (no VERIFIED)",
-          "VERIFIED" not in md.upper() and "REVIEW" in md.upper(),
-          md[:160])
+    check("P.4 dishonour VERIFIED (reversal, no Almost there)",
+          "VERIFIED" in md.upper() and "Almost there" not in md
+          and not at.exception,
+          [e.stack_trace for e in at.exception] + [md[:160]])
     md = ask("Received a bill of exchange from Ram for Rs.10,000")
     check("P.5 bill of exchange NOT SUPPORTED (never cash)",
           "NOT SUPPORTED" in md.upper() and "VERIFIED" not in md.upper(),
@@ -653,8 +688,6 @@ def test_q_invariant_sweep():
         "cheque.",
         "Consigned goods worth Rs.50,000 to Mohan on consignment basis.",
         "Purchased goods for ₹20,000 from Rahul on credit and ₹18,000.",
-        "Received a cheque from Ram for Rs.10,000 which was later "
-        "dishonoured",
         "Entered into a joint venture with Shyam, contributing Rs.20,000.",
         "Provided depreciation on machinery Rs.5,000.",
     ]
@@ -665,15 +698,31 @@ def test_q_invariant_sweep():
         check(f"Q.R.{i} zero lines ({q[:40]})",
               lines(r) == [], str(lines(r)))
     # narrowing: the orchestrator never VERIFIEDs what the hardened
-    # authority refuses, and never invents accounts
+    # authority refuses, and never invents accounts. 15I-DISC exception:
+    # discrepancy-routed inputs resolve through the Discrepancy Authority
+    # (the designed superset of the hardened plain path), so their lines
+    # must equal the authority's own deterministic output exactly.
     broad = verified_corpus + refusal_corpus + [
+        "Received a cheque from Ram for Rs.10,000 which was later "
+        "dishonoured",
         "Sold goods to Ram for Rs.10,000 and received a cheque which was "
         "dishonoured",
     ]
     for i, q in enumerate(broad):
         r = orchestrate(q)
         hard = vy_harden(q)
-        if r.get("status") == VERIFIED:
+        if (r.get("orchestration") or {}).get("authority") \
+                == "discrepancy-authority":
+            disc = discrepancy_outcome(q)
+            check(f"Q.N.{i} discrepancy authority resolved ({q[:40]})",
+                  r.get("status") == VERIFIED
+                  and disc.get("status") == VERIFIED
+                  and lines(r) == lines(disc)
+                  and json.dumps(orchestrate(q), default=str,
+                                 sort_keys=True)
+                  == json.dumps(r, default=str, sort_keys=True),
+                  f"orchestrator={r.get('status')} disc={disc.get('status')}")
+        elif r.get("status") == VERIFIED:
             check(f"Q.N.{i} narrowing holds ({q[:40]})",
                   hard.get("status") == VERIFIED
                   and lines(r) == lines(hard),

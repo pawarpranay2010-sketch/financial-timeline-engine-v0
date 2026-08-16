@@ -696,6 +696,60 @@ def _render_accounting_answer(flow: Dict[str, Any]) -> None:
     )
     st.markdown("**Journal Entry**")
     _render_journal_table(flow.get("outcome") or {})
+    _render_discrepancy_notes(flow.get("outcome") or {})
+
+
+def _render_discrepancy_notes(outcome: Dict[str, Any]) -> None:
+    """Sprint 15I-DISC: the Discrepancy Authority's reconciliation /
+    correction explanation, rendered under a VERIFIED result. Read-only
+    presentation data from the authority - no accounting here, and it is
+    never shown as a warning or 'almost there' panel."""
+    discrepancy = outcome.get("discrepancy") or {}
+    if not discrepancy:
+        return
+    parts: List[str] = []
+    for note in discrepancy.get("notes") or []:
+        parts.append(f"<div>· {_esc(note)}</div>")
+    for rec in discrepancy.get("reconciliation") or []:
+        parts.append(
+            f"<div>· {_esc(rec.get('book'))} balance: "
+            f"{_esc(str(rec.get('direction'))).upper()} "
+            f"{_fmt_rupee(rec.get('amount'))} — "
+            f"{_esc(rec.get('effect'))}</div>"
+        )
+    model = discrepancy.get("correction_model") or {}
+    if model.get("recorded") or model.get("should"):
+        def _fmt_rows(rows: List[Dict[str, Any]]) -> str:
+            return "; ".join(
+                f"{_esc(row.get('side', '')).upper()} "
+                f"{_esc(row.get('account'))} {_fmt_rupee(row.get('amount'))}"
+                for row in rows
+            ) or "—"
+        parts.append(
+            f"<div>· What was recorded: {_fmt_rows(model.get('recorded') or [])}</div>"
+        )
+        parts.append(
+            f"<div>· What should have been recorded: "
+            f"{_fmt_rows(model.get('should') or [])}</div>"
+        )
+        parts.append(
+            f"<div>· Correction required: "
+            f"{_fmt_rows(model.get('correction') or [])}</div>"
+        )
+        if model.get("suspense_used") is not None:
+            parts.append(
+                "<div>· Suspense Account used: "
+                + ("YES (trial-balance difference established)"
+                   if model.get("suspense_used")
+                   else "NO (direct correction)")
+                + "</div>"
+            )
+    if parts:
+        st.markdown(
+            '<div class="fte-fyjc-card"><b>Discrepancy / Reconciliation</b>'
+            + "".join(parts) + "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _render_accounting_why(flow: Dict[str, Any]) -> None:

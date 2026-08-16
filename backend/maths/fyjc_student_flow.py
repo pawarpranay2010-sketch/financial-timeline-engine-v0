@@ -554,6 +554,49 @@ def run_fyjc_accounting_flow(description: str,
         ),
     })
 
+    # Sprint 15I-DISC: a discrepancy outcome carries its own
+    # reconciliation / correction explanation (BRS timing differences,
+    # dishonour reversals, rectification corrections). Surface it as a
+    # step so a zero-journal BRS timing difference is never rendered as
+    # 'could not identify the accounts'.
+    discrepancy = outcome.get("discrepancy") or {}
+    disc_body: List[str] = []
+    for note in discrepancy.get("notes") or []:
+        disc_body.append(note)
+    for rec in discrepancy.get("reconciliation") or []:
+        disc_body.append(
+            f"{rec.get('book')} balance: {rec.get('direction', '').upper()} "
+            f"Rs.{rec.get('amount')} — {rec.get('effect')}"
+        )
+    model = discrepancy.get("correction_model") or {}
+    if model.get("recorded") or model.get("should"):
+        def _fmt_model_rows(rows: List[Dict[str, Any]]) -> List[str]:
+            return [
+                f"{row.get('side', '').upper()} {row.get('account')} "
+                f"{_fmt_amount(row.get('amount'))}"
+                for row in rows
+            ]
+        disc_body.append("What was recorded: " + (
+            "; ".join(_fmt_model_rows(model.get("recorded") or []))
+            or "—"))
+        disc_body.append("What should have been recorded: " + (
+            "; ".join(_fmt_model_rows(model.get("should") or []))
+            or "—"))
+        disc_body.append("Correction required: " + (
+            "; ".join(_fmt_model_rows(model.get("correction") or []))
+            or "—"))
+        if model.get("suspense_used") is not None:
+            disc_body.append(
+                "Suspense Account used: "
+                + ("YES (trial-balance difference established)"
+                   if model.get("suspense_used") else "NO (direct correction)"))
+    if disc_body:
+        steps.append({
+            "number": 9,
+            "title": "Reconciliation / Correction",
+            "body": disc_body,
+        })
+
     return {
         "flow": "accounting",
         "status": status,
