@@ -697,6 +697,7 @@ def _render_accounting_answer(flow: Dict[str, Any]) -> None:
     st.markdown("**Journal Entry**")
     _render_journal_table(flow.get("outcome") or {})
     _render_discrepancy_notes(flow.get("outcome") or {})
+    _render_bills_notes(flow.get("outcome") or {})
 
 
 def _render_discrepancy_notes(outcome: Dict[str, Any]) -> None:
@@ -747,6 +748,57 @@ def _render_discrepancy_notes(outcome: Dict[str, Any]) -> None:
     if parts:
         st.markdown(
             '<div class="fte-fyjc-card"><b>Discrepancy / Reconciliation</b>'
+            + "".join(parts) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_bills_notes(outcome: Dict[str, Any]) -> None:
+    """Sprint 15I-BILLS: the Bills Authority's lifecycle / maturity /
+    discount explanation, rendered under a VERIFIED result. Read-only
+    presentation data from the authority - no accounting here, and it is
+    never shown as a warning or 'almost there' panel."""
+    bills = outcome.get("bills") or {}
+    if not bills:
+        return
+    parts: List[str] = []
+    for note in bills.get("notes") or []:
+        parts.append(f"<div>· {_esc(note)}</div>")
+    states = bills.get("states") or []
+    if states:
+        parts.append(
+            "<div>· Lifecycle: "
+            + " → ".join(_esc(s.get("state", ""))
+                          + (" (implied)" if s.get("implicit") else "")
+                          for s in states)
+            + "</div>")
+    maturity = bills.get("maturity") or {}
+    if maturity:
+        parts.append(
+            f"<div>· Maturity: {_esc(maturity.get('period'))} + "
+            f"{_esc(maturity.get('days_of_grace'))} days of grace"
+            + (f" → due {_esc(maturity.get('due_date'))}"
+               if maturity.get("due_date") else "")
+            + "</div>")
+    discount = bills.get("discount") or {}
+    if discount:
+        parts.append(
+            f"<div>· Bank discount ({_esc(discount.get('basis'))}): "
+            f"{_esc(discount.get('formula'))} = "
+            f"Rs.{_esc(discount.get('discount'))} → proceeds "
+            f"Rs.{_esc(discount.get('proceeds'))}</div>")
+    roles = bills.get("roles") or {}
+    named = {k: v for k, v in roles.items()
+             if v and k in ("drawer", "drawee", "acceptor", "endorsee")}
+    if named:
+        parts.append(
+            "<div>· Parties: "
+            + ", ".join(f"{_esc(k)} {_esc(v)}"
+                         for k, v in named.items())
+            + "</div>")
+    if parts:
+        st.markdown(
+            '<div class="fte-fyjc-card"><b>Bills of Exchange</b>'
             + "".join(parts) + "</div>",
             unsafe_allow_html=True,
         )

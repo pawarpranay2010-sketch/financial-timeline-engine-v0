@@ -30,9 +30,16 @@ Locks in the Sprint 15I-WF orchestration layer:
 New safety boundaries introduced by 15I-WF (all refuse, never guess):
   * dishonour / cheque-bounce - the stated fact must never silently
     disappear from a VERIFIED journal;
-  * bills of exchange (Bills Authority missing) - never booked as cash;
+  * bills of exchange - never booked as cash;
   * asset transactions carrying GST or trade-discount wording that the
     Asset Authority does not consume (authority-boundary conflict).
+
+Sprint 15I-BILLS (implemented) extends the bills boundary: the Bills
+Authority now resolves the bill lifecycle (drawing / acceptance,
+discounting, endorsement, collection, honour / dishonour with noting
+charges) and books a bill as Bills Receivable / Bills Payable - never
+as cash. PART J and PART P.5 are updated to lock in that post-15I-BILLS
+surface; a missing prior bill state still refuses.
 
 Sprint 15I-DISC (implemented) extends the dishonour boundary: the
 Discrepancy Authority now resolves a dishonour whose prior receipt is
@@ -403,8 +410,6 @@ def test_j_unsupported_authority():
          "CONSIGNMENT_AUTHORITY"),
         ("Entered into a joint venture with Shyam, contributing Rs.20,000.",
          "JOINT_VENTURE_AUTHORITY"),
-        ("Received a bill of exchange from Ram for Rs.10,000.",
-         "BILLS_AUTHORITY"),
         ("Provided depreciation on machinery Rs.5,000.",
          "ADJUSTMENT_AUTHORITY"),
     ]
@@ -417,10 +422,14 @@ def test_j_unsupported_authority():
         check(f"J.{authority} routed correctly",
               g.segments[0].base_authority == authority,
               g.segments[0].base_authority)
-    # a bill of exchange is NEVER booked as cash
+    # a bill of exchange is NEVER booked as cash - the Bills Authority
+    # (Sprint 15I-BILLS) books it as Bills Receivable
     r = orchestrate("Received a bill of exchange from Ram for Rs.10,000.")
-    check("J.bills never cash",
-          "Cash" not in str(lines(r)) and "Bank" not in str(lines(r)),
+    check("J.bills never cash (Bills Receivable, not cash)",
+          r.get("status") == VERIFIED
+          and "Bills Receivable" in [a for a, _ in lines(r)]
+          and "Cash" not in str(lines(r))
+          and "Bank" not in str(lines(r)),
           str(lines(r)))
     # an everyday bill (electricity / mobile recharge) is NOT a bills-of-
     # exchange event and keeps its existing handling
@@ -636,9 +645,10 @@ def test_p_streamlit():
           and not at.exception,
           [e.stack_trace for e in at.exception] + [md[:160]])
     md = ask("Received a bill of exchange from Ram for Rs.10,000")
-    check("P.5 bill of exchange NOT SUPPORTED (never cash)",
-          "NOT SUPPORTED" in md.upper() and "VERIFIED" not in md.upper(),
-          md[:160])
+    check("P.5 bill of exchange VERIFIED (Bills Receivable, never cash)",
+          "VERIFIED" in md.upper() and "NOT SUPPORTED" not in md.upper()
+          and not at.exception,
+          [e.stack_trace for e in at.exception] + [md[:160]])
     md = ask("Purchased goods from Ram for Rs.20,000 at 10% trade discount "
              "and 18% GST with CGST Rs.1,620 and SGST Rs.1,620")
     check("P.6 CGST+SGST still VERIFIED", "VERIFIED" in md.upper(),

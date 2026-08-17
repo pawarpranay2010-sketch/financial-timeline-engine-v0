@@ -77,6 +77,13 @@ _TD_RE = re.compile(r"\bt\.?d\.?(?=\s|$|[^A-Za-z0-9.])", re.IGNORECASE)
 # 'cd' / 'c.d.' / 'CD' / 'C.D.' -> cash discount (same rule).
 _CD_RE = re.compile(r"\bc\.?d\.?(?=\s|$|[^A-Za-z0-9.])", re.IGNORECASE)
 
+# Sprint 15I-BILLS: 'p.a.' / 'P.A.' -> 'per annum' (annual rate, an
+# unambiguous abbreviation in the FYJC accounting context - a bare 'p.'
+# would otherwise trip the single-letter safety gate below). The
+# trailing dot is consumed when present; the lookahead (not \b) accepts
+# a following space / punctuation / sentence end.
+_PA_RE = re.compile(r"\bp\.a\.?(?=\s|$|[^A-Za-z0-9.])", re.IGNORECASE)
+
 _WS_RE = re.compile(r"[ \t\r\n]+")
 
 # Short tokens that are safe, ordinary English / FYJC vocabulary and are
@@ -186,6 +193,10 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
                                            "trade discount"), out)
     out = _CD_RE.sub(lambda m: _dotted_sub(m, "BK_NORM_CASH_DISCOUNT",
                                            "cash discount"), out)
+    out = _PA_RE.sub(lambda m: _dotted_sub(m, "BK_NORM_PER_ANNUM",
+                                           "per annum"), out)
+    out = _PA_RE.sub(lambda m: _dotted_sub(m, "BK_NORM_PER_ANNUM",
+                                           "per annum"), out)
 
     # 4) harmless whitespace collapse
     collapsed = _WS_RE.sub(" ", out).strip()

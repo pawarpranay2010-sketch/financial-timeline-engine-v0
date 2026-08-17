@@ -130,6 +130,10 @@ _TRADITIONAL_OVERRIDES: Dict[str, str] = {
     "Bills Receivable": CLASS_REAL, "Goodwill": CLASS_REAL,
     "Patents": CLASS_REAL, "Prepaid Expenses": CLASS_REAL,
     "Provision for Depreciation": CLASS_REAL,
+    # Sprint 15I-BILLS: a bill sent to the bank for collection remains
+    # the firm's asset (Bills Sent for Collection A/c) until collected.
+    "Bills Sent for Collection": CLASS_REAL,
+    "Bills for Collection": CLASS_REAL,
     # Sprint 15I-K GST accounts: input tax credit (asset) and output tax
     # payable (liability) are both Real accounts in the traditional FYJC
     # threefold classification. Without the override a Capitalised word
@@ -146,6 +150,9 @@ _TRADITIONAL_OVERRIDES: Dict[str, str] = {
     "Commission Received": CLASS_NOMINAL, "Interest Paid": CLASS_NOMINAL,
     "Interest Received": CLASS_NOMINAL, "Discount Allowed": CLASS_NOMINAL,
     "Discount Received": CLASS_NOMINAL, "Bad Debts": CLASS_NOMINAL,
+    # Sprint 15I-BILLS: bank discount charged by the bank when a bill is
+    # discounted (a loss for the drawer) is the 'Discount' account.
+    "Discount": CLASS_NOMINAL,
     "Bad Debts Recovered": CLASS_NOMINAL, "Carriage Inward": CLASS_NOMINAL,
     "Carriage Outward": CLASS_NOMINAL, "Rent Paid": CLASS_NOMINAL,
     "Rent Received": CLASS_NOMINAL, "Interest on Capital": CLASS_NOMINAL,

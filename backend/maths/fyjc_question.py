@@ -116,6 +116,19 @@ _TRANSACTION_VERBS = (
     "pass book", "cash book", "omitted", "rectify", "rectification",
     "wrongly", "suspense account", "suspense a/c", "undercast",
     "overcast", "standing instruction",
+    # Sprint 15I-BILLS: bills-of-exchange wording routes to the
+    # Book-Keeping flow, where the Bills Authority resolves the lifecycle
+    # deterministically (drawing / acceptance, discounting, endorsement,
+    # collection, honour / dishonour, noting charges). Routing only; the
+    # accounting authority is unchanged.
+    "bill of exchange", "bills of exchange", "bills receivable",
+    "bills payable", "drawer", "drawee", "acceptor", "payee",
+    "accepted the bill", "bill was accepted", "drew a bill",
+    "discounted the bill", "discounted a bill", "endorsed the bill",
+    "endorsed a bill", "endorsed it", "sent for collection",
+    "noting charges", "bill was dishonoured", "bill dishonoured",
+    "bill was honoured", "bill honoured", "retained till maturity",
+    "retained until maturity",
 )
 _METRIC_HINTS = (
     "calculate", "compute", "find", "ratio", "margin", "percent", " %",

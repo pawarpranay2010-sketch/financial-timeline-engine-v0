@@ -854,6 +854,11 @@ def hardened_bookkeeping_outcome(description: str,
         # presentation data for the Study / Verify UI - the verdict is
         # composed by the authority before this adapter runs.
         "discrepancy": res.get("discrepancy"),
+        # Sprint 15I-BILLS: the Bills Authority payload (lifecycle states,
+        # roles, maturity mathematics, discount, noting charges, history
+        # gate). Read-only presentation data for the Study / Verify UI -
+        # the verdict is composed by the authority before this adapter runs.
+        "bills": res.get("bills"),
     }
 
 

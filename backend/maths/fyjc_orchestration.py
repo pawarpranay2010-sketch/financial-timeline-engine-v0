@@ -59,6 +59,15 @@ Sprint 15I-DISC adds the Discrepancy Authority (implemented):
   * the Discrepancy Authority never weakens a 15I-VY refusal (unsafe
     party tokens and mathematical contradictions still refuse first).
 
+Sprint 15I-BILLS adds the Bills Authority (implemented):
+  * a bills-of-exchange question is routed to the Bills Authority and
+    resolved through the bill lifecycle state machine (DRAWN -> ACCEPTED
+    -> HELD / DISCOUNTED / ENDORSED / SENT_FOR_COLLECTION -> HONOURED /
+    DISHONOURED) with deterministic journals, maturity mathematics
+    (months / 12, days / 365, three days of grace) and noting charges;
+  * a bill is NEVER booked as cash, a missing prior bill state refuses
+    (history is never invented), and no 15I-VY refusal is weakened.
+
 Pure module: no Streamlit, no AI, no network. Deterministic.
 """
 
@@ -149,10 +158,15 @@ AUTHORITIES: Dict[str, Dict[str, Any]] = {
     },
     "BILLS_AUTHORITY": {
         "name": "Bills Authority",
-        "implemented": False,
+        "implemented": True,
         "base": False,
-        "scope": ("bills of exchange - NOT implemented yet; a bill must "
-                  "never be booked as cash"),
+        "scope": ("bills of exchange (Sprint 15I-BILLS): the full FYJC "
+                  "bill lifecycle - drawing / acceptance, holding until "
+                  "maturity, discounting with the bank (Bill x Rate x "
+                  "Time), endorsement, sent for collection, honour and "
+                  "dishonour with noting charges. A bill is never booked "
+                  "as cash; a dishonour with no reliable prior bill state "
+                  "refuses - history is never invented."),
     },
 }
 
@@ -863,6 +877,10 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         _fmt_amt,
         _refusal,
     )
+    from backend.maths.fyjc_bills import (
+        detect_bills,
+        bills_outcome,
+    )
     from backend.maths.fyjc_discrepancy import (
         detect_discrepancy,
         discrepancy_outcome,
@@ -874,6 +892,17 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
 
     raw = str(question or "")
     normalized = normalize_fyjc_text(raw)
+
+    # -- Sprint 15I-BILLS: bills-of-exchange routing ------------------------
+    # A bills-of-exchange question is owned by the Bills Authority. It
+    # runs the SAME normalization + contradiction gates first (so no
+    # 15I-VY refusal is weakened) and resolves the bill lifecycle
+    # deterministically. Routed BEFORE the Discrepancy Authority so a
+    # dishonoured BILL (reversal + noting charges) never falls into the
+    # cheque path.
+    topic = detect_bills(raw)
+    if topic:
+        return _orchestrate_bills(raw, amount, topic)
 
     # -- Sprint 15I-DISC: discrepancy routing ------------------------------
     # A question carrying a discrepancy topic (dishonour / BRS / omission /
@@ -1145,6 +1174,114 @@ def _orchestrate_discrepancy(raw: str, amount: Any,
             "invented_historical_state": 1 if invented_history else 0,
             "duplicate_correction": 1 if duplicate_correction else 0,
             "flow_verdict_eq_discrepancy_authority": True,
+            "deterministic": True,
+        },
+    }
+    result["orchestration"] = graph_payload
+    return result
+
+
+def _orchestrate_bills(raw: str, amount: Any,
+                       topic: Dict[str, Any]) -> Dict[str, Any]:
+    """Sprint 15I-BILLS production path: resolve a bills-of-exchange
+    question through the Bills Authority and attach the transaction-graph
+    payload (authority = bills-authority).
+
+    The authority's OWN normalization + contradiction gates run first
+    inside bills_outcome, so no 15I-VY refusal is weakened and the Bills
+    Authority never invents a bill, party, amount, maturity period or
+    historical state. The graph payload is presentation data only - the
+    verdict is composed by the authority before this adapter runs.
+    """
+    from backend.maths.fyjc_bills import bills_outcome
+    from backend.maths.fyjc_normalization import normalize_fyjc_text
+
+    normalized = normalize_fyjc_text(raw)
+    result = bills_outcome(raw, amount)
+
+    graph = build_transaction_graph(
+        raw, normalized=normalized.text, normalization=normalized.provenance)
+
+    journals: List[Dict[str, Any]] = []
+    if isinstance(result.get("journals"), list):
+        journals = result["journals"]
+    elif result.get("journal") and result.get("status") == "VERIFIED":
+        journals = [result["journal"]]
+
+    merge_lines: List[Dict[str, Any]] = []
+    for seg_index, journal in enumerate(journals):
+        for side in ("debit_lines", "credit_lines"):
+            for line in journal.get(side) or []:
+                account = line.get("account")
+                if not account:
+                    continue
+                merge_lines.append({
+                    "account": account,
+                    "side": "debit" if side == "debit_lines" else "credit",
+                    "amount": str(line.get("amount")),
+                    "segment": seg_index,
+                    "authority": "BILLS_AUTHORITY",
+                })
+
+    bills = result.get("bills") or {}
+    invented_history = bool(bills.get("invented_history"))
+    duplicate_correction = bool(bills.get("duplicate_correction"))
+    debit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                       if l["side"] == "debit"), Decimal(0))
+    credit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                        if l["side"] == "credit"), Decimal(0))
+
+    graph_payload = {
+        "authority": "bills-authority",
+        "topic": bills.get("topic") or topic.get("topics"),
+        "case": bills.get("case"),
+        "normalization": graph.normalization,
+        "segments": [
+            {
+                "index": node.index,
+                "text": node.text,
+                "classification": (node.classification or {}).get("key"),
+                "base_authority": node.base_authority,
+                "cooperating": node.cooperating,
+                "facts": [
+                    {
+                        "kind": f.kind,
+                        "value": str(f.value) if f.kind != "party"
+                                 else f.value,
+                        "original": f.original,
+                        "role": f.role,
+                        "authority": f.authority,
+                    }
+                    for f in node.facts
+                ],
+            }
+            for node in graph.segments
+        ],
+        "dependencies": graph.dependencies,
+        "ownership": graph.ownership,
+        "contradictions": graph.contradictions,
+        "violations": [],
+        "bills": bills,
+        "merge": {
+            "lines": merge_lines,
+            "conflicts": [],
+            "balanced": debit_total == credit_total,
+        },
+        "invariants": {
+            "unsafe_confident": 0 if result.get("status") != "VERIFIED"
+                else (1 if not (debit_total == credit_total) else 0),
+            "dropped_valid_segments": 0,
+            "unresolved_amounts_guessed": 0,
+            "duplicated_amount_ownership": 0,
+            "authority_conflicts_verified": 0,
+            "invented_accounts": 0,
+            "invented_amounts": 0,
+            "unbalanced_verified": (0 if debit_total == credit_total
+                                     else 1),
+            "invented_historical_state": 1 if invented_history else 0,
+            "duplicate_correction": 1 if duplicate_correction else 0,
+            "duplicated_segments": 0,
+            "flow_verdict_eq_bills_authority": True,
             "deterministic": True,
         },
     }

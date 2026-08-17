@@ -597,6 +597,46 @@ def run_fyjc_accounting_flow(description: str,
             "body": disc_body,
         })
 
+    # Sprint 15I-BILLS: a bills outcome carries its own lifecycle /
+    # maturity / discount explanation. Surface it as a step so a bill is
+    # never rendered as a generic journal only.
+    bills = outcome.get("bills") or {}
+    bills_body: List[str] = []
+    for note in bills.get("notes") or []:
+        bills_body.append(note)
+    states = bills.get("states") or []
+    if states:
+        bills_body.append(
+            "Lifecycle: " + " → ".join(
+                (s.get("state", "") + (" (implied)" if s.get("implicit")
+                                        else ""))
+                for s in states))
+    maturity = bills.get("maturity") or {}
+    if maturity:
+        bills_body.append(
+            f"Maturity: {maturity.get('period')} + {maturity.get('days_of_grace')} "
+            f"days of grace"
+            + (f" → due {maturity.get('due_date')}"
+               if maturity.get("due_date") else ""))
+    discount = bills.get("discount") or {}
+    if discount:
+        bills_body.append(
+            f"Bank discount ({discount.get('basis')}): "
+            f"{discount.get('formula')} = Rs.{discount.get('discount')} → "
+            f"proceeds Rs.{discount.get('proceeds')}")
+    roles = bills.get("roles") or {}
+    named = {k: v for k, v in roles.items()
+             if v and k in ("drawer", "drawee", "acceptor", "endorsee")}
+    if named:
+        bills_body.append(
+            "Parties: " + ", ".join(f"{k} {v}" for k, v in named.items()))
+    if bills_body:
+        steps.append({
+            "number": 10,
+            "title": "Bills of Exchange",
+            "body": bills_body,
+        })
+
     return {
         "flow": "accounting",
         "status": status,
