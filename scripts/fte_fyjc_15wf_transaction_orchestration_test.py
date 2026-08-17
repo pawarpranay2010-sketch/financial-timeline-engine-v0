@@ -41,6 +41,18 @@ charges) and books a bill as Bills Receivable / Bills Payable - never
 as cash. PART J and PART P.5 are updated to lock in that post-15I-BILLS
 surface; a missing prior bill state still refuses.
 
+Sprint 15I-SPEC (implemented) extends three specialized boundaries:
+  * the Consignment Authority books goods sent on consignment as
+    Consignment A/c / Goods Sent on Consignment A/c - NEVER as an
+    ordinary sale (no Sales account, no consignee customer entry);
+  * the Joint Venture Authority books contributions through the
+    venturer's own books - a contribution whose form (goods vs cash)
+    is not stated refuses;
+  * the Single Entry Authority returns a VERIFIED mathematical result
+    with zero journal lines for the change-in-net-worth relationship.
+PART J and PART Q are updated to lock in that post-15I-SPEC surface;
+missing consignment/JV data still refuses.
+
 Sprint 15I-DISC (implemented) extends the dishonour boundary: the
 Discrepancy Authority now resolves a dishonour whose prior receipt is
 ESTABLISHED in the input (reversal + customer-balance reinstatement,
@@ -415,13 +427,36 @@ def test_j_unsupported_authority():
     ]
     for q, authority in cases:
         r = orchestrate(q)
-        check(f"J.{authority} refuses",
-              r.get("status") == NOT_SUPPORTED, r.get("status"))
-        check(f"J.{authority} zero lines", lines(r) == [], str(lines(r)))
         g = graph_of(q)
         check(f"J.{authority} routed correctly",
               g.segments[0].base_authority == authority,
               g.segments[0].base_authority)
+    # Consignment (Sprint 15I-SPEC): goods sent on consignment stay the
+    # consignor's property - Consignment A/c / Goods Sent on
+    # Consignment A/c, NEVER an ordinary sale (no Sales account, no
+    # consignee customer entry).
+    r = orchestrate("Consigned goods worth Rs.50,000 to Mohan on "
+                    "consignment basis.")
+    check("J.consignment VERIFIED (Consignment A/c, never a sale)",
+          r.get("status") == VERIFIED
+          and "Consignment" in [a for a, _ in lines(r)]
+          and "Goods Sent on Consignment" in [a for a, _ in lines(r)]
+          and "Sales" not in [a for a, _ in lines(r)],
+          str(lines(r)))
+    # Joint venture (Sprint 15I-SPEC): a contribution whose form (goods
+    # vs cash) is not stated refuses - the authority never guesses the
+    # basis.
+    r = orchestrate("Entered into a joint venture with Shyam, "
+                    "contributing Rs.20,000.")
+    check("J.joint venture refuses (contribution basis ambiguous)",
+          r.get("status") == REVIEW_REQUIRED, r.get("status"))
+    check("J.joint venture zero lines", lines(r) == [], str(lines(r)))
+    # Adjustment (depreciation) stays an unimplemented authority
+    r = orchestrate("Provided depreciation on machinery Rs.5,000.")
+    check("J.ADJUSTMENT_AUTHORITY refuses",
+          r.get("status") == NOT_SUPPORTED, r.get("status"))
+    check("J.ADJUSTMENT_AUTHORITY zero lines", lines(r) == [],
+          str(lines(r)))
     # a bill of exchange is NEVER booked as cash - the Bills Authority
     # (Sprint 15I-BILLS) books it as Bills Receivable
     r = orchestrate("Received a bill of exchange from Ram for Rs.10,000.")
@@ -696,7 +731,6 @@ def test_q_invariant_sweep():
     refusal_corpus = [
         "Sold goods for ₹30,000 to Rahul at 10% TD and received 50% by "
         "cheque.",
-        "Consigned goods worth Rs.50,000 to Mohan on consignment basis.",
         "Purchased goods for ₹20,000 from Rahul on credit and ₹18,000.",
         "Entered into a joint venture with Shyam, contributing Rs.20,000.",
         "Provided depreciation on machinery Rs.5,000.",

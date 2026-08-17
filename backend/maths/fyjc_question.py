@@ -129,6 +129,15 @@ _TRANSACTION_VERBS = (
     "noting charges", "bill was dishonoured", "bill dishonoured",
     "bill was honoured", "bill honoured", "retained till maturity",
     "retained until maturity",
+    # Sprint 15I-SPEC: specialized-authority wording routes to the
+    # Book-Keeping flow, where the Consignment / Joint Venture / Single
+    # Entry authorities resolve it deterministically. Routing only; the
+    # accounting authority is unchanged.
+    "consignment", "consigned", "consignee", "consignor", "del credere",
+    "joint venture", "co-venturer", "co venturer", "venture account",
+    "venture a/c", "incomplete records", "single entry",
+    "statement of affairs", "opening capital", "closing capital",
+    "fresh capital", "additional capital",
 )
 _METRIC_HINTS = (
     "calculate", "compute", "find", "ratio", "margin", "percent", " %",
@@ -330,6 +339,27 @@ def classify_fyjc_question(question: str) -> Dict[str, Any]:
     if any(h in low for h in _LEDGER_HINTS):
         return _bookkeeping_verdict(
             KIND_LEDGER, "Ledger wording detected.")
+
+    # 0.5) Sprint 15I-SPEC specialized-authority wording (structural - a
+    #    consignment / joint-venture / single-entry question is a
+    #    Book-Keeping topic even when it asks for a registered metric
+    #    like 'profit'). Routing only; the authority is unchanged.
+    if re.search(r"\bconsign\w*\b|\bdel\s+credere\b", low):
+        return _bookkeeping_verdict(
+            KIND_TRANSACTION, "Consignment wording detected.")
+    if re.search(r"\bjoint\s+venture\b|\bco-?venturer\b|"
+                 r"\bventure\s+(?:a/c|account)\b", low):
+        return _bookkeeping_verdict(
+            KIND_TRANSACTION, "Joint-venture wording detected.")
+    if re.search(r"\bsingle\s+entry\b|\bincomplete\s+records\b|"
+                 r"\bstatement\s+of\s+affairs\b", low):
+        return _bookkeeping_verdict(
+            KIND_TRANSACTION, "Single-entry / incomplete-records wording "
+            "detected.")
+    if re.search(r"\bopening\s+capital\b", low) and re.search(
+            r"\bclosing\s+capital\b", low):
+        return _bookkeeping_verdict(
+            KIND_TRANSACTION, "Change-in-net-worth wording detected.")
 
     # 1) the requested concept from the ask-clause (the actual intent).
     metric, candidates = _resolve_requested_concept(text)

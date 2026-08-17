@@ -859,6 +859,14 @@ def hardened_bookkeeping_outcome(description: str,
         # gate). Read-only presentation data for the Study / Verify UI -
         # the verdict is composed by the authority before this adapter runs.
         "bills": res.get("bills"),
+        # Sprint 15I-SPEC: the specialized-authority payloads (consignment
+        # valuation, joint-venture sharing, single-entry net-worth
+        # mathematics). Read-only presentation data for the Study / Verify
+        # UI - the verdict is composed by the authority before this
+        # adapter runs.
+        "consignment": res.get("consignment"),
+        "joint_venture": res.get("joint_venture"),
+        "single_entry": res.get("single_entry"),
     }
 
 

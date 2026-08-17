@@ -637,6 +637,77 @@ def run_fyjc_accounting_flow(description: str,
             "body": bills_body,
         })
 
+    # Sprint 15I-SPEC: the specialized authorities carry their own
+    # valuation / sharing / net-worth explanation. Surface each as a
+    # step so a consignment or joint-venture is never rendered as a
+    # generic journal only, and a single-entry result is rendered as
+    # the mathematical answer it is (zero journal lines).
+    consignment = outcome.get("consignment") or {}
+    if consignment:
+        consign_body: List[str] = []
+        for note in consignment.get("notes") or []:
+            consign_body.append(note)
+        for calc in consignment.get("calculations") or []:
+            consign_body.append(
+                f"{calc.get('label')} = Rs.{calc.get('value')}"
+                + (f" ({calc.get('formula')})" if calc.get("formula")
+                   else ""))
+        if consignment.get("consignee"):
+            consign_body.append(
+                f"Consignee: {consignment.get('consignee')}")
+        if consign_body:
+            steps.append({
+                "number": 11,
+                "title": "Consignment",
+                "body": consign_body,
+            })
+
+    joint_venture = outcome.get("joint_venture") or {}
+    if joint_venture:
+        jv_body: List[str] = []
+        for note in joint_venture.get("notes") or []:
+            jv_body.append(note)
+        for calc in joint_venture.get("calculations") or []:
+            jv_body.append(
+                f"{calc.get('label')} = Rs.{calc.get('value')}"
+                + (f" ({calc.get('formula')})" if calc.get("formula")
+                   else ""))
+        venturer = joint_venture.get("venturer")
+        if venturer:
+            jv_body.append(f"Venturer (books): {venturer}")
+        if joint_venture.get("co_venturer"):
+            jv_body.append(
+                f"Co-venturer: {joint_venture.get('co_venturer')}")
+        if jv_body:
+            steps.append({
+                "number": 12,
+                "title": "Joint Venture",
+                "body": jv_body,
+            })
+
+    single_entry = outcome.get("single_entry") or {}
+    if single_entry:
+        se_body: List[str] = []
+        se_body.append(f"Formula: {single_entry.get('formula')}")
+        se_body.append(
+            f"Result: {single_entry.get('direction', '').upper()} "
+            f"Rs.{_fmt_amount(single_entry.get('result'))}")
+        for note in single_entry.get("notes") or []:
+            se_body.append(note)
+        for calc in single_entry.get("calculations") or []:
+            se_body.append(
+                f"{calc.get('label')} = Rs.{calc.get('value')}"
+                + (f" ({calc.get('formula')})" if calc.get("formula")
+                   else ""))
+        se_body.append(
+            "This is a mathematical result - the change-in-net-worth "
+            "calculation needs no journal entry.")
+        steps.append({
+            "number": 13,
+            "title": "Incomplete Records / Single Entry",
+            "body": se_body,
+        })
+
     return {
         "flow": "accounting",
         "status": status,

@@ -698,6 +698,7 @@ def _render_accounting_answer(flow: Dict[str, Any]) -> None:
     _render_journal_table(flow.get("outcome") or {})
     _render_discrepancy_notes(flow.get("outcome") or {})
     _render_bills_notes(flow.get("outcome") or {})
+    _render_specialized_notes(flow.get("outcome") or {})
 
 
 def _render_discrepancy_notes(outcome: Dict[str, Any]) -> None:
@@ -799,6 +800,85 @@ def _render_bills_notes(outcome: Dict[str, Any]) -> None:
     if parts:
         st.markdown(
             '<div class="fte-fyjc-card"><b>Bills of Exchange</b>'
+            + "".join(parts) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_specialized_notes(outcome: Dict[str, Any]) -> None:
+    """Sprint 15I-SPEC: the Consignment / Joint Venture / Single Entry
+    authorities' valuation, sharing and net-worth explanations, rendered
+    under a VERIFIED result. Read-only presentation data from the
+    authority - no accounting here, and it is never shown as a warning
+    or 'almost there' panel."""
+
+    def _calc_rows(calcs: List[Dict[str, Any]]) -> List[str]:
+        rows = []
+        for calc in calcs:
+            label = calc.get("label") or ""
+            value = calc.get("value")
+            formula = calc.get("formula")
+            if label and value is not None:
+                text = f"· {label}: {_fmt_rupee(value)}"
+                if formula:
+                    text += f" ({_esc(formula)})"
+                rows.append(f"<div>{text}</div>")
+        return rows
+
+    consignment = outcome.get("consignment") or {}
+    if consignment:
+        parts: List[str] = []
+        for note in consignment.get("notes") or []:
+            parts.append(f"<div>· {_esc(note)}</div>")
+        parts.extend(_calc_rows(consignment.get("calculations") or []))
+        if consignment.get("consignee"):
+            parts.append(
+                f"<div>· Consignee: {_esc(consignment.get('consignee'))}</div>")
+        if parts:
+            st.markdown(
+                '<div class="fte-fyjc-card"><b>Consignment</b>'
+                + "".join(parts) + "</div>",
+                unsafe_allow_html=True,
+            )
+
+    joint_venture = outcome.get("joint_venture") or {}
+    if joint_venture:
+        parts = []
+        for note in joint_venture.get("notes") or []:
+            parts.append(f"<div>· {_esc(note)}</div>")
+        parts.extend(_calc_rows(joint_venture.get("calculations") or []))
+        if joint_venture.get("venturer"):
+            parts.append(f"<div>· Venturer (books): "
+                         f"{_esc(joint_venture.get('venturer'))}</div>")
+        if joint_venture.get("co_venturer"):
+            parts.append(f"<div>· Co-venturer: "
+                         f"{_esc(joint_venture.get('co_venturer'))}</div>")
+        if parts:
+            st.markdown(
+                '<div class="fte-fyjc-card"><b>Joint Venture</b>'
+                + "".join(parts) + "</div>",
+                unsafe_allow_html=True,
+            )
+
+    single_entry = outcome.get("single_entry") or {}
+    if single_entry:
+        parts = []
+        formula = single_entry.get("formula")
+        result = single_entry.get("result")
+        direction = single_entry.get("direction") or ""
+        if formula:
+            parts.append(f"<div>· {_esc(formula)}</div>")
+        if result is not None:
+            parts.append(
+                f"<div>· Result: <b>{_esc(direction.upper())} "
+                f"{_fmt_rupee(abs(result))}</b></div>")
+        parts.extend(_calc_rows(single_entry.get("calculations") or []))
+        parts.append(
+            "<div>· Mathematical result - no journal entry required for "
+            "the change-in-net-worth calculation.</div>")
+        st.markdown(
+            '<div class="fte-fyjc-card"><b>Incomplete Records / '
+            'Single Entry</b>'
             + "".join(parts) + "</div>",
             unsafe_allow_html=True,
         )

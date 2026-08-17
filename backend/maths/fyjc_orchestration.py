@@ -68,6 +68,28 @@ Sprint 15I-BILLS adds the Bills Authority (implemented):
   * a bill is NEVER booked as cash, a missing prior bill state refuses
     (history is never invented), and no 15I-VY refusal is weakened.
 
+Sprint 15I-SPEC adds three specialized authorities (implemented):
+  * the Consignment Authority (consignment / consignor / consignee /
+    commission / del credere / abnormal loss / consignment stock):
+    goods remain the consignor's property until a sale event - the
+    transfer is NEVER booked as an ordinary sale - with deterministic
+    closing-stock and abnormal-loss valuation, commission and
+    consignment profit;
+  * the Joint Venture Authority (joint venture / co-venturer): a
+    co-venturer is NEVER an ordinary supplier/customer; contributions,
+    expenses, sales, profit-sharing and settlement are booked through
+    the venturer's own books;
+  * the Single Entry Authority (incomplete records / single entry /
+    statement of affairs): the net-worth relationship
+    Profit = Closing Capital + Drawings - Fresh Capital - Opening
+    Capital and its inverses, returned as a VERIFIED mathematical
+    result with zero journal lines (the topic does not require a
+    journal entry).
+  * all three run the SAME normalization + contradiction gates first,
+    never weaken a 15I-VY refusal, never invent a party, amount,
+    history or profit-sharing rule, and refuse (REVIEW_REQUIRED /
+    BLOCKED) with zero journal lines when a required value is missing.
+
 Pure module: no Streamlit, no AI, no network. Deterministic.
 """
 
@@ -139,22 +161,38 @@ AUTHORITIES: Dict[str, Dict[str, Any]] = {
     },
     "CONSIGNMENT_AUTHORITY": {
         "name": "Consignment Authority",
-        "implemented": False,
+        "implemented": True,
         "base": False,
-        "scope": ("consignment transactions - NOT implemented yet"),
+        "scope": ("consignment (Sprint 15I-SPEC): goods sent on "
+                  "consignment stay the consignor's property until sold "
+                  "- the transfer is never booked as an ordinary sale. "
+                  "Deterministic closing-stock and abnormal-loss "
+                  "valuation (cost + pro-rata non-recurring expenses), "
+                  "normal vs abnormal loss, commission, del credere "
+                  "commission and consignment profit/loss, from the "
+                  "consignor's books."),
     },
     "JOINT_VENTURE_AUTHORITY": {
         "name": "Joint Venture Authority",
-        "implemented": False,
+        "implemented": True,
         "base": False,
-        "scope": ("joint-venture transactions - NOT implemented yet"),
+        "scope": ("joint venture (Sprint 15I-SPEC): a co-venturer is "
+                  "never treated as an ordinary supplier/customer. "
+                  "Contributions, expenses, sales, profit/loss, "
+                  "profit-sharing and settlement are booked through the "
+                  "venturer's own books; a missing profit-sharing ratio "
+                  "refuses when a share must be computed."),
     },
     "SINGLE_ENTRY_AUTHORITY": {
         "name": "Single Entry Authority",
-        "implemented": False,
+        "implemented": True,
         "base": False,
-        "scope": ("single-entry / incomplete records - NOT implemented "
-                  "yet"),
+        "scope": ("single entry / incomplete records (Sprint 15I-SPEC): "
+                  "the net-worth relationship Profit = Closing Capital + "
+                  "Drawings - Fresh Capital - Opening Capital and its "
+                  "inverses, returned as a verified mathematical result "
+                  "with zero journal lines - never forced through the "
+                  "double-entry balancing requirement."),
     },
     "BILLS_AUTHORITY": {
         "name": "Bills Authority",
@@ -881,13 +919,25 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         detect_bills,
         bills_outcome,
     )
+    from backend.maths.fyjc_consignment import (
+        consignment_outcome,
+        detect_consignment,
+    )
     from backend.maths.fyjc_discrepancy import (
         detect_discrepancy,
         discrepancy_outcome,
     )
+    from backend.maths.fyjc_joint_venture import (
+        detect_joint_venture,
+        joint_venture_outcome,
+    )
     from backend.maths.fyjc_normalization import (
         normalize_fyjc_text,
         vy_harden,
+    )
+    from backend.maths.fyjc_single_entry import (
+        detect_single_entry,
+        single_entry_outcome,
     )
 
     raw = str(question or "")
@@ -903,6 +953,34 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
     topic = detect_bills(raw)
     if topic:
         return _orchestrate_bills(raw, amount, topic)
+
+    # -- Sprint 15I-SPEC: specialized-authority routing ---------------------
+    # Consignment / joint-venture / single-entry questions are owned by
+    # their dedicated authorities. They run the SAME normalization +
+    # contradiction gates first (so no 15I-VY refusal is weakened) and
+    # resolve their topic deterministically. Routed BEFORE the
+    # Discrepancy Authority and the Commercial Core so an ordinary
+    # purchase pattern never captures a consignment, an ordinary
+    # customer/vendor pattern never captures a joint venture, and the
+    # Commercial Core never journals an incomplete-record calculation.
+    topic = detect_consignment(raw)
+    if topic:
+        return _orchestrate_specialized(raw, amount, topic,
+                                        consignment_outcome,
+                                        "CONSIGNMENT_AUTHORITY",
+                                        "consignment")
+    topic = detect_joint_venture(raw)
+    if topic:
+        return _orchestrate_specialized(raw, amount, topic,
+                                        joint_venture_outcome,
+                                        "JOINT_VENTURE_AUTHORITY",
+                                        "joint_venture")
+    topic = detect_single_entry(raw)
+    if topic:
+        return _orchestrate_specialized(raw, amount, topic,
+                                        single_entry_outcome,
+                                        "SINGLE_ENTRY_AUTHORITY",
+                                        "single_entry")
 
     # -- Sprint 15I-DISC: discrepancy routing ------------------------------
     # A question carrying a discrepancy topic (dishonour / BRS / omission /
@@ -1282,6 +1360,115 @@ def _orchestrate_bills(raw: str, amount: Any,
             "duplicate_correction": 1 if duplicate_correction else 0,
             "duplicated_segments": 0,
             "flow_verdict_eq_bills_authority": True,
+            "deterministic": True,
+        },
+    }
+    result["orchestration"] = graph_payload
+    return result
+
+
+def _orchestrate_specialized(raw: str, amount: Any,
+                             topic: Dict[str, Any],
+                             outcome_fn: Any,
+                             authority_id: str,
+                             payload_key: str) -> Dict[str, Any]:
+    """Sprint 15I-SPEC production path shared by the Consignment, Joint
+    Venture and Single Entry authorities: resolve the specialized-
+    routed question through its authority and attach the transaction-
+    graph payload.
+
+    The authority's OWN normalization + contradiction gates run first
+    inside its outcome function, so no 15I-VY refusal is weakened and
+    the authority never invents a party, amount, history or
+    profit-sharing rule. The graph payload is presentation data only -
+    the verdict is composed by the authority before this adapter runs.
+    """
+    from backend.maths.fyjc_normalization import normalize_fyjc_text
+
+    normalized = normalize_fyjc_text(raw)
+    result = outcome_fn(raw, amount)
+
+    graph = build_transaction_graph(
+        raw, normalized=normalized.text, normalization=normalized.provenance)
+
+    journals: List[Dict[str, Any]] = []
+    if isinstance(result.get("journals"), list):
+        journals = result["journals"]
+    elif result.get("journal") and result.get("status") == "VERIFIED":
+        journals = [result["journal"]]
+
+    merge_lines: List[Dict[str, Any]] = []
+    for seg_index, journal in enumerate(journals):
+        for side in ("debit_lines", "credit_lines"):
+            for line in journal.get(side) or []:
+                account = line.get("account")
+                if not account:
+                    continue
+                merge_lines.append({
+                    "account": account,
+                    "side": "debit" if side == "debit_lines" else "credit",
+                    "amount": str(line.get("amount")),
+                    "segment": seg_index,
+                    "authority": authority_id,
+                })
+
+    payload = result.get(payload_key) or {}
+    invented_history = bool(payload.get("invented_history"))
+    debit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                       if l["side"] == "debit"), Decimal(0))
+    credit_total = sum((Decimal(str(l.get("amount"))) for l in merge_lines
+                        if l["side"] == "credit"), Decimal(0))
+
+    graph_payload = {
+        "authority": payload.get("authority") or f"{payload_key}-authority",
+        "topic": payload.get("topic") or topic.get("topics"),
+        "case": payload.get("case"),
+        "normalization": graph.normalization,
+        "segments": [
+            {
+                "index": node.index,
+                "text": node.text,
+                "classification": (node.classification or {}).get("key"),
+                "base_authority": node.base_authority,
+                "cooperating": node.cooperating,
+                "facts": [
+                    {
+                        "kind": f.kind,
+                        "value": str(f.value) if f.kind != "party"
+                                 else f.value,
+                        "original": f.original,
+                        "role": f.role,
+                        "authority": f.authority,
+                    }
+                    for f in node.facts
+                ],
+            }
+            for node in graph.segments
+        ],
+        "dependencies": graph.dependencies,
+        "ownership": graph.ownership,
+        "contradictions": graph.contradictions,
+        "violations": [],
+        payload_key: payload,
+        "merge": {
+            "lines": merge_lines,
+            "conflicts": [],
+            "balanced": debit_total == credit_total,
+        },
+        "invariants": {
+            "unsafe_confident": 0 if result.get("status") != "VERIFIED"
+                else (1 if not (debit_total == credit_total) else 0),
+            "dropped_valid_segments": 0,
+            "unresolved_amounts_guessed": 0,
+            "duplicated_amount_ownership": 0,
+            "authority_conflicts_verified": 0,
+            "invented_accounts": 0,
+            "invented_amounts": 0,
+            "unbalanced_verified": (0 if debit_total == credit_total
+                                     else 1),
+            "invented_historical_state": 1 if invented_history else 0,
+            "duplicated_segments": 0,
+            f"flow_verdict_eq_{payload_key}_authority": True,
             "deterministic": True,
         },
     }
