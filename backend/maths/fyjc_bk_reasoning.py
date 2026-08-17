@@ -1773,6 +1773,32 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Receipt from a party",
             "debit": ["Cash", "Bank"], "credit": [{"party": "giver"}],
         }
+    # Sprint 15I-TORTURE: a RECEIPT of an amount that was previously
+    # written off as bad ('Received Rs.2,000 from Kamal, which had
+    # earlier been written off as bad') is a BAD-DEBT RECOVERY - the
+    # existing BAD_DEBTS_RECOVERED rule (Dr Cash/Bank, Cr Bad Debts
+    # Recovered) applies, never an ordinary receipt (Cr the debtor's
+    # personal account would invent an active debtor balance for a debt
+    # that was written off), and never an invented concatenated account
+    # like 'Kamal As Bad Debts Recovered'. Fires BEFORE the
+    # cheque/deposit/receipt branches so a recovery by cheque also
+    # credits Bad Debts Recovered (Bank Dr), and BEFORE the generic
+    # RECEIVED_FROM fallback. A write-OFF without receipt evidence
+    # ('Bad debts written off ...') never reaches this branch - the
+    # BAD_DEBTS machinery is never weakened.
+    _recovery_evidence = (
+        "bad debts recovered" in low or "bad debt recovered" in low
+        or "recovered from bad debt" in low or "recovered from bad" in low
+        or ("written off" in low and ("received" in low or "got" in low))
+    )
+    if _recovery_evidence and "from" in low:
+        return {
+            "key": "BAD_DEBTS_RECOVERED",
+            "label": "Bad debts recovered",
+            "debit": (["Bank"] if ("cheque" in low or "check" in low)
+                      else ["Cash", "Bank"]),
+            "credit": ["Bad Debts Recovered"],
+        }
     # A CHEQUE deposited into the bank is never cash: the counterparty is
     # the drawer of the cheque. 'Cheque deposited into bank' without a
     # named drawer is REVIEW_REQUIRED - FT-E never turns a cheque into a
