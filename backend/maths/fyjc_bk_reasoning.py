@@ -1162,7 +1162,8 @@ def _party_from_text(text: str) -> Optional[str]:
             rest = text[idx:]
             m = re.match(r"\s*([A-Za-z][A-Za-z' .]{1,40}?)(?:\s+by\s+|\s+for\s+"
                          r"|\s+against\s+|\s+on\s+|\s+with\s+|\s+worth\s+"
-                         r"|\s+and\s+|\s+in\s+|\s+at\s+|\s+₹|\s+Rs|\s+\d|,|$)",
+                         r"|\s+and\s+|\s+in\s+|\s+at\s+|\s+costing\s+"
+                         r"|\s+₹|\s+Rs|\s+\d|,|$)",
                          rest, re.IGNORECASE)
             if m:
                 party = m.group(1).strip().rstrip(".;,")

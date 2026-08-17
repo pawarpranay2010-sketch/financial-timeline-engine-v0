@@ -235,7 +235,13 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
         tok = match.group(0)
         base = tok.rstrip(".")
         if base.lower() in _SAFE_SINGLE_LETTERS:
-            continue
+            # 'a'/'i' are safe as an article or first-person pronoun, but
+            # in a PARTY position ('to A', 'from A') a bare capital can
+            # be an ambiguous initial - it is never exempt there, or a
+            # party like 'A' would be invented as an account name.
+            head = out[:match.start()]
+            if not re.search(r"\b(?:to|from)\s+$", head):
+                continue
         if base in seen:
             continue
         seen.add(base)
@@ -358,9 +364,16 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
 
     # -- Rule A: payment + outstanding partition vs transaction value ---
     paid = _amount_near(low, "paid")
+    # The outstanding figure must be stated with an unambiguous keyword.
+    # 'outstanding/remains/remaining/unpaid/still due/amount due' claim a
+    # nearby amount; a bare 'balance (due)' WITHOUT an attached figure is
+    # never read as an outstanding amount - the nearest preceding payment
+    # ('Rs.2,000 in cash, balance due') is a payment, not an outstanding
+    # balance, and must not be misread into a false contradiction.
     outstanding = _amount_near(
-        low, r"outstanding|remains|remaining|unpaid|still\s+due|due|"
-             r"balance(?:\s+of)?")
+        low, r"outstanding|remains|remaining|unpaid|still\s+due|amount\s+due")
+    if outstanding is None:
+        outstanding = _amount_near(low, r"balance(?:\s+of)?", window=10)
     if paid is not None and outstanding is not None and paid != outstanding:
         candidates = [a for a in amounts
                       if a != paid and a != outstanding]
