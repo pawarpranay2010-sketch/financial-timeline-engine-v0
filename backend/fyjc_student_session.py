@@ -75,6 +75,19 @@ K_VERDICT_FP = "fte_fyjc_verdict_fp"
 K_ACCT_FP = "fte_fyjc_acct_fp"
 K_MANUAL_FACTS_FP = "fte_fyjc_manual_fp"
 
+# Sprint 15I-UI additions (all plain keys - no widget contract impact).
+# K_PROJ holds the student-workspace projection of the production
+# orchestrate() result; K_GATE_PENDING holds the backend-emitted
+# Confidence Gate awaiting a student decision; K_GATE_DECISION holds the
+# resolved decision provenance. All three are bound to the question
+# fingerprint like every other artifact.
+K_PROJ = "fte_fyjc_projection"            # plain key - UI contract dict
+K_PROJ_FP = "fte_fyjc_projection_fp"
+K_GATE_PENDING = "fte_fyjc_gate_pending"  # plain key - gate payload | None
+K_GATE_PENDING_FP = "fte_fyjc_gate_pending_fp"
+K_GATE_DECISION = "fte_fyjc_gate_decision"  # plain key - resolved decision
+K_GATE_DECISION_FP = "fte_fyjc_gate_decision_fp"
+
 # Widget keys of the uploaders (reset must clear them too).
 K_PHOTO_UPLOAD = "fte_fyjc_photo"
 K_DOC_UPLOAD = "fte_fyjc_doc"
@@ -174,6 +187,18 @@ def reconcile(state: MutableMapping[str, Any]) -> str:
                                           or state.get(K_FLOW_FP) != fp):
         _drop_pair(state, K_FLOW, K_FLOW_FP)
 
+    if state.get(K_PROJ) is not None and (fp is None
+                                          or state.get(K_PROJ_FP) != fp):
+        _drop_pair(state, K_PROJ, K_PROJ_FP)
+
+    if state.get(K_GATE_PENDING) is not None and (
+            fp is None or state.get(K_GATE_PENDING_FP) != fp):
+        _drop_pair(state, K_GATE_PENDING, K_GATE_PENDING_FP)
+
+    if state.get(K_GATE_DECISION) is not None and (
+            fp is None or state.get(K_GATE_DECISION_FP) != fp):
+        _drop_pair(state, K_GATE_DECISION, K_GATE_DECISION_FP)
+
     if state.get(K_VERDICT) is not None and (fp is None
                                              or state.get(K_VERDICT_FP) != fp):
         _drop_pair(state, K_VERDICT, K_VERDICT_FP)
@@ -198,6 +223,8 @@ _RESET_KEYS = (
     K_FLOW, K_EDIT, K_MANUAL_FACTS, K_VERDICT, K_ACCT_VERIFY,
     K_ANALYSIS_ERROR, K_FLOW_FP, K_VERDICT_FP, K_ACCT_FP, K_MANUAL_FACTS_FP,
     K_PHOTO_UPLOAD, K_DOC_UPLOAD,
+    K_PROJ, K_PROJ_FP, K_GATE_PENDING, K_GATE_PENDING_FP,
+    K_GATE_DECISION, K_GATE_DECISION_FP,
 )
 
 

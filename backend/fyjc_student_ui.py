@@ -50,6 +50,7 @@ Honesty rules implemented here
 from __future__ import annotations
 
 import html
+import os
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -58,6 +59,8 @@ from backend.fyjc_student_session import (
     K_MODE, K_QUESTION, K_CORRECTED, K_DOC_TEXT, K_DOC_NAME, K_UPLOAD_KIND,
     K_FLOW, K_EDIT, K_MANUAL_FACTS, K_VERDICT, K_ACCT_VERIFY,
     K_ANALYSIS_ERROR, K_FLOW_FP, K_VERDICT_FP, K_ACCT_FP, K_MANUAL_FACTS_FP,
+    K_PROJ, K_PROJ_FP, K_GATE_PENDING, K_GATE_PENDING_FP,
+    K_GATE_DECISION, K_GATE_DECISION_FP,
     STAGE_ENTRY,
     derive_stage,
     effective_question,
@@ -66,6 +69,14 @@ from backend.fyjc_student_session import (
     reset_session,
     upload_recovery_note,
 )
+from backend.maths.fyjc_ui_contract import (
+    STATUS_PRESENTATION,
+    debug_graph_payload,
+    gate_is_pending,
+    project_student_result,
+    resolve_confidence_gate,
+)
+from backend.maths.fyjc_orchestration import orchestrate as fte_orchestrate
 from backend.maths.fyjc_student_flow import (
     INVALID_INPUT_MATH,
     build_understanding,
@@ -1294,12 +1305,23 @@ def _render_recoverable_error(error: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def render_fyjc_student_ui(demo: bool = False) -> None:
-    """The FYJC page (rendered inside the workspace). Sprint 15I-I adds a
-    top-level section switcher: Study / Verify (Sprint 14 flow), Practice
-    and Teacher Dashboard (Sprint 15I-I, rendered by
-    backend.fyjc_practice_ui). The study/verify flow below is unchanged."""
+def render_fyjc_student_ui(demo: bool = False, landing: bool = False) -> None:
+    """The FYJC page. Sprint 15I-UI: Study / Verify is now the Student
+    Interaction Contract workspace - a projection of the production
+    orchestrate() boundary with the backend-owned Confidence Gate.
+
+    landing=True renders the pure student workspace (single text area,
+    no input-mode radio) - used by the app entrance so the app opens
+    directly into the workspace with no login/onboarding. landing=False
+    keeps the released input-mode radio (Photo / PDF / typed) for the
+    signed-in workspace page.
+
+    Practice and Teacher Dashboard (Sprint 15I-I) are unchanged."""
     _ensure_css()
+
+    if landing:
+        _render_15i_student_workspace(demo, landing=True)
+        return
 
     section = st.session_state.get("fte_fyjc_section")
     if section not in ("Study / Verify", "Practice", "Teacher Dashboard"):
@@ -1320,68 +1342,7 @@ def render_fyjc_student_ui(demo: bool = False) -> None:
         render_teacher_section(demo=demo)
         return
 
-    # 1. Pre-render reconcile: validate the session left by the previous run
-    #    (a refresh reruns the whole script; anything stale is dropped here).
-    stage = reconcile(st.session_state)
-
-    if demo and stage == STAGE_ENTRY:
-        st.session_state[K_QUESTION] = (
-            "Purchased goods from Rahul on credit for Rs.10,000."
-        )
-        stage = reconcile(st.session_state)
-
-    _render_entry(demo, stage)
-
-    # 2. Post-render reconcile: the entry widgets may have just changed the
-    #    question (typed, cleared, switched modes) - a changed question must
-    #    never display the previous question's result.
-    reconcile(st.session_state)
-    question = effective_question(st.session_state)
-    if not question:
-        st.caption("Enter or upload a question to begin.")
-        _render_study_topics()
-        return
-
-    if st.session_state.get(K_FLOW) is None and st.session_state.get(K_EDIT):
-        # waiting for the corrected question to be re-analysed
-        st.stop()
-
-    flow = st.session_state.get(K_FLOW)
-    if flow is None:
-        try:
-            flow = run_fyjc_student_flow(question)
-            st.session_state[K_FLOW] = flow
-            st.session_state[K_FLOW_FP] = question_fingerprint(question)
-        except Exception:  # defensive: a failure is recoverable, never fake
-            st.session_state[K_ANALYSIS_ERROR] = {
-                "message": (
-                    "FT-E hit an unexpected problem while reading that "
-                    "question. Your question is still saved below - press "
-                    "Analyse question to try again."
-                ),
-                "fp": question_fingerprint(question),
-            }
-    if st.session_state.get(K_ANALYSIS_ERROR):
-        _render_recoverable_error(st.session_state[K_ANALYSIS_ERROR])
-        _render_study_topics()
-        return
-    flow = st.session_state[K_FLOW]
-
-    st.markdown("---")
-    _render_understanding(flow)
-
-    if flow.get("flow") == "maths":
-        _render_maths_flow(flow)
-    elif flow.get("flow") == "accounting":
-        _render_accounting_flow(flow)
-    else:
-        _render_refusal(flow)
-
-    st.markdown("---")
-    _render_verification(flow)
-
-    st.markdown("---")
-    _render_study_topics()
+    _render_15i_student_workspace(demo, landing=False)
 
 
 def _render_refusal(flow: Dict[str, Any]) -> None:
@@ -1403,3 +1364,564 @@ def _render_refusal(flow: Dict[str, Any]) -> None:
         f'<br/><b>What you can do:</b> {_esc(flow.get("next_action"))}</div>',
         unsafe_allow_html=True,
     )
+
+
+# ===========================================================================
+# Sprint 15I-UI - Student Interaction Contract workspace
+#
+# The student workspace is a PROJECTION of the production boundary
+# (backend.maths.fyjc_orchestration.orchestrate) rendered through
+# backend.maths.fyjc_ui_contract. The UI holds ZERO accounting authority:
+# it never calculates a journal, never infers an account, never invents an
+# amount, never resolves ambiguity by itself and never generates accounting
+# rules. The only user decision the UI can submit is a Confidence Gate
+# choice (backend-validated via resolve_confidence_gate).
+# ===========================================================================
+
+_15I_CSS = """
+<style>
+/* ---- Sprint 15I-UI: calm accounting-workspace typography ------------- */
+.fte-15i-title { font-size: 1.02rem; font-weight: 750; margin: 1.1rem 0 .3rem;
+  letter-spacing: -.01em; }
+.fte-15i-title-lg { font-size: 1.6rem; font-weight: 800; margin: .4rem 0 .15rem;
+  letter-spacing: -.02em; }
+.fte-15i-sub { color: var(--fte-muted, #8a94a6); font-size: .95rem;
+  margin-bottom: .9rem; line-height: 1.5; }
+.fte-15i-label { color: var(--fte-muted, #8a94a6); font-size: .82rem;
+  font-weight: 650; }
+.fte-15i-row { padding: .28rem 0; border-bottom: 1px solid
+  rgba(43,53,80,.35); }
+.fte-15i-note { color: var(--fte-muted, #8a94a6); font-size: .88rem;
+  margin: .3rem 0; line-height: 1.5; }
+.fte-15i-ok { color: #2ecc71; font-size: 1.35rem; font-weight: 800;
+  margin: .15rem 0 .1rem; }
+.fte-15i-chip { display: inline-block; border-radius: 999px;
+  padding: .12rem .65rem; font-size: .76rem; font-weight: 750;
+  letter-spacing: .03em; margin-right: .4rem; }
+.fte-15i-chip.green { background: rgba(46,204,113,.14); color: #2ecc71; }
+.fte-15i-chip.amber { background: rgba(255,180,60,.14); color: #ffb43c; }
+.fte-15i-chip.red { background: rgba(255,99,99,.14); color: #ff6363; }
+.fte-15i-chip.neutral { background: rgba(138,148,166,.14);
+  color: #aab4c6; }
+.fte-15i-gate-head { font-size: 1.25rem; font-weight: 800; margin: .35rem 0;
+  letter-spacing: -.01em; }
+.fte-15i-whyline { margin: .3rem 0; line-height: 1.5; font-size: .93rem; }
+.fte-15i-calcline { margin: .22rem 0; line-height: 1.45; font-size: .9rem;
+  color: var(--fte-text, #e6ecf5); }
+.fte-15i-calc-muted { color: var(--fte-muted, #8a94a6); font-size: .82rem; }
+.fte-15i-state { margin: .4rem 0; line-height: 1.55; }
+.fte-15i-hero { font-size: 1.05rem; font-weight: 800; letter-spacing: .02em;
+  color: var(--fte-accent, #4f8cff); }
+
+/* Keep the result area unboxed: hairline separators instead of cards. */
+div[data-testid="stVerticalBlock"] > div:has(> .fte-15i-row) {
+  border-left: 2px solid rgba(79,140,255,.25); padding-left: .6rem;
+  margin: .2rem 0 .4rem; }
+</style>
+"""
+
+
+def _ensure_15i_css() -> None:
+    st.markdown(_15I_CSS, unsafe_allow_html=True)
+
+
+def _compute_projection(question: str) -> Dict[str, Any]:
+    """Run the production boundary once and project it into the student
+    UI contract. Deterministic - the UI never reshapes accounting data."""
+    result = fte_orchestrate(question)
+    return project_student_result(result, question)
+
+
+def _store_projection(projection: Dict[str, Any],
+                      question: str) -> None:
+    fp = question_fingerprint(question)
+    st.session_state[K_PROJ] = projection
+    st.session_state[K_PROJ_FP] = fp
+    if gate_is_pending(projection):
+        st.session_state[K_GATE_PENDING] = projection.get("confidence_gate")
+        st.session_state[K_GATE_PENDING_FP] = fp
+    else:
+        st.session_state.pop(K_GATE_PENDING, None)
+        st.session_state.pop(K_GATE_PENDING_FP, None)
+
+
+def _legacy_flow(question: str) -> Dict[str, Any]:
+    """The Sprint 14 flow dict, computed on demand and cached. It powers
+    the released 'Check my answer' verification widgets only - the
+    primary rendering is the 15I-UI projection."""
+    if st.session_state.get(K_FLOW) is not None:
+        return st.session_state[K_FLOW]
+    flow = run_fyjc_student_flow(question)
+    st.session_state[K_FLOW] = flow
+    st.session_state[K_FLOW_FP] = question_fingerprint(question)
+    return flow
+
+
+# ---------------------------------------------------------------------------
+# UniversalInput
+# ---------------------------------------------------------------------------
+
+
+def _render_landing_input(demo: bool, stage: str) -> None:
+    """The first interaction: a single text area. No login, no onboarding,
+    no photo / PDF / OCR - just the question."""
+    st.markdown('<div class="fte-15i-title-lg">What are you working on?</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="fte-15i-sub">Type or paste an accounting question. '
+        'FT-E verifies the result deterministically - and when the textbook '
+        'is unclear, it asks exactly the one thing it needs.</div>',
+        unsafe_allow_html=True,
+    )
+    st.text_area(
+        "Enter your question",
+        key=K_QUESTION,
+        height=130,
+        placeholder=(
+            "e.g. Sold goods to Rahul for Rs.10,000 at 18% GST.\n\n"
+            "Purchased goods from Mark on credit for Rs.50,000 at 10% "
+            "trade discount."
+        ),
+    )
+    has_input = bool(effective_question(st.session_state).strip())
+    col_go, col_reset = st.columns([3, 1])
+    with col_go:
+        st.button(
+            "Analyse question",
+            key="fte_fyjc_go",
+            width="stretch",
+            type="primary",
+            disabled=not has_input,
+            help=None if has_input else "Type or paste a question first.",
+        )
+    with col_reset:
+        if stage != STAGE_ENTRY:
+            if st.button("Start over", key="fte_fyjc_reset",
+                         width="stretch"):
+                reset_session(st.session_state)
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# UnderstandingView
+# ---------------------------------------------------------------------------
+
+
+def _render_understanding_view(projection: Dict[str, Any]) -> None:
+    st.markdown('<div class="fte-15i-title">Understanding</div>',
+                unsafe_allow_html=True)
+    understanding = projection.get("understanding") or {}
+    rows: List[tuple] = []
+    if understanding.get("transaction_type"):
+        rows.append(("Transaction type", understanding["transaction_type"]))
+    if understanding.get("parties"):
+        rows.append(("Parties", ", ".join(understanding["parties"])))
+    if understanding.get("amounts"):
+        rows.append(("Amounts", ", ".join(
+            a.get("display") or _esc(a.get("original") or "")
+            for a in understanding["amounts"])))
+    if understanding.get("rates"):
+        rows.append(("Rates", ", ".join(
+            r.get("display") or "" for r in understanding["rates"])))
+    if understanding.get("taxes"):
+        rows.append(("Taxes", ", ".join(understanding["taxes"])))
+    if understanding.get("fractions"):
+        rows.append(("Payment fraction", ", ".join(
+            f.get("display") or "" for f in understanding["fractions"])))
+    if understanding.get("payment"):
+        rows.append(("Payment method", ", ".join(
+            understanding["payment"])))
+    if understanding.get("historical"):
+        rows.append(("Historical facts", ", ".join(
+            understanding["historical"])))
+    if understanding.get("accounts"):
+        rows.append(("Accounts identified", ", ".join(
+            understanding["accounts"])))
+    if not rows:
+        st.caption("FT-E could not extract structured facts from this "
+                   "question.")
+        return
+    for label, value in rows:
+        c = st.columns([2, 5], gap="medium")
+        with c[0]:
+            st.markdown(
+                f'<div class="fte-15i-row"><span class="fte-15i-label">'
+                f'{_esc(label)}</span></div>',
+                unsafe_allow_html=True,
+            )
+        with c[1]:
+            st.markdown(
+                f'<div class="fte-15i-row">{_esc(value)}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# ConfidenceGate - the ONLY component that submits a user decision
+# ---------------------------------------------------------------------------
+
+
+def _render_confidence_gate(projection: Dict[str, Any],
+                            question: str) -> None:
+    gate = projection.get("confidence_gate") or {}
+    alternatives = gate.get("alternatives") or []
+    if not alternatives:
+        return
+    st.markdown('<div class="fte-15i-gate-head">I need one clarification</div>',
+                unsafe_allow_html=True)
+    if gate.get("segment"):
+        st.markdown(
+            f'<div class="fte-15i-note">“{_esc(gate["segment"])}”</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f'<div class="fte-15i-state">{_esc(gate.get("question"))}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="fte-15i-note">{_esc(gate.get("dependency"))}</div>',
+        unsafe_allow_html=True,
+    )
+    labels = [alt.get("label") or "" for alt in alternatives]
+    st.radio(
+        "Choose the accounting meaning",
+        labels,
+        key="fte_fyjc_gate_choice",
+        label_visibility="collapsed",
+    )
+    selected = st.session_state.get("fte_fyjc_gate_choice")
+    if selected:
+        for alt in alternatives:
+            if alt.get("label") == selected:
+                st.markdown(
+                    f'<div class="fte-15i-note">{_esc(alt.get("effect"))}</div>',
+                    unsafe_allow_html=True,
+                )
+    if st.button("Confirm", key="fte_fyjc_gate_confirm", type="primary",
+                 width="stretch"):
+        choice = st.session_state.get("fte_fyjc_gate_choice")
+        decision_id = next(
+            (alt.get("id") for alt in alternatives
+             if alt.get("label") == choice),
+            None,
+        )
+        if decision_id:
+            resolved = resolve_confidence_gate(
+                question, gate.get("gate_id"), decision_id)
+            _store_projection(resolved, question)
+            st.session_state[K_GATE_DECISION] = resolved.get(
+                "gate_resolution")
+            st.session_state[K_GATE_DECISION_FP] = question_fingerprint(
+                question)
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# VerifiedResult / JournalEntryView / VerificationView / WhyView /
+# CalculationView
+# ---------------------------------------------------------------------------
+
+
+def _render_journal_entry_view(projection: Dict[str, Any]) -> None:
+    """Aligned Account | Debit | Credit columns from the backend's verified
+    journal lines - the UI never creates or reorders accounting lines."""
+    rows = (projection.get("journal") or {}).get("rows") or []
+    if not rows:
+        st.caption("No journal lines were produced.")
+        return
+    header = st.columns([4, 2, 2], gap="medium")
+    header[0].markdown("**Account**")
+    header[1].markdown("**Debit**")
+    header[2].markdown("**Credit**")
+    for row in rows:
+        c = st.columns([4, 2, 2], gap="medium")
+        c[0].markdown(row.get("account") or "")
+        if row.get("side") == "debit":
+            c[1].markdown(row.get("display") or "")
+        else:
+            c[2].markdown(row.get("display") or "")
+
+
+def _render_verification_view(projection: Dict[str, Any]) -> None:
+    st.markdown('<div class="fte-15i-title">Verification</div>',
+                unsafe_allow_html=True)
+    verification = projection.get("verification") or {}
+    st.markdown('<div class="fte-15i-ok">✓ Verified</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-15i-state">{_esc(verification.get("statement"))}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_why_view(projection: Dict[str, Any]) -> None:
+    st.markdown('<div class="fte-15i-title">Why?</div>',
+                unsafe_allow_html=True)
+    events = (projection.get("why") or {}).get("events") or []
+    if not events:
+        st.caption("No explanation events were recorded for this result.")
+        return
+    for event in events:
+        text = event.get("text") or ""
+        if text:
+            st.markdown(
+                f'<div class="fte-15i-whyline">· {_esc(text)}</div>',
+                unsafe_allow_html=True,
+            )
+
+
+def _render_calculation_view(projection: Dict[str, Any]) -> None:
+    records = (projection.get("calculation") or {}).get("records") or []
+    if not records:
+        st.caption("No calculation chain was recorded.")
+        return
+    for record in records:
+        inputs = record.get("inputs") or {}
+        input_text = " · ".join(
+            f"{_esc(k)} = {_esc(v)}" for k, v in inputs.items())
+        line = f"{_esc(record.get('label'))} = {_esc(record.get('result'))}"
+        if record.get("formula"):
+            line += (
+                f' <span class="fte-15i-calc-muted">'
+                f'({_esc(record["formula"])})</span>'
+            )
+        st.markdown(
+            f'<div class="fte-15i-calcline">· {line}'
+            + (f'<br/><span class="fte-15i-calc-muted">'
+               f'{input_text}</span>' if input_text else "")
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_verified_result(projection: Dict[str, Any]) -> None:
+    resolution = projection.get("gate_resolution") or {}
+    if resolution.get("accepted") and resolution.get("decision_label"):
+        st.markdown(
+            f'<div class="fte-15i-note">Got it. Continuing with '
+            f'“{_esc(resolution["decision_label"])}”.</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('<div class="fte-15i-title">Result</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fte-15i-state">{_chip("VERIFIED", "green")} '
+        f'{_esc(projection.get("status_label"))}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="fte-15i-title">Journal Entry</div>',
+                unsafe_allow_html=True)
+    _render_journal_entry_view(projection)
+    _render_verification_view(projection)
+    st.markdown('<div class="fte-15i-title">Why?</div>',
+                unsafe_allow_html=True)
+    _render_why_view(projection)
+    st.markdown('<div class="fte-15i-title">Show calculation</div>',
+                unsafe_allow_html=True)
+    _render_calculation_view(projection)
+
+
+# ---------------------------------------------------------------------------
+# Status behaviour (calm, distinct, never raw internals)
+# ---------------------------------------------------------------------------
+
+
+def _status_chip_label(status: str) -> str:
+    return {
+        "REVIEW_REQUIRED": "REVIEW REQUIRED",
+        "NOT_SUPPORTED": "NOT SUPPORTED",
+        INVALID_INPUT_MATH: "INVALID INPUT (MATH)",
+        "BLOCKED": "BLOCKED",
+    }.get(status, status or "REFUSED")
+
+
+def _render_status_state(projection: Dict[str, Any]) -> None:
+    status = projection.get("status")
+    tone = projection.get("tone") or "neutral"
+    st.markdown(
+        f'<div class="fte-15i-state">{_chip(_status_chip_label(status), tone)}'
+        f' {_esc(projection.get("headline"))}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="fte-15i-state">{_esc(projection.get("summary"))}</div>',
+        unsafe_allow_html=True,
+    )
+    why_not = projection.get("why_not")
+    if why_not:
+        st.markdown(
+            f'<div class="fte-15i-whyline"><b>Why:</b> {_esc(why_not)}</div>',
+            unsafe_allow_html=True,
+        )
+    next_action = projection.get("next_action")
+    if next_action:
+        st.markdown(
+            f'<div class="fte-15i-whyline"><b>What you can do:</b> '
+            f'{_esc(next_action)}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Developer Debug Mode (FTE_DEBUG_GRAPH=true, read-only)
+# ---------------------------------------------------------------------------
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get("FTE_DEBUG_GRAPH", "").strip().lower() == "true"
+
+
+def _render_debug_graph(projection: Dict[str, Any]) -> None:
+    """Read-only developer surface over the production graph. Never
+    exposed in normal Student Mode and never mutates the graph."""
+    if not _debug_enabled():
+        return
+    import pandas as pd
+    payload = debug_graph_payload(projection.get("result") or {})
+    st.markdown("---")
+    st.markdown(
+        '<div class="fte-15i-title">Developer Debug — Transaction Graph '
+        '(read-only)</div>',
+        unsafe_allow_html=True,
+    )
+    segments = payload.get("segments") or []
+    if segments:
+        st.markdown("**Graph nodes**")
+        st.dataframe(
+            pd.DataFrame([{
+                "Node ID": s.get("index"),
+                "Segment": s.get("text"),
+                "Classification": s.get("classification"),
+                "Authority": s.get("base_authority"),
+                "Facts": "; ".join(
+                    f"{f.get('kind')}={f.get('value')}"
+                    for f in s.get("facts") or []),
+                "Unresolved": s.get("unresolved"),
+            } for s in segments]),
+            hide_index=True,
+            width="stretch",
+        )
+    if payload.get("dependencies"):
+        st.markdown("**Graph edges / dependencies**")
+        st.json(payload["dependencies"])
+    if payload.get("ownership"):
+        st.markdown("**Amount ownership**")
+        st.dataframe(pd.DataFrame(payload["ownership"]), hide_index=True,
+                     width="stretch")
+    contradictions = payload.get("contradictions") or []
+    violations = payload.get("violations") or []
+    if contradictions or violations:
+        st.markdown("**Contradiction state / violations**")
+        st.json({"contradictions": contradictions,
+                 "violations": violations})
+    if payload.get("invariants"):
+        st.markdown("**Safety invariants**")
+        st.json(payload["invariants"])
+    if projection.get("gate_resolution"):
+        st.markdown("**Confidence Gate decision**")
+        st.json(projection["gate_resolution"])
+    why_events = list((projection.get("why") or {}).get("events") or [])
+    # Every state exposes the engine's explanation events. Where the engine
+    # refused (no journal, no events yet), the events are the backend's own
+    # reason payload and the Confidence Gate's unresolved dependency -
+    # never anything the UI invented.
+    if not why_events and projection.get("why_not"):
+        why_events.append({
+            "event_id": "ENGINE_REVIEW_REQUIRED",
+            "text": str(projection["why_not"]),
+        })
+    gate = projection.get("confidence_gate")
+    if gate and not projection.get("gate_resolution"):
+        why_events.append({
+            "event_id": "CONFIDENCE_GATE_PENDING",
+            "text": "{} options: {}".format(
+                gate.get("question") or "",
+                " / ".join(str(o) for o in (gate.get("options") or [])),
+            ),
+        })
+    st.markdown("**Explanation events**")
+    st.json(why_events)
+    st.markdown("**Raw graph payload**")
+    st.json(payload)
+
+
+# ---------------------------------------------------------------------------
+# Legacy verification surface (released gates drive the check widgets)
+# ---------------------------------------------------------------------------
+
+
+def _render_legacy_verify(question: str) -> None:
+    flow = _legacy_flow(question)
+    if flow.get("flow") != "accounting":
+        return
+    with st.expander("▸ Show detailed reasoning"):
+        st.caption(
+            "The full working — kept for anyone who wants the audit trail."
+        )
+        _render_steps(flow.get("steps") or [])
+        _render_audit(flow.get("audit") or {})
+    _render_accounting_verify(flow)
+
+
+# ---------------------------------------------------------------------------
+# The 15I-UI student workspace (shared by the landing and the FYJC Study
+# page)
+# ---------------------------------------------------------------------------
+
+
+def _render_15i_student_workspace(demo: bool, landing: bool) -> None:
+    """UniversalInput -> backend projection -> [Confidence Gate] ->
+    verified result / status state -> (debug surface when enabled)."""
+    _ensure_15i_css()
+    stage = reconcile(st.session_state)
+    if demo and stage == STAGE_ENTRY:
+        st.session_state[K_QUESTION] = (
+            "Purchased goods from Rahul on credit for Rs.10,000."
+        )
+        stage = reconcile(st.session_state)
+    if landing:
+        _render_landing_input(demo, stage)
+    else:
+        _render_entry(demo, stage)
+    reconcile(st.session_state)
+    question = effective_question(st.session_state)
+    if not question:
+        st.caption("Enter or upload a question to begin.")
+        _render_study_topics()
+        return
+    if st.session_state.get(K_PROJ) is None and st.session_state.get(K_EDIT):
+        st.stop()
+    if st.session_state.get(K_PROJ) is None:
+        try:
+            projection = _compute_projection(question)
+            _store_projection(projection, question)
+        except Exception:  # defensive: recoverable, never fake
+            st.session_state[K_ANALYSIS_ERROR] = {
+                "message": (
+                    "FT-E hit an unexpected problem while reading that "
+                    "question. Your question is still saved below - press "
+                    "Analyse question to try again."
+                ),
+                "fp": question_fingerprint(question),
+            }
+    if st.session_state.get(K_ANALYSIS_ERROR):
+        _render_recoverable_error(st.session_state[K_ANALYSIS_ERROR])
+        _render_study_topics()
+        return
+    projection = st.session_state[K_PROJ]
+
+    st.markdown("---")
+    if gate_is_pending(projection):
+        _render_confidence_gate(projection, question)
+        # the read-only debug surface is rendered in every state so a
+        # developer can inspect the graph behind a pending gate too
+        _render_debug_graph(projection)
+        return
+
+    if projection.get("status") == "VERIFIED":
+        _render_understanding_view(projection)
+        _render_verified_result(projection)
+        _render_legacy_verify(question)
+    else:
+        _render_status_state(projection)
+    _render_debug_graph(projection)

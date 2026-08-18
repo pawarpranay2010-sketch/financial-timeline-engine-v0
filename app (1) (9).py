@@ -3189,8 +3189,16 @@ def _fte_display_name(email: str) -> str:
 
 
 def _render_entrance() -> None:
-    """FT-E entrance: centered brand + two entry actions (UI only)."""
-    st.markdown('<div class="fte-spacer-lg"></div>', unsafe_allow_html=True)
+    """Sprint 15I-UI: the app opens directly into the FYJC student
+    workspace - no login screen, no registration gate, no onboarding.
+    The first interaction is a single text area ("What are you working
+    on?"). Sign in / Create account / Demo stay available below as
+    compact actions for the institutional workspace (released gates
+    drive them by key)."""
+    from backend.fyjc_student_ui import render_fyjc_student_ui
+    render_fyjc_student_ui(demo=False, landing=True)
+    st.markdown("---")
+    st.markdown('<div class="fte-spacer-md"></div>', unsafe_allow_html=True)
     l, m, r = st.columns([1, 2, 1], gap="large")
     with m:
         st.markdown(
@@ -3219,7 +3227,7 @@ def _render_entrance() -> None:
         )
         st.markdown(
             '<div style="text-align:center;font-size:.78rem;color:var(--fte-muted);margin-top:.35rem">'
-            "No account, no API key — explore the full workflow on a pre-analyzed sample.</div>",
+            "No account needed to study. Sign in for the institutional workspace.</div>",
             unsafe_allow_html=True,
         )
 
