@@ -3129,7 +3129,7 @@ def _split_transactions(question: str) -> List[str]:
             # ending in a rate ('...CGST @ 9% and SGST @ 9%. Sold goods
             # ...') is a real sentence boundary, never a swallowed second
             # transaction.
-            r"(?<=[a-z0-9)%])\.\s+(?=[A-Z])|"
+            r"(?<=[a-zA-Z0-9)%])\.\s+(?=[A-Z])|"
             r"(?<=[0-9)])(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<=[0-9)]\s)(?:\u2014|\u2013)\s+(?=[A-Z])|"
             r"(?<![A-Za-z])\n\s*(?=[A-Z])|"
@@ -3168,8 +3168,14 @@ def _split_transactions(question: str) -> List[str]:
         is_purchase_prior = bool(prior_pattern) and \
             "PURCHASE" in prior_pattern["key"]
         low_seg = " " + seg.lower() + " "
+        # Sprint 15I-CHAOS-IMPL: only merge the FIRST payment step into
+        # a purchase.  Subsequent payments stay as independent segments
+        # so multi-payment transactions are not forced into one
+        # multi-amount segment the ownership gate cannot resolve.
+        prior_has_pay = bool(re.search(r"paid", prior or "", re.I))
         if prior and _is_payment_step(seg) and is_purchase_prior \
-                and " paid " in low_seg:
+                and " paid " in low_seg \
+                and not prior_has_pay:
             merged[-1] = merged[-1] + "; " + seg
         else:
             merged.append(seg)
