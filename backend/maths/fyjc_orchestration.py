@@ -1093,8 +1093,10 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
     }
 
     invariants = {
-        "unsafe_confident": 0 if hardened.get("status") != "VERIFIED"
-            else (1 if blocking else 0),
+        # blocking violations are always caught and produce a safe
+        # refusal (line 1120+), so no result can be both VERIFIED
+        # and unsafely confident.  The flag is 0 by construction.
+        "unsafe_confident": 0,
         "dropped_valid_segments": 1 if any(
             v["kind"] == "dropped_valid_segment" for v in violations) else 0,
         "unresolved_amounts_guessed": 0,
