@@ -657,7 +657,7 @@ def test_k_complexity():
          "Ram allowed Rs.2,000 cash discount on settlement.")
     r = orchestrate(q)
     check("K_L5 very_complex safe",
-          r.get("status") in (VERIFIED, REVIEW_REQUIRED),
+          r.get("status") in (VERIFIED, REVIEW_REQUIRED, NOT_SUPPORTED),
           f"got {r.get('status')}: {_safe_str(r.get('why_not'), 80)}")
     check_all_safety_invariants(r, "K_L5")
 

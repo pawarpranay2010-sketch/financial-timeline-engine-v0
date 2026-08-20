@@ -64,6 +64,12 @@ from backend.maths.fyjc_bk_reasoning import INVALID_INPUT_MATH  # noqa: E402
 
 _GOODS_RE = re.compile(r"\bgds\.?\b", re.IGNORECASE)
 
+# 'frm' -> 'from' (common student abbreviation)
+_FRM_RE = re.compile(r"\bfrm\.?\b", re.IGNORECASE)
+
+# 'chq' -> 'cheque' (common student abbreviation)
+_CHQ_RE = re.compile(r"\bchq\.?\b", re.IGNORECASE)
+
 # '10k' / '1.5k' -> thousands. The 'k' must be directly attached to the
 # number and end at a word boundary, so '20kg' or '20 k' never match.
 _K_SUFFIX_RE = re.compile(r"\b(\d+(?:\.\d+)?)k\b", re.IGNORECASE)
@@ -93,6 +99,7 @@ _WS_RE = re.compile(r"[ \t\r\n]+")
 _SAFE_SHORT_TOKENS = frozenset({
     # currency / units / titles / accounting
     "rs", "inr", "dr", "cr", "mr", "mrs", "ms", "st", "vs", "gst",
+    "cgst", "sgst", "igst",
     "amt", "qty", "kg", "ltd", "nos",
     # articles / prepositions / conjunctions / pronouns / common verbs
     "a", "an", "the", "on", "at", "of", "in", "for", "by", "to", "from",
@@ -101,7 +108,7 @@ _SAFE_SHORT_TOKENS = frozenset({
     "your", "up", "down", "off", "out", "own", "new", "old", "any",
     "all", "one", "two", "via", "had", "has", "was", "did", "due",
     "pay", "tax", "sum", "add", "use", "get", "got", "may", "can",
-    "who", "how", "why", "etc", "i",
+    "who", "how", "why", "etc", "i", "neft",
 })
 
 # Single letters that are always safe (article 'a' / first person 'i').
@@ -165,6 +172,16 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
     out = _GOODS_RE.sub(
         lambda m: _record(provenance, "BK_NORM_GOODS",
                           m.group(0), "goods"), out)
+
+    # 1b) 'frm' -> 'from'
+    out = _FRM_RE.sub(
+        lambda m: _record(provenance, "BK_NORM_FROM",
+                          m.group(0), "from"), out)
+
+    # 1c) 'chq' -> 'cheque'
+    out = _CHQ_RE.sub(
+        lambda m: _record(provenance, "BK_NORM_CHEQUE",
+                          m.group(0), "cheque"), out)
 
     # 2) '10k' / '1.5k' -> '10,000' / '1,500'
     def _repl_k(match: "re.Match[str]") -> str:
@@ -236,11 +253,18 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
         base = tok.rstrip(".")
         if base.lower() in _SAFE_SINGLE_LETTERS:
             # 'a'/'i' are safe as an article or first-person pronoun, but
-            # in a PARTY position ('to A', 'from A') a bare capital can
-            # be an ambiguous initial - it is never exempt there, or a
-            # party like 'A' would be invented as an account name.
+            # in a PARTY position ('to A', 'from A') a bare CAPITAL can
+            # be an ambiguous initial. A lowercase 'a' after 'to'/'from'
+            # followed by a space and then a word is always an article
+            # ('to a customer'), never a party name.
             head = out[:match.start()]
+            tail = out[match.end():]
             if not re.search(r"\b(?:to|from)\s+$", head):
+                continue
+            # After 'to'/'from': lowercase 'a' (article) followed by a
+            # space and then a word character is an article, not a party.
+            # Uppercase 'A' is still flagged as a party initial.
+            if base == "a" and re.match(r"\s+[A-Za-z]", tail):
                 continue
         if base in seen:
             continue
@@ -371,9 +395,26 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
     # ('Rs.2,000 in cash, balance due') is a payment, not an outstanding
     # balance, and must not be misread into a false contradiction.
     outstanding = _amount_near(
-        low, r"outstanding|remains|remaining|unpaid|still\s+due|amount\s+due")
+        low, r"outstanding|remains|unpaid|still\s+due|amount\s+due")
+    # Sprint 15I-BOUNDARY-CLOSURE: 'remaining' without an explicit figure
+    # (e.g. 'Remaining to Raj', 'Remaining due') means the balance is owed,
+    # not that a specific amount is outstanding.  Only match 'remaining' when
+    # it has an explicit figure: 'remaining 15000' or 'remaining Rs.10,000'.
     if outstanding is None:
-        outstanding = _amount_near(low, r"balance(?:\s+of)?", window=10)
+        outstanding = _amount_near(
+            low, r"remaining\s+(?:rs\.?\s*)?\d", mode="after")
+    if outstanding is None:
+        outstanding = _amount_near(low, r"balance(?:\s+of)?", window=10, mode="after")
+    # Sprint 15I-BOUNDARY-CLOSURE: 'Remaining X by NEFT/cash/cheque/bank'
+    # is a PAYMENT step, not an outstanding balance.  Exclude it so a
+    # multi-payment transaction is never falsely flagged as a contradiction.
+    if outstanding is not None:
+        _pay_meth = re.search(
+            r"remaining\s+\d[\d,]*(?:\.\d+)?\s+(?:by|in|via|through)\s+"
+            r"(?:neft|cash|cheque|chq|bank|draft|upi|rtgs)",
+            low, re.I)
+        if _pay_meth:
+            outstanding = None
     if paid is not None and outstanding is not None and paid != outstanding:
         candidates = [a for a in amounts
                       if a != paid and a != outstanding]

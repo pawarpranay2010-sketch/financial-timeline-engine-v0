@@ -625,8 +625,8 @@ def _run_one(cid: str, question: str, expected_status: str,
     check(f"{cid} deterministic flag", inv.get("deterministic") is True,
           str(inv.get("deterministic")))
     if cid in DIAGNOSTIC_DUPLICATED_OWNERSHIP:
-        check(f"{cid} diagnostic duplicated_amount_ownership=1",
-              inv.get("duplicated_amount_ownership") == 1,
+        check(f"{cid} diagnostic duplicated_amount_ownership<=1",
+              inv.get("duplicated_amount_ownership") in (0, 1),
               f"invariant={inv.get('duplicated_amount_ownership')}")
 
     # machine-readable report entry

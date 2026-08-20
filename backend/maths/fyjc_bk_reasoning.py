@@ -1169,6 +1169,18 @@ def _party_from_text(text: str) -> Optional[str]:
                 party = m.group(1).strip().rstrip(".;,")
                 if party and not party.lower().endswith(
                         ("a/c", "account", "ltd", "limited")):
+                    # Filter out common non-party nouns that follow 'paid'
+                    # (e.g. 'paid transportation of', 'paid freight for').
+                    # These describe what was paid, not who was paid.
+                    _NON_PARTY_AFTER_PAID = (
+                        "transportation", "freight", "carriage",
+                        "rent", "salary", "salaries", "wages",
+                        "interest", "insurance", "commission",
+                        "electricity", "telephone", "printing",
+                        "stationery", "repairs", "maintenance",
+                    )
+                    if party.lower().split()[0] in _NON_PARTY_AFTER_PAID:
+                        continue
                     party = _normalise_party_token(party)
                     if party:
                         return party
@@ -3174,7 +3186,7 @@ def _split_transactions(question: str) -> List[str]:
         # multi-amount segment the ownership gate cannot resolve.
         prior_has_pay = bool(re.search(r"paid", prior or "", re.I))
         if prior and _is_payment_step(seg) and is_purchase_prior \
-                and " paid " in low_seg \
+                and (" paid " in low_seg or " discount " in low_seg or " payment " in low_seg or " was paid " in low_seg or " was made " in low_seg) \
                 and not prior_has_pay:
             merged[-1] = merged[-1] + "; " + seg
         else:
@@ -5060,6 +5072,7 @@ def _refusal(status: str, why_not: str, next_action: str) -> Dict[str, Any]:
 _PAYMENT_STEP_HINTS = (
     "paid", "received", "immediately", "half", "quarter", "%",
     "discount", "settlement", "cheque", "check", "cash paid",
+    "payment", "was paid", "was made",
 )
 _STRONG_TRANSACTION_VERBS = (
     "purchased", "bought", "sold", "started business",

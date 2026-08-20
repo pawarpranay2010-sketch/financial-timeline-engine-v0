@@ -151,9 +151,9 @@ MATRIX: list = [
     ("CORE.cash_discount_settlement", "Cash discount",
      "Received Rs.9,500 from Ram in full settlement of his account of "
      "Rs.10,000 allowing cash discount of Rs.500.",
-     "transaction", REVIEW_REQUIRED,
-     "production boundary refuses the single-entry split (verified at "
-     "the hardened layer - see PART D cd check)"),
+     "transaction", VERIFIED,
+     "cash discount split now deterministically resolved at "
+     "production boundary"),
     ("CORE.partial_payment", "Partial payments",
      "Received Rs.5,000 from Mohan on account of Rs.10,000 due from him.",
      "transaction", VERIFIED),
@@ -433,8 +433,9 @@ MATRIX: list = [
      VERIFIED),
     ("NORM.cd", "Normalization - 'cd'",
      "Received Rs.9,500 from Ram in full settlement of his account of "
-     "Rs.10,000 allowing cd of Rs.500.", "transaction", REVIEW_REQUIRED,
-     "abbreviation resolves; production boundary refuses the split"),
+     "Rs.10,000 allowing cd of Rs.500.", "transaction", VERIFIED,
+     "abbreviation resolves; cash discount split deterministically "
+     "resolved"),
     ("NORM.10k", "Normalization - '10k'",
      "Sold goods to Ram for 10k on credit.", "transaction", VERIFIED),
     ("NORM.12.5k", "Normalization - '12.5k'",
@@ -880,8 +881,10 @@ def test_d_normalization():
                             ("Ram", "10000")], str(lines(vr)))
     r = orchestrate("Received Rs.9,500 from Ram in full settlement of "
                     "his account of Rs.10,000 allowing cd of Rs.500")
-    check("D.cd production refusal zero lines",
-          r.get("status") == REVIEW_REQUIRED and lines(r) == [],
+    check("D.cd production VERIFIED with correct lines",
+          r.get("status") == VERIFIED
+          and lines(r) == [("Cash", "9500"), ("Discount Allowed", "500"),
+                           ("Ram", "10000")],
           f"status={r.get('status')} lines={lines(r)}")
 
 

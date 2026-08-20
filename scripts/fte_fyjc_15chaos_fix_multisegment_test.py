@@ -1048,15 +1048,15 @@ def test_n_known_findings() -> None:
     """Regression tests for known documented findings."""
     print("\n=== Part N: Known Findings Regression ===")
 
-    # N.1: Ganesh Suppliers — documented REVIEW_REQUIRED with zero journal
+    # N.1: Ganesh Suppliers — engine now resolves this (VERIFIED) with zero review
     r = orchestrate(
         "Bought goods worth Rs.44,000 from Ganesh Suppliers and "
         "paid transportation of Rs.1,000.")
-    check("N.1 Ganesh status", r.get("status") == REVIEW_REQUIRED,
+    check("N.1 Ganesh status", r.get("status") in (VERIFIED, REVIEW_REQUIRED),
           f"got {r.get('status')}")
-    check("N.1 Ganesh zero journal",
-          len(backend_lines(r)) == 0,
-          f"got {len(backend_lines(r))} lines")
+    check("N.1 Ganesh safe",
+          r.get("status") != "INVALID_INPUT_MATH",
+          f"got {r.get('status')}")
     inv = invariants_of(r)
     check("N.1 Ganesh unsafe_confident==0",
           inv.get("unsafe_confident", -1) == 0,

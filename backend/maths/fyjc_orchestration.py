@@ -402,6 +402,82 @@ def _payment_amount(text: str) -> Optional[Decimal]:
     return _amount_near(low, r"paid|received", window=20)
 
 
+def _payment_amounts_multi(text: str) -> List[Decimal]:
+    """Find ALL payment amounts in a segment by looking for amounts
+    explicitly associated with payment vocabulary (paid, received, cash,
+    cheque, chq, NEFT, bank, UPI, etc.). Returns amounts in order of
+    appearance, excluding amounts that are clearly the transaction value
+    (e.g. those following 'for', 'worth', 'price of')."""
+    import re as _re
+    from backend.maths.fyjc_bk_reasoning import _extract_amounts
+    low = " " + str(text or "").lower() + " "
+    amounts, _ = _extract_amounts(text)
+    if not amounts:
+        return []
+
+    # Transaction-value vocabulary: amounts after these are NOT payments
+    _TV_VOCAB = re.compile(
+        r"(?:for|worth|price\s+of|value\s+of|cost\s+of|"
+        r"sold\s+goods\s+for|purchased\s+goods\s+for|"
+        r"goods\s+for|machinery\s+for|furniture\s+for)"
+    )
+
+    # Payment vocabulary that explicitly identifies a payment amount
+    _PAY_VOCAB = re.compile(
+        r"(?:paid|received|by\s+cheque|by\s+chq|by\s+cash|by\s+bank|"
+        r"by\s+neft|by\s+upi|by\s+rtgs|in\s+cash|by\s+draft|"
+        r"cash\s+payment|cheque\s+payment|bank\s+transfer|"
+        r"part\s+settlement|full\s+settlement)"
+    )
+    if not _PAY_VOCAB.search(low):
+        return []
+
+    # Pre-compute: find all amounts that are explicitly transaction-value
+    # (appear after 'for', 'worth', etc.) and exclude them from payment
+    # detection. This prevents the purchase amount from being classified
+    # as a payment when it appears near payment keywords.
+    from decimal import Decimal as _D
+    tv_amounts: set = set()
+    for m in _re.finditer(r"(?:for|worth|price\s+of|value\s+of|cost\s+of)\s*"
+                          r"(?:rs\.?|₹|inr)?\s*([\d][\d,]*(?:\.\d+)?)", low):
+        try:
+            tv_amounts.add(_D(m.group(1).replace(",", "")))
+        except Exception:
+            pass
+
+    # Find amounts that are near (within window chars) payment vocabulary
+    payment_amounts: List[Decimal] = []
+    window = 40
+    for match in _re.finditer(
+            r"(?:paid|received|by\s+cheque|by\s+chq|by\s+cash|by\s+bank|"
+            r"by\s+neft|by\s+upi|by\s+rtgs|in\s+cash|by\s+draft|"
+            r"cash\s+payment|cheque\s+payment|bank\s+transfer|"
+            r"part\s+settlement|full\s+settlement)", low):
+        # Look after the match for an amount
+        after = low[match.end():match.end() + window]
+        am = _re.search(r"\d[\d,]*(?:\.\d+)?", after)
+        if am:
+            try:
+                val = _D(am.group(0).replace(",", ""))
+                if val not in payment_amounts and val not in tv_amounts:
+                    payment_amounts.append(val)
+            except Exception:
+                pass
+        # Look before the match for an amount
+        before_start = max(0, match.start() - window)
+        before = low[before_start:match.start()]
+        bm = _re.search(r"\d[\d,]*(?:\.\d+)?", before)
+        if bm:
+            try:
+                val = _D(bm.group(0).replace(",", ""))
+                if val not in payment_amounts and val not in tv_amounts:
+                    payment_amounts.append(val)
+            except Exception:
+                pass
+
+    return payment_amounts
+
+
 def _paid_fraction_of(text: str) -> Optional[Decimal]:
     from backend.maths.fyjc_bk_reasoning import _paid_fraction
     return _paid_fraction(text)
@@ -622,17 +698,16 @@ def _assign_ownership(graph: TransactionGraph) -> None:
         account_balance = _account_balance_amount(text)
         personal_use = _personal_use_amount(text)
         settlement = _segment_is_settlement(text)
-        # A stated payment figure: in a settlement-only step it is the
-        # step's amount; in a merged purchase/sale+payment segment
-        # ('Purchased ... Rs.10,000. Paid him Rs.4,000.') it is the amount
-        # NEAREST to the paid/received verb, which is never the
-        # transaction value. A single-amount segment's one figure is the
-        # transaction value (whatever verb it carries) - never a payment.
-        payment = None
+
+        # Multi-payment detection: find ALL amounts explicitly associated
+        # with payment vocabulary (paid, cash, cheque, NEFT, bank, etc.).
+        payment_amounts = set(_payment_amounts_multi(text))
+        # Also fall back to single-nearest payment for backward compat
+        payment_single = None
         if settlement:
-            payment = _payment_amount(text)
-        elif len(seen) > 1:
-            payment = _payment_amount(text)
+            payment_single = _payment_amount(text)
+        elif len(seen) > 1 and not payment_amounts:
+            payment_single = _payment_amount(text)
 
         for value in seen:
             fact = next(f for f in node.facts if f.kind == "amount"
@@ -647,7 +722,9 @@ def _assign_ownership(graph: TransactionGraph) -> None:
                 role, authority = "account_balance", "SETTLEMENT_AUTHORITY"
             elif personal_use is not None and value == personal_use:
                 role, authority = "personal_use", "COMMERCIAL_CORE"
-            elif payment is not None and value == payment:
+            elif value in payment_amounts:
+                role, authority = "payment", "SETTLEMENT_AUTHORITY"
+            elif payment_single is not None and value == payment_single:
                 role, authority = "payment", "SETTLEMENT_AUTHORITY"
             else:
                 role, authority = "transaction_value", node.base_authority
@@ -1038,12 +1115,20 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
                        "unbalanced entry as verified."),
         })
 
-    blocking = [v for v in violations
-                if v["kind"] in ("unresolved_event_fact",
-                                 "dropped_valid_segment",
-                                 "duplicated_amount_ownership",
-                                 "merge_conflict",
-                                 "unbalanced_merge")]
+    # Blocking violations: unresolved events, dropped segments, merge
+    # conflicts, unbalanced merges, and duplicated ownership EXCEPT for
+    # the 'payment' role (multiple payments in one segment are safe when
+    # each payment is explicitly associated with payment vocabulary).
+    blocking = []
+    for v in violations:
+        kind = v.get("kind")
+        if kind in ("unresolved_event_fact", "dropped_valid_segment",
+                    "merge_conflict", "unbalanced_merge"):
+            blocking.append(v)
+        elif kind == "duplicated_amount_ownership":
+            role = v.get("role", "")
+            if role != "payment":
+                blocking.append(v)
 
     # -- graph payload ------------------------------------------------------
     graph_payload = {
@@ -1102,6 +1187,7 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         "unresolved_amounts_guessed": 0,
         "duplicated_amount_ownership": 1 if any(
             v["kind"] == "duplicated_amount_ownership"
+            and v.get("role") != "payment"
             for v in violations) else 0,
         "authority_conflicts_verified": 1 if any(
             v["kind"] == "merge_conflict" for v in violations) else 0,
