@@ -3177,17 +3177,27 @@ def _split_transactions(question: str) -> List[str]:
     for seg in frag_merged:
         prior = merged[-1] if merged else None
         prior_pattern = classify_bk_type(prior) if prior else None
+        # Sprint 15I-CAPABILITY-CLOSURE: recognise a purchase even when
+        # classify_bk_type returns None (no explicit cash/credit marker).
+        # 'Purchased goods for ₹50,000' is still a purchase — it just
+        # needs the payment steps merged so the engine can resolve the
+        # cash/credit split deterministically.
         is_purchase_prior = bool(prior_pattern) and \
             "PURCHASE" in prior_pattern["key"]
+        if not is_purchase_prior and prior:
+            _prior_low = (prior or "").lower()
+            is_purchase_prior = bool(re.search(
+                r"\b(?:purchas|bought|acqui)\w*\b", _prior_low))
         low_seg = " " + seg.lower() + " "
-        # Sprint 15I-CHAOS-IMPL: only merge the FIRST payment step into
-        # a purchase.  Subsequent payments stay as independent segments
-        # so multi-payment transactions are not forced into one
-        # multi-amount segment the ownership gate cannot resolve.
-        prior_has_pay = bool(re.search(r"paid", prior or "", re.I))
+        # Sprint 15I-CAPABILITY-CLOSURE: merge ALL payment steps into a
+        # purchase, not just the first one.  Multi-payment transactions
+        # ('Paid ₹40K cash. Paid ₹30K cheque. Balance ₹30K due.') need
+        # all payment steps resolved inside one segment so the engine can
+        # determine the cash/credit split and outstanding liability
+        # deterministically.  The prior_has_pay guard was preventing the
+        # second and subsequent payments from merging.
         if prior and _is_payment_step(seg) and is_purchase_prior \
-                and (" paid " in low_seg or " discount " in low_seg or " payment " in low_seg or " was paid " in low_seg or " was made " in low_seg) \
-                and not prior_has_pay:
+                and (" paid " in low_seg or " discount " in low_seg or " payment " in low_seg or " was paid " in low_seg or " was made " in low_seg):
             merged[-1] = merged[-1] + "; " + seg
         else:
             merged.append(seg)

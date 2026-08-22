@@ -416,8 +416,26 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
         if _pay_meth:
             outstanding = None
     if paid is not None and outstanding is not None and paid != outstanding:
-        candidates = [a for a in amounts
-                      if a != paid and a != outstanding]
+        # Sprint 15I-CAPABILITY-CLOSURE: remove only ONE occurrence of
+        # paid and ONE of outstanding from the amounts list, not ALL
+        # matching values.  In a multi-payment transaction like
+        # 'Paid ₹40,000 cash. Paid ₹30,000 cheque. Balance ₹30,000 due.'
+        # there are TWO ₹30,000 amounts — the cheque payment and the
+        # balance.  Removing all ₹30,000 values would leave only the
+        # transaction value (₹100,000) as a candidate, producing a false
+        # INVALID_INPUT_MATH when the payments actually reconcile:
+        # ₹40,000 + ₹30,000 (cheque) + ₹30,000 (balance) = ₹100,000.
+        remaining = list(amounts)
+        _removed_paid = False
+        _removed_outstanding = False
+        for _i in range(len(remaining)):
+            if not _removed_paid and remaining[_i] == paid:
+                remaining[_i] = None
+                _removed_paid = True
+            elif not _removed_outstanding and remaining[_i] == outstanding:
+                remaining[_i] = None
+                _removed_outstanding = True
+        candidates = [a for a in remaining if a is not None]
         if len(candidates) == 1:
             total = candidates[0]
             components = paid + outstanding
