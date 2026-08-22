@@ -1427,7 +1427,61 @@ def _ensure_15i_css() -> None:
 
 def _compute_projection(question: str) -> Dict[str, Any]:
     """Run the production boundary once and project it into the student
-    UI contract. Deterministic - the UI never reshapes accounting data."""
+    UI contract. Deterministic - the UI never reshapes accounting data.
+
+    Sprint 16: detects multi-transaction problems (multiple sentences /
+    semicolons) and routes them through the stateful problem engine
+    instead of the single-transaction kernel."""
+    import re as _re
+    from backend.maths.fyjc_problem_engine import process_problem
+
+    # Heuristic: a multi-transaction problem has 2+ sentence boundaries
+    # (period+space followed by capital, or semicolons) or contains
+    # opening-balance vocabulary.
+    _multi_tx = bool(
+        _re.search(r"[.;]\s+[A-Z]", question)
+        or _re.search(r"\bbalances?\s+(?:as|on)\b", question, _re.I)
+        or question.count(".") >= 2
+        or question.count(";") >= 1
+    )
+
+    if _multi_tx:
+        result = process_problem(question)
+        # Flatten into a single-transaction-compatible projection for the
+        # existing UI contract.  The first VERIFIED transaction is shown;
+        # REVIEW_REQUIRED / informational transactions are summarized.
+        verified = [t for t in result["transactions"]
+                    if t["status"] == "VERIFIED"]
+        if verified:
+            # Use the last verified transaction as the primary result
+            primary = verified[-1]
+            single_result = {
+                "status": primary["status"],
+                "journal": primary.get("journal"),
+                "why_not": None,
+                "next_action": primary.get("next_action"),
+            }
+        else:
+            # No verified transactions - surface first non-informational
+            non_info = [t for t in result["transactions"]
+                        if t.get("event_type") not in
+                        ("INFORMATIONAL_EVENT", "OPENING_BALANCE")]
+            primary = non_info[0] if non_info else result["transactions"][0]
+            single_result = {
+                "status": primary["status"],
+                "journal": primary.get("journal"),
+                "why_not": primary.get("why_not"),
+                "next_action": primary.get("next_action"),
+            }
+        # Attach problem-level metadata for the UI to render
+        single_result["problem_engine"] = {
+            "problem_status": result["problem_status"],
+            "transactions": result["transactions"],
+            "ledger_snapshot": result["ledger_snapshot"],
+            "deterministic": result["deterministic"],
+        }
+        return project_student_result(single_result, question)
+
     result = fte_orchestrate(question)
     return project_student_result(result, question)
 
