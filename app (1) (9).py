@@ -1,6 +1,6 @@
 # App.py
 """
-Financial Timeline Engine -- Institutional Financial Intelligence Platform
+Platrixa -- Institutional Financial Intelligence Platform
 
 Section map (Phase 12 -- modular organization within a single file):
   1. Config & Session State
@@ -153,7 +153,7 @@ except Exception:
 # why. The names below are kept as module-level aliases so every existing
 # reference further down in this file (PRIMARY_MODEL, CHUNK_SIZE, etc.)
 # continues to work completely unchanged.
-st.set_page_config(page_title="Financial Timeline Engine", layout="wide")
+st.set_page_config(page_title="Platrixa", layout="wide")
 
 PRIMARY_MODEL = SETTINGS.primary_model
 FALLBACK_MODEL = SETTINGS.fallback_model
@@ -1139,7 +1139,7 @@ def generate_excel_export(timeline_events, intelligence_outputs, key_metrics=Non
                 pd.DataFrame(value).to_excel(writer, sheet_name=sheet_name, index=False)
                 wrote_any = True
         if not wrote_any:
-            pd.DataFrame(["Financial Timeline Engine", "No exportable data available."]).to_excel(
+            pd.DataFrame(["Platrixa", "No exportable data available."]).to_excel(
                 writer, sheet_name="Summary", index=False, header=False
             )
     bio.seek(0)
@@ -1657,7 +1657,7 @@ _TERMINAL_CSS = """
 """
 
 _FTE_CSS = """
-/* ============ FT-E entrance / auth / selection / workspace chrome ============ */
+/* ============ Platrixa entrance / auth / selection / workspace chrome ============ */
 .fte-spacer-lg { height: 12vh; }
 .fte-spacer-md { height: 7vh; }
 .fte-spacer-sm { height: 2.4rem; }
@@ -3118,7 +3118,7 @@ def _render_co_pilot(extraction_results, provider_health) -> None:
 
 
 # =============================================================================
-# FT-E account & workspace architecture (frontend-only foundation)
+# Platrixa account & workspace architecture (frontend-only foundation)
 # =============================================================================
 # Minimal line icons (monochrome, stroke-based) for the workspace cards.
 _ICON_STUDENT = (
@@ -3150,7 +3150,7 @@ _ICON_ENTERPRISE = (
 
 
 def _fte_goto(route: str) -> None:
-    """Move between FT-E views (frontend routing state only)."""
+    """Move between Platrixa views (frontend routing state only)."""
     st.session_state["fte_route"] = route
 
 
@@ -3160,7 +3160,7 @@ def _fte_forgot() -> None:
 
 
 def _fte_set_workspace(kind: str) -> None:
-    """Persist the chosen workspace and enter the FT-E shell."""
+    """Persist the chosen workspace and enter the Platrixa shell."""
     st.session_state["fte_workspace"] = kind
     st.session_state["fte_page"] = "Financial Grid"
     st.session_state["fte_route"] = "workspace"
@@ -3203,7 +3203,7 @@ def _render_entrance() -> None:
     with m:
         st.markdown(
             '<div class="fte-stage">'
-            '<div class="fte-brand fte-brand-xl">FT-E</div>'
+            '<div class="fte-brand fte-brand-xl">Platrixa</div>'
             '<div class="fte-moat">(Moat)</div>'
             "</div>",
             unsafe_allow_html=True,
@@ -3222,7 +3222,7 @@ def _render_entrance() -> None:
             )
         st.markdown('<div class="fte-spacer-sm"></div>', unsafe_allow_html=True)
         st.button(
-            "Try FT-E Demo →", key="fte_btn_demo", use_container_width=True,
+            "Try Platrixa Demo →", key="fte_btn_demo", use_container_width=True,
             type="secondary", on_click=_fte_goto_demo,
         )
         st.markdown(
@@ -3325,7 +3325,7 @@ def _render_workspace_select() -> None:
         unsafe_allow_html=True,
     )
     st.button(
-        "Try FT-E Demo →", key="fte_btn_demo_ws", use_container_width=True,
+        "Try Platrixa Demo →", key="fte_btn_demo_ws", use_container_width=True,
         type="secondary", on_click=_fte_goto_demo,
     )
 
@@ -4119,7 +4119,7 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
                 st.download_button(
                     "📥 Download Excel Working Model",
                     data=xlsx_bytes,
-                    file_name="FTE_Student_Working_Model.xlsx",
+                    file_name="Platrixa_Student_Working_Model.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
@@ -4142,10 +4142,10 @@ def _render_agent_stage_content(stage, content, workspace, rows, facts_src, demo
             "Your conclusion",
             key="fte_student_conclusion",
             height=180,
-            placeholder="State your own reasoned judgment here. FT-E never generates a conclusion.",
+            placeholder="State your own reasoned judgment here. Platrixa never generates a conclusion.",
         )
         st.caption(
-            "FT-E is a Financial Analysis & Working Model Assistant — it automates "
+            "Platrixa is a Financial Analysis & Working Model Assistant — it automates "
             "extraction, normalization, calculations, comparison and evidence "
             "collection, but interpretation, judgment and the final conclusion "
             "are yours."
@@ -4721,7 +4721,7 @@ def _render_student_assignment_workspace_legacy(module3_result, demo=False) -> N
             st.download_button(
                 "📥 Export Professional Excel Working Model",
                 data=xlsx_bytes,
-                file_name="FTE_Student_Working_Model.xlsx",
+                file_name="Platrixa_Student_Working_Model.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -4758,17 +4758,17 @@ def _render_student_assignment_workspace_legacy(module3_result, demo=False) -> N
         "Your conclusion",
         key="fte_student_conclusion",
         height=180,
-        placeholder="State your own reasoned judgment here. FT-E never generates a conclusion.",
+        placeholder="State your own reasoned judgment here. Platrixa never generates a conclusion.",
     )
     st.caption(
-        "FT-E is a Financial Analysis & Working Model Assistant — it automates "
+        "Platrixa is a Financial Analysis & Working Model Assistant — it automates "
         "extraction, normalization, calculations, comparison and evidence "
         "collection, but interpretation, judgment and the final conclusion "
         "are yours."
     )
 
 def _render_workspace_shell(uploaded_files) -> None:
-    """FT-E workspace: shared shell with three separate page views."""
+    """Platrixa workspace: shared shell with three separate page views."""
     extraction_results, combined_raw_text, document_summaries = _run_ingestion(uploaded_files)
     module3_result = {}
     try:
@@ -4802,7 +4802,7 @@ def _render_workspace_shell(uploaded_files) -> None:
     h_l, h_r = st.columns([3, 2], gap="medium", vertical_alignment="center")
     with h_l:
         st.markdown(
-            '<div class="fte-ws-header-brand">FT-E<span>Financial Timeline Engine</span></div>',
+            '<div class="fte-ws-header-brand">Platrixa<span>Platrixa</span></div>',
             unsafe_allow_html=True,
         )
     with h_r:
@@ -5914,7 +5914,7 @@ def _render_demo_workspace() -> None:
     h_l, h_r = st.columns([3, 2], gap="medium", vertical_alignment="center")
     with h_l:
         st.markdown(
-            '<div class="fte-ws-header-brand">FT-E<span>Financial Timeline Engine</span></div>',
+            '<div class="fte-ws-header-brand">Platrixa<span>Platrixa</span></div>',
             unsafe_allow_html=True,
         )
     with h_r:
@@ -5976,7 +5976,7 @@ def main():
     _inject_terminal_css()
     _init_terminal_state()
 
-    # FT-E entrance flow (UI only — no real auth/storage in this phase).
+    # Platrixa entrance flow (UI only — no real auth/storage in this phase).
     # Sprint 12.2: a workspace action must never strand the student at the
     # start screen — restore the route when workspace state is still live.
     route = _restore_workspace_route()

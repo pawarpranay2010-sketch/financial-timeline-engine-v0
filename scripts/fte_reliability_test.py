@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 9 - Extraction Reliability & Real-World PDF Stress Testing
 
 Targeted regression corpus proving the pipeline FAILS SAFELY:

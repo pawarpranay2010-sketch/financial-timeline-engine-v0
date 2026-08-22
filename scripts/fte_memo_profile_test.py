@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 8 - Module B: Student + Professional Adaptive Memo Format test suite.
 
 Proves:

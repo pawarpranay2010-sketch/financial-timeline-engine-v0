@@ -1,4 +1,4 @@
-# FT-E Maths Decision Graph — Sprint 12C
+# Platrixa Maths Decision Graph — Sprint 12C
 
 Evidence-Aware Decision Graph & Production Integration.
 
@@ -384,7 +384,7 @@ largest contributor: Equity Multiplier
 - `scripts/fte_maths_core_test.py` (12A) — 202/202
 - `scripts/fte_formula_engine_test.py` / `fte_formula_engine_cpp_test.py`
   — all checks complete (C++ engine untouched)
-- FT-E regression suites — all pass
+- Platrixa regression suites — all pass
 - `git diff --check` — clean
 
 Final state: **12A PASS, 12B PASS, 12C PASS, 0 new regression failures,

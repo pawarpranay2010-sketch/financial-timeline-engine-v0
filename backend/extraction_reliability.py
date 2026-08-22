@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 9 - Extraction Reliability & Real-World PDF Stress Testing
 
 A fail-safe reliability layer over the Sprint 8 layout-aware extraction

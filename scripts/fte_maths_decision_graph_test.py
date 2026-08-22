@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12C - Evidence-Aware Decision Graph & Production Integration
 
 Comprehensive deterministic test suite for the evidence-aware decision

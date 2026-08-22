@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-G - Verified Question Bank (Question Infrastructure)
 backend/maths/fyjc_question_bank.py
 
@@ -18,7 +18,7 @@ Lifecycle (hard gates enforced):
 Invariants
 ----------
 * APPROVED is only reachable through deterministic verification: approve()
-  re-runs the FT-E engine + accounting invariants and refuses if anything
+  re-runs the Platrixa engine + accounting invariants and refuses if anything
   fails. Teacher metadata edits NEVER bypass verification - an edit that
   touches raw_text drops the question back to DRAFT.
 * LLM output is CANDIDATE EVIDENCE ONLY. apply_llm_suggestions() merges
@@ -224,7 +224,7 @@ class QuestionBank:
     def validate_question(self, qid: str) -> str:
         """COMPILED -> VALIDATING / REJECTED / REVIEW_REQUIRED.
 
-        Runs the candidate through the FT-E engine + every accounting
+        Runs the candidate through the Platrixa engine + every accounting
         invariant (verify_question). Also compares a teacher-supplied
         expected journal: disagreement -> REVIEW_REQUIRED.
         """
@@ -249,7 +249,7 @@ class QuestionBank:
                 verification["verdict"] = VERDICT_REVIEW
                 verification["errors"] = list(verification["errors"]) + [
                     "teacher/candidate expected journal disagrees with the "
-                    "FT-E verified journal"]
+                    "Platrixa verified journal"]
                 q["verification"] = verification
                 q["validation_errors"] = verification["errors"]
 

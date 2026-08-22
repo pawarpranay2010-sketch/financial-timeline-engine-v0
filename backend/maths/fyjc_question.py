@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 13 - FYJC Student Maths & Book-Keeping Readiness
 backend/maths/fyjc_question.py
 
@@ -400,7 +400,7 @@ def classify_fyjc_question(question: str) -> Dict[str, Any]:
             "Requested figure is unclear - the question mentions several "
             "financial figures ("
             + ", ".join(known_concept_display(c) or c for c in distinct[:4])
-            + "). FT-E will ask which one to calculate rather than guess.",
+            + "). Platrixa will ask which one to calculate rather than guess.",
             uncertain=True,
         )
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-BILLS - Bills of Exchange Authority
 scripts/fte_fyjc_15bills_bills_authority_test.py
 

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12E - Production Integration, Agentic Evidence Retrieval & Audit Loop
 scripts/fte_maths_production_integration_test.py
 

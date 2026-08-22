@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 14 - FYJC Student End-to-End UI
 backend/fyjc_student_ui.py
 
@@ -10,7 +10,7 @@ deterministic). This module ONLY prepares and renders the student
 journey:
 
     📷 Photo / 📄 PDF / ✍️ Type
-        -> What FT-E understood (editable)
+        -> What Platrixa understood (editable)
         -> Maths | Book-Keeping flow (steps 1-6 / 1-8)
         -> Final answer
         -> Independent verification ("verify your answer")
@@ -37,7 +37,7 @@ Honesty rules implemented here
 ------------------------------
 * No OCR engine is bundled in this deployment. A photo/image is shown to
   the student and clearly labelled as NOT machine-read; the student is
-  guided to type/paste the question. FT-E never pretends it read a photo
+  guided to type/paste the question. Platrixa never pretends it read a photo
   and never guesses text.
 * BLOCKED / REVIEW_REQUIRED / UNSUPPORTED states are rendered with exact
   what / why / next-action copy and concrete actions (enter the missing
@@ -218,16 +218,16 @@ def _file_size(uploaded) -> str:
 
 
 def _render_how_it_works() -> None:
-    """Collapsed, jargon-free explanation of what FT-E does."""
-    with st.expander("How FT-E works"):
+    """Collapsed, jargon-free explanation of what Platrixa does."""
+    with st.expander("How Platrixa works"):
         st.markdown(
-            "- FT-E reads your question and shows what it understood.\n"
+            "- Platrixa reads your question and shows what it understood.\n"
             "- It applies the registered formula (Maths) or the golden "
             "rule (Book-Keeping) step by step.\n"
             "- It shows the final answer and lets you check your own "
             "answer against it.\n"
             "- When a value is missing or the question is ambiguous, "
-            "FT-E asks instead of guessing."
+            "Platrixa asks instead of guessing."
         )
 
 
@@ -247,7 +247,7 @@ def _render_entry(demo: bool, stage: str) -> None:
         key=K_MODE,
         horizontal=True,
         label_visibility="collapsed",
-        help="Choose how you want to give FT-E your question.",
+        help="Choose how you want to give Platrixa your question.",
     )
     mode = st.session_state[K_MODE]
 
@@ -264,7 +264,7 @@ def _render_entry(demo: bool, stage: str) -> None:
             st.image(photo, caption="Your question photo", width=300)
             st.markdown(
                 '<div class="fte-fyjc-note">Photo received. This deployment '
-                'does not bundle an OCR engine, so FT-E will not pretend to '
+                'does not bundle an OCR engine, so Platrixa will not pretend to '
                 'read the photo and will never guess its text. Type the '
                 'question below — the photo stays visible as your source.'
                 '</div>',
@@ -292,7 +292,7 @@ def _render_entry(demo: bool, stage: str) -> None:
             type=["pdf", "docx", "txt"],
             key="fte_fyjc_doc",
             help="Text-based files. Scanned photo-PDFs cannot be read "
-                 "without OCR — FT-E will say so honestly.",
+                 "without OCR — Platrixa will say so honestly.",
         )
         if doc is not None:
             name = getattr(doc, "name", "document")
@@ -318,7 +318,7 @@ def _render_entry(demo: bool, stage: str) -> None:
             else:
                 st.markdown(
                     '<div class="fte-fyjc-why"><b>No readable text found in '
-                    'this file.</b> FT-E does not bundle an OCR engine, so it '
+                    'this file.</b> Platrixa does not bundle an OCR engine, so it '
                     'cannot read scanned or image-only documents — it will '
                     'never guess content.<br/><b>What you can do:</b> type or '
                     'paste the question below, or upload a text-based PDF, '
@@ -387,7 +387,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
     )
 
     st.markdown(
-        '<div class="fte-fyjc-note">What FT-E understood:</div>',
+        '<div class="fte-fyjc-note">What Platrixa understood:</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -440,7 +440,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
     concerns = understanding.get("concerns") or []
     if concerns:
         st.markdown(
-            '<div class="fte-fyjc-why"><b>Almost there — FT-E needs a little '
+            '<div class="fte-fyjc-why"><b>Almost there — Platrixa needs a little '
             'more clarity before it can solve this.</b></div>',
             unsafe_allow_html=True,
         )
@@ -460,7 +460,7 @@ def _render_understanding(flow: Dict[str, Any]) -> None:
             st.rerun()
     if st.session_state.get(K_EDIT):
         corrected = st.text_area(
-            "Correct the question (FT-E will re-interpret it)",
+            "Correct the question (Platrixa will re-interpret it)",
             key="fte_fyjc_question_edit",
             value=effective_question(st.session_state),
             height=120,
@@ -501,7 +501,7 @@ def _render_audit(audit: Dict[str, Any]) -> None:
     with st.expander("Verification details"):
         st.caption(
             "Technical detail for anyone who wants it — not needed to use "
-            "FT-E."
+            "Platrixa."
         )
         rows = [
             ("Authority", audit.get("authority")),
@@ -572,7 +572,7 @@ def _render_maths_flow(flow: Dict[str, Any]) -> None:
     next_action = flow.get("next_action")
     if why_not:
         st.markdown(
-            f'<div class="fte-fyjc-why"><b>Why FT-E could not answer:</b> '
+            f'<div class="fte-fyjc-why"><b>Why Platrixa could not answer:</b> '
             f'{_esc(why_not)}<br/><b>What you can do:</b> '
             f'{_esc(next_action)}</div>',
             unsafe_allow_html=True,
@@ -594,7 +594,7 @@ def _render_blocked_manual_entry(flow: Dict[str, Any]) -> None:
         return
     st.markdown(
         '<div class="fte-fyjc-blocked"><b>One or two values are missing.</b> '
-        'FT-E cannot calculate without them, and it will not guess. You can '
+        'Platrixa cannot calculate without them, and it will not guess. You can '
         'upload the relevant page or enter the verified value manually '
         'below (it will be labelled as student-entered, never as a document '
         'fact).</div>',
@@ -965,7 +965,7 @@ def _render_accounting_flow(flow: Dict[str, Any]) -> None:
     why_not = flow.get("why_not")
     if why_not:
         st.markdown(
-            f'<div class="fte-fyjc-why"><b>Why FT-E could not decide:</b> '
+            f'<div class="fte-fyjc-why"><b>Why Platrixa could not decide:</b> '
             f'{_esc(why_not)}<br/><b>What you can do:</b> '
             f'{_esc(flow.get("next_action"))}</div>',
             unsafe_allow_html=True,
@@ -998,7 +998,7 @@ def _render_maths_verify(flow: Dict[str, Any]) -> None:
         )
         return
     st.markdown(
-        "Enter your own answer (e.g. `20` or `20.00`) and FT-E compares it "
+        "Enter your own answer (e.g. `20` or `20.00`) and Platrixa compares it "
         "to the verified value."
     )
     answer = st.text_input("Your answer", key="fte_fyjc_verify_answer",
@@ -1037,7 +1037,7 @@ def _render_verdict(verdict: Dict[str, Any]) -> None:
         )
         verified = verdict.get("correct_answer") or verdict.get(
             "student_display")
-        st.markdown(f"**FT-E verification:** {_esc(verified)}")
+        st.markdown(f"**Platrixa verification:** {_esc(verified)}")
     elif v == "INCORRECT":
         st.error("Your answer does not match the verified value.")
         st.markdown(
@@ -1099,12 +1099,12 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
     q = effective_question(st.session_state)
     result = st.session_state.get(K_ACCT_VERIFY) or {}
 
-    # Sprint 15I-R: a verified engine answer leads with the FT-E check.
+    # Sprint 15I-R: a verified engine answer leads with the Platrixa check.
     verification = flow.get("verification") or {}
     if flow.get("status") == "VERIFIED" and verification:
         st.markdown(
             f'<div class="fte-fyjc-card">{_chip("VERIFIED", "green")} '
-            f'FT-E verified this entry</div>',
+            f'Platrixa verified this entry</div>',
             unsafe_allow_html=True,
         )
         td = verification.get("total_debit")
@@ -1210,7 +1210,7 @@ def _render_accounting_verify(flow: Dict[str, Any]) -> None:
         if flow.get("verification"):
             v = flow["verification"]
             st.markdown(
-                f"**FT-E's own check:** Debit {v.get('total_debit'):,.2f} = "
+                f"**Platrixa's own check:** Debit {v.get('total_debit'):,.2f} = "
                 f"Credit {v.get('total_credit'):,.2f} — {v.get('verdict')}"
             )
         if not (outcome.get("debit_lines")
@@ -1238,7 +1238,7 @@ def _render_journal_verdict(jv: Dict[str, Any],
             for c in ref.get("credits") or []
         ]
         if ref_lines:
-            st.markdown("**FT-E's journal:** " + " · ".join(ref_lines))
+            st.markdown("**Platrixa's journal:** " + " · ".join(ref_lines))
     elif verdict == "BALANCED":
         st.info(f"{_esc(jv.get('what'))} — {_esc(jv.get('why_not'))}")
     else:
@@ -1265,7 +1265,7 @@ def _render_verdict_entry(v: Dict[str, Any]) -> None:
 
 
 def _render_study_topics() -> None:
-    with st.expander("What FT-E can verify", expanded=False):
+    with st.expander("What Platrixa can verify", expanded=False):
         topics = fyjc_study_topics()
         st.markdown("**Maths — financial calculations:**")
         st.markdown(" · ".join(f"`{m}`" for m in topics["maths"]))
@@ -1273,12 +1273,12 @@ def _render_study_topics() -> None:
         for topic in topics["bookkeeping"]:
             st.markdown(f"- {topic}")
         st.markdown(
-            "**Answer verification:** enter your own answer and FT-E "
+            "**Answer verification:** enter your own answer and Platrixa "
             "tells you whether it matches, with the first mistake if it "
             "does not."
         )
         st.caption(
-            "Anything else is refused deterministically — FT-E never "
+            "Anything else is refused deterministically — Platrixa never "
             "invents a formula or a value."
         )
 
@@ -1294,7 +1294,7 @@ def _render_recoverable_error(error: Dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<div class="fte-fyjc-why"><b>FT-E couldn’t finish reading this '
+        f'<div class="fte-fyjc-why"><b>Platrixa couldn’t finish reading this '
         f'question.</b><br/>{_esc(error.get("message"))}</div>',
         unsafe_allow_html=True,
     )
@@ -1350,7 +1350,7 @@ def _render_refusal(flow: Dict[str, Any]) -> None:
     tone = ("red" if status in ("BLOCKED", INVALID_INPUT_MATH)
             else "amber")
     st.markdown(
-        '<div class="fte-fyjc-title">FT-E couldn’t solve this one</div>',
+        '<div class="fte-fyjc-title">Platrixa couldn’t solve this one</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -1469,7 +1469,7 @@ def _render_landing_input(demo: bool, stage: str) -> None:
                 unsafe_allow_html=True)
     st.markdown(
         '<div class="fte-15i-sub">Type or paste an accounting question. '
-        'FT-E verifies the result deterministically - and when the textbook '
+        'Platrixa verifies the result deterministically - and when the textbook '
         'is unclear, it asks exactly the one thing it needs.</div>',
         unsafe_allow_html=True,
     )
@@ -1538,7 +1538,7 @@ def _render_understanding_view(projection: Dict[str, Any]) -> None:
         rows.append(("Accounts identified", ", ".join(
             understanding["accounts"])))
     if not rows:
-        st.caption("FT-E could not extract structured facts from this "
+        st.caption("Platrixa could not extract structured facts from this "
                    "question.")
         return
     for label, value in rows:
@@ -1898,7 +1898,7 @@ def _render_15i_student_workspace(demo: bool, landing: bool) -> None:
         except Exception:  # defensive: recoverable, never fake
             st.session_state[K_ANALYSIS_ERROR] = {
                 "message": (
-                    "FT-E hit an unexpected problem while reading that "
+                    "Platrixa hit an unexpected problem while reading that "
                     "question. Your question is still saved below - press "
                     "Analyse question to try again."
                 ),

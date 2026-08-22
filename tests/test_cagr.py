@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 CAGR — Regression Test Suite
 
 CAGR = (Ending Value / Beginning Value) ** (1/n) - 1

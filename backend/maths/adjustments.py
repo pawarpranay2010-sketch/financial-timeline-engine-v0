@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12B - Contextual Financial Reasoning Layer
 backend/maths/adjustments.py
 
@@ -105,7 +105,7 @@ _SEVERITY = {
 # Concepts that must never be negative (conservative; documented convention).
 NON_NEGATIVE_CONCEPTS = frozenset({"Revenue", "Total Assets"})
 
-# Recognized accounting concepts (registry concepts + common FT-E metrics).
+# Recognized accounting concepts (registry concepts + common Platrixa metrics).
 KNOWN_CONCEPTS = frozenset({
     # Sprint 12A registry
     "Profit", "Loss", "Gross Profit", "Working Capital", "Asset Turnover",
@@ -117,7 +117,7 @@ KNOWN_CONCEPTS = frozenset({
     # Reconciliation (12B)
     "Retained Earnings Ending", "Retained Earnings Beginning",
     "Dividends Paid", "Net Profit Cash Flow",
-    # Common FT-E metrics
+    # Common Platrixa metrics
     "ROE", "ROA", "Operating Margin", "Current Ratio", "Debt to Equity",
     "Revenue Growth", "EPS Growth", "CAGR", "EPS", "Net Income",
     "Operating Profit", "Interest", "Tax", "Depreciation", "Amortization",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15 - Stage 1: FYJC Real-Question Internal Benchmark Gate
 scripts/fte_fyjc_pilot_test.py
 

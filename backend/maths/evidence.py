@@ -1,12 +1,12 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12C - Evidence-Aware Decision Graph & Production Integration
 backend/maths/evidence.py
 
 Evidence-aware graph: every analytical result can be traced recursively to
 its source leaves (document / page / evidence / provider). This module owns:
 
-* the STRICT source hierarchy (Sprint 6.5 FT-E external-evidence tiers):
+* the STRICT source hierarchy (Sprint 6.5 Platrixa external-evidence tiers):
     Tier 1  uploaded primary document            (DOCUMENT)
     Tier 2  user-uploaded parent/appendix docs   (APPENDIX)
     Tier 3  approved regulatory/structured APIs  (REGULATORY_API,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-VY - Linguistic Normalization & Contradiction Safety Gate
 scripts/fte_fyjc_15vy_linguistic_contradiction_safety_test.py
 
@@ -242,7 +242,7 @@ def test_c_contradictions():
           f"{r.get('status')} lines={nlines(r)}")
 
     # a partition that exactly covers the total is NOT a contradiction -
-    # it is REVIEW_REQUIRED with guidance (FT-E never merges the split)
+    # it is REVIEW_REQUIRED with guidance (Platrixa never merges the split)
     r = vy_harden("Sold goods for Rs.10,000. Buyer paid Rs.6,000 "
                   "immediately and Rs.4,000 remains outstanding.")
     check("C.4 valid partition not INVALID (REVIEW_REQUIRED)",

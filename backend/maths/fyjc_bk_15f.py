@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15F - FYJC Book-Keeping Ch.1-3 Reusable Pattern System
 backend/maths/fyjc_bk_15f.py
 
@@ -985,7 +985,7 @@ BK_PATTERN_LIBRARY: List[Dict[str, Any]] = [
     {
         "pattern_id": "REFUSAL::REVIEW_REQUIRED",
         "description": "The wording is ambiguous (cash vs credit, mode, "
-                       "discount context) - FT-E never guesses",
+                       "discount context) - Platrixa never guesses",
         "example_category": "Refusals",
         "required_inputs": ["none - refuses"],
         "account_structure": {"debit": [], "credit": []},

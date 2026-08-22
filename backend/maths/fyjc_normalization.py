@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-VY - Linguistic Normalization & Contradiction Safety Hardening
 backend/maths/fyjc_normalization.py
 
@@ -240,7 +240,7 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
             continue
         seen.add(tok)
         concerns.append(
-            f"'{tok}' looks like an abbreviation whose meaning FT-E cannot "
+            f"'{tok}' looks like an abbreviation whose meaning Platrixa cannot "
             "establish deterministically in the FYJC accounting context. "
             "It never guesses - replace it with the full word.")
 
@@ -271,7 +271,7 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
         seen.add(base)
         concerns.append(
             f"'{tok}' looks like a single-letter abbreviation or initial "
-            "whose meaning (for example a party identity) FT-E cannot "
+            "whose meaning (for example a party identity) Platrixa cannot "
             "establish safely. It never guesses - type the full name or "
             "word.")
 
@@ -429,7 +429,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                      f"amount (Rs.{_fmt_amt(outstanding)}) equals "
                      f"Rs.{_fmt_amt(components)}, which contradicts the "
                      f"stated transaction value of "
-                     f"Rs.{_fmt_amt(total)}. FT-E never journals a "
+                     f"Rs.{_fmt_amt(total)}. Platrixa never journals a "
                      "mathematically contradictory transaction."),
                     "Correct the stated amounts so the payment and "
                     "outstanding components reconcile with the transaction "
@@ -439,7 +439,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                 (f"The stated payment (Rs.{_fmt_amt(paid)}) and "
                  f"outstanding balance (Rs.{_fmt_amt(outstanding)}) "
                  f"exactly cover the stated transaction value "
-                 f"(Rs.{_fmt_amt(total)}), but FT-E does not merge a "
+                 f"(Rs.{_fmt_amt(total)}), but Platrixa does not merge a "
                  "stated digit payment/outstanding split into one journal "
                  "yet. Enter the two transactions separately."),
                 "Enter the transaction in two steps, e.g. 'Sold goods to "
@@ -476,7 +476,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                          f"discount (Rs.{_fmt_amt(trade_amount)}) "
                          f"contradicts the stated rate ({rate}% of "
                          f"Rs.{_fmt_amt(base)} = "
-                         f"Rs.{_fmt_amt(expected)}). FT-E never "
+                         f"Rs.{_fmt_amt(expected)}). Platrixa never "
                          "journals a contradictory discount."),
                         "Correct the discount amount or the rate so "
                         "they reconcile.")
@@ -520,7 +520,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                      f"({labels} Rs.{_fmt_amt(gst_components)}) "
                      f"contradict the stated GST rate "
                      f"({combined}% of the Rs.{_fmt_amt(base)} taxable "
-                     f"base = Rs.{_fmt_amt(expected)}). FT-E never "
+                     f"base = Rs.{_fmt_amt(expected)}). Platrixa never "
                      "journals inconsistent tax components."),
                     "Correct the GST amounts or the rate so they "
                     "reconcile.")
@@ -537,7 +537,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                 (f"INVALID_INPUT_MATH: the amount received in full "
                  f"settlement (Rs.{_fmt_amt(received)}) exceeds the stated "
                  f"account balance it settles (Rs.{_fmt_amt(account)}). A "
-                 "full settlement can never exceed the account - FT-E "
+                 "full settlement can never exceed the account - Platrixa "
                  "never invents a negative discount."),
                 "Correct the received amount or the account balance.")
 
@@ -562,7 +562,7 @@ def math_contradiction(text: str) -> Optional[Dict[str, Any]]:
                      f"stated cash discount (Rs.{_fmt_amt(cash_disc)}) "
                      f"equals Rs.{_fmt_amt(received + cash_disc)}, which "
                      f"does not settle the stated account of "
-                     f"Rs.{_fmt_amt(account)}. FT-E never journals an "
+                     f"Rs.{_fmt_amt(account)}. Platrixa never journals an "
                      "inconsistent discount."),
                     "Correct the received amount, the discount, or the "
                     "account balance so they reconcile.")
@@ -618,7 +618,7 @@ def vy_harden(question: str, amount: Any = None) -> Dict[str, Any]:
             return _refusal(
                 REVIEW_REQUIRED,
                 ("The resolved journal does not balance (debit total "
-                 "differs from credit total). FT-E never reports an "
+                 "differs from credit total). Platrixa never reports an "
                  "unbalanced entry as verified."),
                 "Re-check the stated amounts and re-type the transaction.")
 

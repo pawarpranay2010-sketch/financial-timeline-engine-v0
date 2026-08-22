@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-CHAOS-RESOLVE — Complex Transaction Resolution
 scripts/fte_fyjc_15chaos_resolve_complex_transaction_test.py
 
-Permanent regression gate proving FT-E correctly handles complex
+Permanent regression gate proving Platrixa correctly handles complex
 multi-segment transactions through the real production boundary:
 
   Student input → normalize_fyjc_text() → orchestrate()

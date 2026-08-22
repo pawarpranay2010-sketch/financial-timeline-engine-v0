@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15G - C++ Authority Performance Benchmark (before/after)
 scripts/fte_fyjc_15g_cpp_benchmark.py
 

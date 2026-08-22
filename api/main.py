@@ -37,10 +37,10 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Financial Timeline Engine API",
+        title="Platrixa API",
         version=__version__,
         description=(
-            "Standalone web backend for the Financial Timeline Engine — "
+            "Standalone web backend for the Platrixa — "
             "Agentic RAG intelligence, extraction 2.0, and market data "
             "served to the browser, backed by PostgreSQL."
         ),

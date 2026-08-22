@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-P - Study/Verify Verification Hardening + Natural-Language
 Party Resolution
 scripts/fte_fyjc_15p_party_verification_test.py

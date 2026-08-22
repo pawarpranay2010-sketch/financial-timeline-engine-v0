@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12F - C++ Mathematical Authority (Production Gate)
 backend/maths/authority.py
 
@@ -223,7 +223,7 @@ def production_analyze(request: str,
             "status_label": STATUS_LABELS[BLOCKED],
             "why_not": ENGINE_UNAVAILABLE_REASON,
             "next_action": (
-                "Deploy the compiled C++ formula engine. FT-E never "
+                "Deploy the compiled C++ formula engine. Platrixa never "
                 "calculates financial results in Python."
             ),
         }

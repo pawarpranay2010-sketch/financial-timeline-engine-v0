@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15D - FYJC Formula/Rule Derivation & Textbook Coverage Gate
 scripts/fte_fyjc_15d_test.py
 

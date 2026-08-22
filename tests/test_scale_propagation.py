@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Fix #2 - Scale Propagation - Test Suite
 
 Proves scale metadata survives end-to-end:

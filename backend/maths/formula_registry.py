@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Deterministic Maths & Financial Reasoning Engine
 backend/maths/formula_registry.py
 

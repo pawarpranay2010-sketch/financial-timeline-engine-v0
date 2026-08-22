@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-M - Verified Automatic Question Generation
 backend/maths/fyjc_question_generator.py
 
@@ -13,13 +13,13 @@ Authority chain (unchanged; this module adds NO accounting rules):
         -> CANDIDATE GENERATOR            (untrusted candidate producer)
         -> PARAMETER VALIDATION           (deterministic; invalid -> REJECTED)
         -> CONTENT COMPILER / BANK        (15I-G lifecycle, reused unchanged)
-        -> FT-E DETERMINISTIC ENGINE      (verify_question = sole authority)
+        -> Platrixa DETERMINISTIC ENGINE      (verify_question = sole authority)
         -> QUALITY / SAFETY GATES
         -> DUPLICATE / VARIANT ANALYSIS
         -> APPROVED / REVIEW_REQUIRED / REJECTED / DUPLICATE
 
 The generator NEVER:
-  * determines the canonical journal (FT-E does; a generator/LLM-supplied
+  * determines the canonical journal (Platrixa does; a generator/LLM-supplied
     expected journal is CANDIDATE EVIDENCE only - disagreement forces
     REVIEW_REQUIRED, never a silent override);
   * marks a question APPROVED directly (only QuestionBank.approve_question
@@ -196,7 +196,7 @@ class GeneratorParameterError(ValueError):
 
 
 class UnsupportedGenerationRequest(ValueError):
-    """The request asks for content FT-E cannot deterministically verify.
+    """The request asks for content Platrixa cannot deterministically verify.
     Refused honestly at request level."""
 
 
@@ -589,7 +589,7 @@ def expected_journal_for(family_key: str,
     """The template's deterministic expected journal from its parameters.
 
     This is CANDIDATE EVIDENCE passed to the bank's teacher-expected slot.
-    The bank compares it against the FT-E canonical journal at validation:
+    The bank compares it against the Platrixa canonical journal at validation:
     disagreement forces REVIEW_REQUIRED - the engine result always wins.
     """
     a = _num(params["amount"])
@@ -755,7 +755,7 @@ def _select_families(request: GenerationRequest) -> List[Dict[str, Any]]:
         if wanted not in _FAMILY_BY_KEY:
             raise UnsupportedGenerationRequest(
                 f"transaction_type {request.transaction_type!r} is not a "
-                "supported generation family (FT-E cannot deterministically "
+                "supported generation family (Platrixa cannot deterministically "
                 "verify it)")
         families = [_FAMILY_BY_KEY[wanted]]
     else:
@@ -1007,7 +1007,7 @@ def generate_llm_candidates(request: GenerationRequest,
       expected_journal (compact journal dict - candidate evidence only).
 
     The adapter is UNTRUSTED: every candidate still flows through the
-    Content Compiler + FT-E verification; any expected journal that
+    Content Compiler + Platrixa verification; any expected journal that
     disagrees with the engine forces REVIEW_REQUIRED. No API key is
     required - llm_fn is injected by the caller.
     """
@@ -1216,7 +1216,7 @@ def generate_batch(
                 "verification_fingerprint": None})
             continue
 
-        # -- FT-E verification (sole authority) ---------------------------
+        # -- Platrixa verification (sole authority) ---------------------------
         verification = verify_question(raw)
         engine_verdict = verification.get("verdict")
         if engine_verdict == VERDICT_FAIL:

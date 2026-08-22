@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - Confidence Scorer
 
 Explicit, never-fabricated confidence scores based on the extraction

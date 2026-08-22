@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 AI Financial Assistant (interactive chatbot) — Regression Tests
 
 Verifies the conversational layer built on top of the frozen

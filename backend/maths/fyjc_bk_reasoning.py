@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15B - FYJC Book-Keeping Question Understanding & Reasoning Hardening
 backend/maths/fyjc_bk_reasoning.py
 
@@ -23,7 +23,7 @@ produces a correct, student-readable solution:
       -> C++ mathematical verification         (registered metrics only)
       -> refusal boundaries                    (BLOCKED / REVIEW_REQUIRED /
                                                 NOT_SUPPORTED)
-      -> student-facing "What FT-E understood"
+      -> student-facing "What Platrixa understood"
 
 Architectural rules (unchanged from Sprint 12F/13/14/15)
 ---------------------------------------------------------
@@ -42,7 +42,7 @@ Architectural rules (unchanged from Sprint 12F/13/14/15)
   carries provenance (question-sourced or a pipeline step).
 * No invented accounts. No invented amounts. No silent substitution.
   Ambiguous wording -> REVIEW_REQUIRED; missing essential info -> BLOCKED;
-  out-of-boundary topics -> NOT_SUPPORTED. FT-E never guesses a treatment.
+  out-of-boundary topics -> NOT_SUPPORTED. Platrixa never guesses a treatment.
 
 Pure module: no Streamlit, no AI, no network. Deterministic.
 """
@@ -1104,7 +1104,7 @@ def _party_from_text(text: str) -> Optional[str]:
     surrounding structure clearly identifies the token as the party
     ('from rahul', 'received ... from amit', 'paid ... to mehta',
     'sold goods to kavita'); the token is gated against ordinary words so
-    FT-E never invents a party from an arbitrary lowercase word.
+    Platrixa never invents a party from an arbitrary lowercase word.
     """
     if not text:
         return None
@@ -1320,7 +1320,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # payment, a 'Paid <Party>' tail, or a subjectless passive tail) is
     # NEVER silently folded into the first transaction as a partial
     # payment - the previous transaction's state must not bleed into the
-    # next one. FT-E refuses the compound so the student enters the two
+    # next one. Platrixa refuses the compound so the student enters the two
     # transactions separately (deterministic; never an invented journal,
     # never a silent combination). The head need NOT be a purchase: the
     # multi-transaction fallback path also folds a failed payment step
@@ -1393,9 +1393,9 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "label": "Two separate transactions entered together",
                 "refuse": True, "debit": [], "credit": [],
                 "why": ("The description joins two transactions that "
-                        "FT-E will not silently combine: the second "
+                        "Platrixa will not silently combine: the second "
                         "one carries its own expense/party identity. "
-                        "FT-E never folds it into the first transaction "
+                        "Platrixa never folds it into the first transaction "
                         "as a partial payment - enter the two "
                         "transactions separately."),
             }
@@ -1409,7 +1409,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "refuse": True, "debit": [], "credit": [],
             "why": ("Placing an order is not a transaction: no journal "
                     "entry is recorded until the goods are actually "
-                    "received or supplied. FT-E does not journal an "
+                    "received or supplied. Platrixa does not journal an "
                     "order."),
         }
     # fixed-asset rules first (Sprint 15B exact-account guarantee)
@@ -1437,7 +1437,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                     "label": "Ambiguous capital-asset introduction",
                     "refuse": True, "debit": [], "credit": [],
                     "why": ("The description names more than one asset for "
-                            "capital. FT-E never guesses the split."),
+                            "capital. Platrixa never guesses the split."),
                 }
             return {
                 "key": "CAPITAL_ASSET_INTRODUCED",
@@ -1467,7 +1467,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "label": "Ambiguous installation charge",
                 "refuse": True, "debit": [], "credit": [],
                 "why": ("The installation charge names more than one asset "
-                        "to capitalise into. FT-E never guesses the split."),
+                        "to capitalise into. Platrixa never guesses the split."),
             }
     # goods-return wording ('returned ... to <party>' = purchase return;
     # '<party> returned goods' = sales return) - structural, registry-free.
@@ -1496,7 +1496,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # Cr at the stated value) and cash donations (Donation A/c Dr / Cash
     # A/c Cr). A donation carrying a stated PROFIT element is refused -
     # the treatment of the profit portion is not deterministically
-    # established, so FT-E never invents it.
+    # established, so Platrixa never invents it.
     if re.search(r"\bdonat", low):
         if re.search(
                 r"\b(?:including|with|at|less)\s+(?:a\s+)?profit\b"
@@ -1508,7 +1508,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "why": ("The donation carries a stated profit element on "
                         "the goods. The treatment of that profit portion "
                         "is not deterministically established in the "
-                        "verified FYJC surface - FT-E never invents it. "
+                        "verified FYJC surface - Platrixa never invents it. "
                         "State the cost of the goods donated."),
             }
         if "goods" in low:
@@ -1544,7 +1544,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                      or full_immediate_payment or payment_by_cheque)
     has_credit_mode = ("credit" in low or "on account" in low)
     # Contradictory 'for cash ... on credit' wording (no payment step that
-    # explains the cash side) is REVIEW_REQUIRED - FT-E never guesses the
+    # explains the cash side) is REVIEW_REQUIRED - Platrixa never guesses the
     # settlement mode (Sprint 15H ambiguity attacks).
     if _contradictory_cash_credit(low):
         return {
@@ -1552,7 +1552,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "label": "Cash and credit mode both stated",
             "refuse": True, "debit": [], "credit": [],
             "why": ("The description states both a cash mode and a credit "
-                    "mode with no payment step to reconcile them. FT-E "
+                    "mode with no payment step to reconcile them. Platrixa "
                     "never guesses which settlement applies."),
         }
     goods_purchase_words = (
@@ -1574,7 +1574,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # purchase verb appear, the wording is only a sale when the purchase
     # phrase is provenance INSIDE the sale clause ('Sold goods
     # [purchased from X] to Y'); otherwise the direction is genuinely
-    # ambiguous and FT-E refuses (never guesses).
+    # ambiguous and Platrixa refuses (never guesses).
     sale_verb = _sale_direction_in(low)
     purchase_verb = _purchase_direction_in(low)
     direction = None
@@ -1595,7 +1595,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "label": "Purchase and sale wording both present",
                 "refuse": True, "debit": [], "credit": [],
                 "why": ("The description contains BOTH purchase and sale "
-                        "wording and FT-E cannot deterministically decide "
+                        "wording and Platrixa cannot deterministically decide "
                         "which direction the goods moved. It never guesses "
                         "a direction - split it into two transactions."),
             }
@@ -1813,7 +1813,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
         }
     # A CHEQUE deposited into the bank is never cash: the counterparty is
     # the drawer of the cheque. 'Cheque deposited into bank' without a
-    # named drawer is REVIEW_REQUIRED - FT-E never turns a cheque into a
+    # named drawer is REVIEW_REQUIRED - Platrixa never turns a cheque into a
     # cash deposit (Sprint 15F: 0 silent substitutions).
     if "cheque" in low and "bank" in low and any(k in low for k in
                                                   ("deposited", "deposit")):
@@ -1830,7 +1830,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             "refuse": True, "debit": [], "credit": [],
             "why": ("The cheque was deposited into the bank but the drawer "
                     "(the person from whom the cheque was received) is not "
-                    "named. FT-E never treats a cheque as cash."),
+                    "named. Platrixa never treats a cheque as cash."),
         }
     # A CHEQUE received is a bank transaction: 'Cheque received from Mohan'
     # and 'Received a cheque from Mohan' are the SAME CHEQUE_RECEIVED
@@ -1900,7 +1900,7 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # for shop rent' / 'Paid interest for loan by cheque' - the amount
     # often sits between 'paid' and 'for', so the contiguous registry
     # phrases cannot match. The REGISTERED expense word on either side
-    # of 'for' carries the account; FT-E never promotes an ordinary word
+    # of 'for' carries the account; Platrixa never promotes an ordinary word
     # into a party. A possessive-pronoun bill ('paid his mobile bill')
     # marks a personal bill and is never silently booked as a business
     # expense.
@@ -1973,7 +1973,7 @@ def _asset_pattern(text: str, assets: List[str],
             "refuse": True,
             "debit": [], "credit": [],
             "why": (f"The description names more than one fixed asset "
-                    f"({', '.join(assets)}). FT-E never guesses the split."),
+                    f"({', '.join(assets)}). Platrixa never guesses the split."),
         }
     asset = assets[0]
     low = " " + text.lower() + " "
@@ -2460,7 +2460,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     concerns: List[str] = []
     if ambiguous:
         concerns.append("An amount could not be read cleanly (OCR-style "
-                        "uncertainty). FT-E never silently corrects it.")
+                        "uncertainty). Platrixa never silently corrects it.")
 
     # -- Total / List price ----------------------------------------------
     if not amounts:
@@ -2503,7 +2503,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         if profit_rate >= Decimal(100):
             concerns.append(
                 "The stated profit on selling price is 100% or more - "
-                "the selling price cannot be derived. FT-E never "
+                "the selling price cannot be derived. Platrixa never "
                 "guesses it.")
         elif "costing" in low or "cost price" in low:
             list_price = (list_price * Decimal(100)
@@ -2521,16 +2521,16 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         else:
             concerns.append(
                 "Profit on selling price is stated but the COST figure "
-                "is not identifiable. FT-E never guesses the base.")
+                "is not identifiable. Platrixa never guesses the base.")
     elif profit_rate is not None and profit_kind in ("on_cost", "on_selling") \
             and not _sale_dir_text:
         concerns.append(
-            "Profit wording appears outside a sale - FT-E never guesses "
+            "Profit wording appears outside a sale - Platrixa never guesses "
             "the convention.")
     elif profit_rate is None and profit_kind == "ambiguous":
         concerns.append(
             "Profit is mentioned but its percentage or convention cannot "
-            "be read deterministically. FT-E never silently drops it.")
+            "be read deterministically. Platrixa never silently drops it.")
 
     # -- Trade discount ---------------------------------------------------
     # A '<n>%' token whose surrounding text says 'trade' (or says
@@ -2633,7 +2633,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             "cash_paid": None, "explicit_discount": None,
             "concerns": concerns,
             "why_not": ("The stated trade discount is impossible (it is not "
-                        "positive and smaller than the list price). FT-E "
+                        "positive and smaller than the list price). Platrixa "
                         "never records it."),
             "next_action": "Re-check the discount amount or rate.",
         }
@@ -2745,7 +2745,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
                     low)):
             concerns.append(
                 "A discount is mentioned but its amount cannot be read "
-                "deterministically. FT-E never silently drops it.")
+                "deterministically. Platrixa never silently drops it.")
 
     # -- Cash discount (paid portion only) --------------------------------
     cash_discount_rate: Optional[Decimal] = None
@@ -2779,7 +2779,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             # a new cash amount, so it refuses (Sprint 15I-L).
             concerns.append(
                 "A cash discount rate is stated but the amount due is not "
-                "given. FT-E never applies a discount rate to the "
+                "given. Platrixa never applies a discount rate to the "
                 "settlement figure itself.")
         elif paid_stated and not paid_based_rate:
             # the stated cash/paid figure is the NET settlement; the
@@ -2811,7 +2811,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             else:
                 concerns.append(
                     "The stated cash figure does not reconcile with the "
-                    "stated discount rate on the amount due. FT-E never "
+                    "stated discount rate on the amount due. Platrixa never "
                     "applies the rate to the cash figure itself.")
         else:
             # a payment DERIVED from the question ('paid half
@@ -2851,7 +2851,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         if paid_amount + cash_discount_amt > net_value:
             concerns.append(
                 "The cash amount and the cash discount together exceed the "
-                "transaction value. FT-E never records them.")
+                "transaction value. Platrixa never records them.")
         else:
             cash_discount_amount = cash_discount_amt
             cash_paid = paid_amount
@@ -2874,7 +2874,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     if cash_discount_rate is not None and paid_amount is None:
         concerns.append(
             "A cash discount is stated but no payment amount is given to "
-            "apply it to. FT-E never applies a discount without a "
+            "apply it to. Platrixa never applies a discount without a "
             "settlement step.")
 
     # Sprint 15I-UZ (central invariant): every stated RATE/percent must
@@ -2901,7 +2901,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
         if rate not in consumed_rates:
             concerns.append(
                 f"A stated rate ({_label.strip() or rate}%) could not be "
-                "assigned a deterministic accounting role. FT-E never "
+                "assigned a deterministic accounting role. Platrixa never "
                 "silently ignores it.")
     status = VERIFIED
     why_not = None
@@ -2940,7 +2940,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
     # the question must be consumed by a DETERMINISTIC role (list price,
     # an explicit trade/cash discount amount, a stated payment, a
     # full-settlement pair, or a started-business asset component). A
-    # stated amount that no role consumes is UNRESOLVED - FT-E never
+    # stated amount that no role consumes is UNRESOLVED - Platrixa never
     # picks one amount over another by position ('first amount wins' is
     # forbidden), so the transaction is REVIEW_REQUIRED instead of a
     # confident journal built on the first figure.
@@ -3015,7 +3015,7 @@ def resolve_transaction_amounts(question: str) -> Dict[str, Any]:
             plural = "s" if len(unresolved) > 1 else ""
             concerns.append(
                 "Several amounts are present (" + all_figures + ") but "
-                "FT-E cannot assign every one a deterministic role ("
+                "Platrixa cannot assign every one a deterministic role ("
                 + un_figures + " remain" + plural + " unexplained). It "
                 "never chooses one amount over another - clarify which "
                 "figure is the transaction amount.")
@@ -3061,7 +3061,7 @@ _AMBIGUOUS_HINTS = (
     # parallel to 'Paid Rs.5,000.' - never NOT_SUPPORTED (Sprint 15F)
     "received rs.", "received cash of rs.",
     # a bare goods transaction without a cash/credit word is ambiguous -
-    # FT-E never assumes one.
+    # Platrixa never assumes one.
     "purchased goods", "bought goods", "goods purchased",
     "goods bought", "sold goods", "goods sold",
     "purchased stock", "sold stock",
@@ -3486,7 +3486,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     # Sprint 15I-K: the GST surface is an EXPLICIT allowlist - only the
     # goods purchase/sale and expense patterns. Goods RETURNS and
     # FIXED-ASSET purchases/sales carry their own tax treatment in
-    # practice; FT-E never guesses it (rule 8 -> NOT_SUPPORTED).
+    # practice; Platrixa never guesses it (rule 8 -> NOT_SUPPORTED).
     if key in ("PURCHASE_GOODS_CASH", "PURCHASE_GOODS_CREDIT"):
         is_sale = False
     elif key in ("SALE_GOODS_CASH", "SALE_GOODS_CREDIT"):
@@ -3498,13 +3498,13 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         # verified GST surface (capital introduction, drawings, loans,
         # returns, fixed assets, discount settlements, ...) is
         # NOT_SUPPORTED - no amount of re-stating within the GST domain
-        # can make it resolvable, and FT-E never guesses a tax treatment
+        # can make it resolvable, and Platrixa never guesses a tax treatment
         # for a transaction the syllabus does not tax.
         return _gst_refusal(
             NOT_SUPPORTED,
             "GST is only supported on goods purchases, goods sales and "
             "expenses in the verified FYJC surface. This transaction "
-            "type is not one of them, so FT-E does not guess its GST "
+            "type is not one of them, so Platrixa does not guess its GST "
             "treatment.",
             "Use a supported transaction (purchase, sale, expense) with "
             "an explicit GST rate/components.",
@@ -3520,11 +3520,11 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     # (cheque for X%, half paid, issued a cheque in his favour, ...)
     # must not post the full consideration to the party/cash - splitting
     # a GST journal across cash/party is outside the verified surface,
-    # so FT-E refuses instead of silently dropping the payment step.
+    # so Platrixa refuses instead of silently dropping the payment step.
     if _gst_partial_payment(text):
         return _refuse(
             "The GST transaction also carries a partial payment step "
-            "(cheque or payment fraction). FT-E does not split a GST "
+            "(cheque or payment fraction). Platrixa does not split a GST "
             "journal across cash/party in the verified surface - enter "
             "the GST purchase/sale and the payment as separate steps.",
             "Enter the GST transaction, then the payment separately.")
@@ -3534,13 +3534,13 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     # value is the list price LESS the trade discount, and GST is computed
     # on that net value (trade discount is never a separate journal line).
     # A CASH discount / settlement discount (or a bare 'discount') is a
-    # settlement fact, not an invoice fact - FT-E never folds it into a GST
+    # settlement fact, not an invoice fact - Platrixa never folds it into a GST
     # journal (sprint rule 10) and refuses instead of guessing.
     _gst_td = _gst_trade_discount(text)
     if _gst_td is None and "discount" in low:
         return _refuse(
             "A transaction combining GST with a cash/settlement discount is "
-            "outside the verified GST surface. FT-E never applies both "
+            "outside the verified GST surface. Platrixa never applies both "
             "treatments on its own.",
             "Enter the GST transaction and the discount settlement as "
             "separate steps.")
@@ -3550,14 +3550,14 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if "IGST" in comps and (comps & {"CGST", "SGST"}):
         return _refuse(
             "The question names both IGST and CGST/SGST for the same "
-            "transaction. FT-E never guesses which tax treatment applies.",
+            "transaction. Platrixa never guesses which tax treatment applies.",
             "State one treatment: either CGST + SGST (intra-state) or "
             "IGST (inter-state).")
     if ("CGST" in comps) != ("SGST" in comps):
         present = "CGST" if "CGST" in comps else "SGST"
         missing = "SGST" if present == "CGST" else "CGST"
         return _refuse(
-            f"{present} is named without {missing}. FT-E never invents the "
+            f"{present} is named without {missing}. Platrixa never invents the "
             "missing component.",
             f"State both components (including {missing}) or use IGST.")
     if "IGST" in comps:
@@ -3568,7 +3568,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         if facts["intra_state"] and facts["inter_state"]:
             return _refuse(
                 "The question marks the transaction as both intra-state "
-                "and inter-state. FT-E never guesses which applies.",
+                "and inter-state. Platrixa never guesses which applies.",
                 "State one: intra-state (CGST + SGST) or inter-state (IGST).")
         if facts["intra_state"]:
             scheme = "CGST_SGST"
@@ -3578,20 +3578,20 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             return _refuse(
                 "GST is mentioned with a rate but the question does not "
                 "say whether it is intra-state (CGST + SGST) or "
-                "inter-state (IGST). FT-E never picks one.",
+                "inter-state (IGST). Platrixa never picks one.",
                 "Name the components ('CGST and SGST') or state the "
                 "intra/inter-state status.")
 
     if scheme == "CGST_SGST" and facts["inter_state"]:
         return _refuse(
             "CGST + SGST (intra-state) is contradicted by an inter-state "
-            "marker. FT-E never guesses which treatment applies.",
+            "marker. Platrixa never guesses which treatment applies.",
             "State one treatment: CGST + SGST (intra-state) or IGST "
             "(inter-state).")
     if scheme == "IGST" and facts["intra_state"]:
         return _refuse(
             "IGST (inter-state) is contradicted by an intra-state marker. "
-            "FT-E never guesses which treatment applies.",
+            "Platrixa never guesses which treatment applies.",
             "State one treatment: CGST + SGST (intra-state) or IGST "
             "(inter-state).")
 
@@ -3600,7 +3600,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if len(side) > 1:
         return _refuse(
             "The question names both input and output GST for the same "
-            "transaction. FT-E never guesses which applies.",
+            "transaction. Platrixa never guesses which applies.",
             "State the tax side for this transaction.")
     expected_side = "output" if is_sale else "input"
     if side and expected_side not in side:
@@ -3609,7 +3609,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             f"{'input' if 'input' in side else 'output'} GST on a "
             f"{'sale' if is_sale else 'purchase/expense'} whose verified "
             f"tax side is "
-            f"{'output' if expected_side == 'output' else 'input'}. FT-E "
+            f"{'output' if expected_side == 'output' else 'input'}. Platrixa "
             "never overrides the accounting direction.",
             "Use the correct tax side for the transaction.")
 
@@ -3619,7 +3619,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     for rate, kind in facts["rates"]:
         if rate <= 0 or rate > Decimal(100):
             return _refuse(
-                f"The stated GST rate ({rate}%) is impossible. FT-E never "
+                f"The stated GST rate ({rate}%) is impossible. Platrixa never "
                 "records an invalid rate.",
                 "State a valid GST rate (0 < rate <= 100).")
         rates[kind].append(rate)
@@ -3627,7 +3627,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         if len({v.quantize(Decimal("0.01")) for v in rates[kind]}) > 1:
             return _refuse(
                 f"The question states contradictory {kind.upper()} rates. "
-                "FT-E never guesses which is correct.",
+                "Platrixa never guesses which is correct.",
                 "State one rate per tax component.")
 
     def _uniq(vals: List[Decimal]) -> Optional[Decimal]:
@@ -3639,13 +3639,13 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         if rates["igst"]:
             return _refuse(
                 "An IGST rate on an intra-state CGST + SGST transaction. "
-                "FT-E never guesses which treatment applies.",
+                "Platrixa never guesses which treatment applies.",
                 "State one treatment.")
         cgst_r = _uniq(rates["cgst"])
         sgst_r = _uniq(rates["sgst"])
         if cgst_r is not None and sgst_r is not None and cgst_r != sgst_r:
             return _refuse(
-                "CGST and SGST rates differ. FT-E never records a "
+                "CGST and SGST rates differ. Platrixa never records a "
                 "non-standard split.",
                 "State equal CGST and SGST rates (or a single GST rate).")
         total_r = _uniq(rates["total"])
@@ -3653,7 +3653,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             if cgst_r is not None and cgst_r != (total_r / Decimal(2)):
                 return _refuse(
                     "The CGST/SGST rates do not match half the stated GST "
-                    "rate. FT-E never guesses which is correct.",
+                    "rate. Platrixa never guesses which is correct.",
                     "State consistent rates.")
             total_rate = total_r
         elif cgst_r is not None:
@@ -3661,14 +3661,14 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     else:  # IGST
         if rates["cgst"] or rates["sgst"]:
             return _refuse(
-                "A CGST/SGST rate on an IGST transaction. FT-E never "
+                "A CGST/SGST rate on an IGST transaction. Platrixa never "
                 "guesses which treatment applies.",
                 "State one treatment.")
         igst_r = _uniq(rates["igst"])
         total_r = _uniq(rates["total"])
         if igst_r is not None and total_r is not None and igst_r != total_r:
             return _refuse(
-                "The IGST rate differs from the stated GST rate. FT-E "
+                "The IGST rate differs from the stated GST rate. Platrixa "
                 "never guesses which is correct.",
                 "State consistent rates.")
         total_rate = igst_r if igst_r is not None else total_r
@@ -3677,7 +3677,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if facts["inclusive"] and facts["exclusive"]:
         return _refuse(
             "The question says the amount is BOTH inclusive of GST and "
-            "exclusive/plus GST. FT-E never guesses which is meant.",
+            "exclusive/plus GST. Platrixa never guesses which is meant.",
             "State one: 'inclusive of GST' or 'GST added separately'.")
     mode = "inclusive" if facts["inclusive"] else "exclusive"
 
@@ -3686,7 +3686,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if len(unlabeled) != 1:
         return _refuse(
             "The GST transaction must carry exactly one stated amount for "
-            "the goods/service value. FT-E never picks between multiple "
+            "the goods/service value. Platrixa never picks between multiple "
             "figures (and never treats a payment step as part of the GST "
             "transaction).",
             "Enter the single transaction amount; enter a partial payment "
@@ -3694,7 +3694,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     list_price = unlabeled[0]
     if list_price <= 0:
         return _refuse(
-            "The stated amount must be positive. FT-E never records a "
+            "The stated amount must be positive. Platrixa never records a "
             "zero or negative transaction.",
             "Enter the correct positive amount.")
     # Sprint 15I-L: trade discount nets the taxable value BEFORE GST. The
@@ -3710,7 +3710,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         if td_amount <= 0 or td_amount >= list_price:
             return _refuse(
                 "The stated trade discount is impossible (not positive and "
-                "smaller than the list price). FT-E never records it.",
+                "smaller than the list price). Platrixa never records it.",
                 "Re-check the discount amount or rate.")
         stated = list_price - td_amount
         _gst_steps.append({
@@ -3726,14 +3726,14 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
     if scheme == "IGST":
         if any(k in comp_amt for k in ("CGST", "SGST")):
             return _refuse(
-                "A CGST/SGST amount on an IGST transaction. FT-E never "
+                "A CGST/SGST amount on an IGST transaction. Platrixa never "
                 "guesses which treatment applies.",
                 "State one treatment.")
     else:
         if "IGST" in comp_amt:
             return _refuse(
                 "An IGST amount on an intra-state CGST + SGST transaction. "
-                "FT-E never guesses which treatment applies.",
+                "Platrixa never guesses which treatment applies.",
                 "State one treatment.")
 
     def _q(value: Decimal) -> Decimal:
@@ -3750,14 +3750,14 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         else:
             return _refuse(
                 "'Inclusive of GST' requires a GST rate or a stated GST "
-                "amount to extract the taxable base. FT-E never estimates "
+                "amount to extract the taxable base. Platrixa never estimates "
                 "the base.",
                 "State the GST rate (e.g. 'inclusive of GST @ 18%') or the "
                 "GST amount.")
         if base <= 0:
             return _refuse(
                 "The taxable base derived from the inclusive amount is not "
-                "positive. FT-E never records it.",
+                "positive. Platrixa never records it.",
                 "Re-check the amount and rate.")
     else:
         base = stated
@@ -3768,11 +3768,11 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         else:
             return _refuse(
                 "GST is mentioned but neither a rate nor a GST amount is "
-                "stated. FT-E never guesses the tax.",
+                "stated. Platrixa never guesses the tax.",
                 "State the GST rate (e.g. 'GST @ 18%') or the GST amount.")
         if gst_total <= 0:
             return _refuse(
-                "The computed GST amount is not positive. FT-E never "
+                "The computed GST amount is not positive. Platrixa never "
                 "records it.",
                 "Re-check the amount and rate.")
 
@@ -3783,18 +3783,18 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             if "IGST" in comp_amt and comp_amt["IGST"] != igst_amt:
                 return _refuse(
                     "The stated IGST amount does not match the stated rate "
-                    "times the base. FT-E never guesses which is correct.",
+                    "times the base. Platrixa never guesses which is correct.",
                     "State consistent amounts/rates.")
         elif "IGST" in comp_amt:
             igst_amt = comp_amt["IGST"]
         else:
             return _refuse(
-                "IGST is mentioned without a rate or an IGST amount. FT-E "
+                "IGST is mentioned without a rate or an IGST amount. Platrixa "
                 "never guesses the tax.",
                 "State the IGST rate or the IGST amount.")
         if igst_amt <= 0:
             return _refuse(
-                "The IGST amount is not positive. FT-E never records it.",
+                "The IGST amount is not positive. Platrixa never records it.",
                 "Re-check the amount and rate.")
         raw_components = [("IGST", igst_amt)]
     else:
@@ -3802,7 +3802,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         sgst_amt = comp_amt.get("SGST")
         if (cgst_amt is None) != (sgst_amt is None):
             return _refuse(
-                "Only one of the CGST/SGST amounts is stated. FT-E never "
+                "Only one of the CGST/SGST amounts is stated. Platrixa never "
                 "invents the missing component.",
                 "State both component amounts (or a rate).")
         if total_rate is not None:
@@ -3811,7 +3811,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                                          or sgst_amt != half):
                 return _refuse(
                     "The stated CGST/SGST amounts do not match the stated "
-                    "rate. FT-E never guesses which is correct.",
+                    "rate. Platrixa never guesses which is correct.",
                     "State consistent amounts/rates.")
             cgst_amt = half
             sgst_amt = half
@@ -3820,11 +3820,11 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         else:
             return _refuse(
                 "CGST + SGST is mentioned without a rate or component "
-                "amounts. FT-E never guesses the tax.",
+                "amounts. Platrixa never guesses the tax.",
                 "State the GST rate or the CGST and SGST amounts.")
         if cgst_amt <= 0 or sgst_amt <= 0:
             return _refuse(
-                "A GST component amount is not positive. FT-E never "
+                "A GST component amount is not positive. Platrixa never "
                 "records it.",
                 "Re-check the amounts and rate.")
         raw_components = [("CGST", cgst_amt), ("SGST", sgst_amt)]
@@ -3866,7 +3866,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
                                      "receiver")
             if party is None:
                 return _refuse(
-                    "The credit sale does not name the customer. FT-E "
+                    "The credit sale does not name the customer. Platrixa "
                     "never invents a person's name.",
                     "Add the customer's name.")
             party_accounts.add(party)
@@ -3882,7 +3882,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         if not debit_accounts:
             return _refuse(
                 "The underlying purchase/expense account could not be "
-                "resolved. FT-E never invents an account.",
+                "resolved. Platrixa never invents an account.",
                 "Re-type the transaction with the account explicit.")
         debit_lines.append(_line(debit_accounts[0], base, "debit"))
         for account, amount in components_out:
@@ -3891,7 +3891,7 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
             party = _resolve_bk_spec({"party": "giver"}, stripped, "giver")
             if party is None:
                 return _refuse(
-                    "The credit purchase does not name the supplier. FT-E "
+                    "The credit purchase does not name the supplier. Platrixa "
                     "never invents a person's name.",
                     "Add the supplier's name.")
             party_accounts.add(party)
@@ -4375,7 +4375,7 @@ def _return_chain_continuation(
             "why_not": ("'The same were returned' refers to goods from the "
                         "previous transaction, but the previous transaction "
                         "is not a goods purchase or a goods return here. "
-                        "FT-E never guesses which goods are being returned."),
+                        "Platrixa never guesses which goods are being returned."),
             "next_action": ("State the return fully, e.g. 'Sold goods to "
                             "Mohan; Mohan returned goods worth Rs.6,500; "
                             "the same were returned to Rahul.'"),
@@ -4389,7 +4389,7 @@ def _return_chain_continuation(
             "status": REVIEW_REQUIRED,
             "why_not": ("The returned-goods continuation does not name the "
                         "party receiving the return, or the previous goods "
-                        "entry has no value to carry over. FT-E never "
+                        "entry has no value to carry over. Platrixa never "
                         "invents either."),
             "next_action": "Name the party and enter the return amount.",
             "debit_lines": [], "credit_lines": [],
@@ -4427,7 +4427,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "status": REVIEW_REQUIRED,
             "why_not": ("'The same were returned' refers to goods from an "
                         "earlier transaction, but this question does not "
-                        "identify which goods. FT-E never guesses."),
+                        "identify which goods. Platrixa never guesses."),
             "next_action": ("State the return fully, e.g. 'Sold goods to "
                             "Mohan; Mohan returned goods worth Rs.6,500; "
                             "the same were returned to Rahul.'"),
@@ -4447,7 +4447,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "status": REVIEW_REQUIRED,
             "why_not": ("Placing an order is not a transaction: no journal "
                         "entry is recorded until the goods are actually "
-                        "received or supplied. FT-E does not journal an "
+                        "received or supplied. Platrixa does not journal an "
                         "order."),
             "next_action": ("Record the journal when the goods are actually "
                             "received or supplied."),
@@ -4492,7 +4492,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                 "status": REVIEW_REQUIRED,
                 "why_not": ("A discount is never a standalone journal entry; "
                             "it always accompanies a settlement with a named "
-                            "party or a payment amount. FT-E never invents "
+                            "party or a payment amount. Platrixa never invents "
                             "the cash side of a discount."),
                 "next_action": ("Add the settlement, e.g. 'Paid to Amit "
                                 "Rs.9,800, discount received Rs.200' or "
@@ -4504,7 +4504,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             }
 
     # full-settlement wording implies a discount that is NOT stated
-    # ('received Rs.5,000 in full settlement of Rs.5,200') - FT-E will
+    # ('received Rs.5,000 in full settlement of Rs.5,200') - Platrixa will
     # not silently invent the Rs.200 discount. EXCEPTION (Sprint 15E):
     # when a party is named AND the account total is also stated
     # ('Received from Mohan Rs.5,000 in full settlement of his account of
@@ -4519,7 +4519,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             return {
                 "status": REVIEW_REQUIRED,
                 "why_not": ("'Full settlement' wording implies a discount, "
-                            "but no discount amount is stated. FT-E never "
+                            "but no discount amount is stated. Platrixa never "
                             "invents the difference."),
                 "next_action": "State the discount amount explicitly (e.g. "
                                "'discount allowed Rs.200').",
@@ -4536,7 +4536,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
                 return {
                     "status": REVIEW_REQUIRED,
                     "why_not": ("The transaction does not say whether it "
-                                "was for cash or on credit. FT-E never "
+                                "was for cash or on credit. Platrixa never "
                                 "assumes one."),
                     "next_action": ("Add 'for cash' or 'on credit from "
                                     "<name>' to the description."),
@@ -4547,7 +4547,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
         return {
             "status": NOT_SUPPORTED,
             "why_not": ("This transaction is outside the currently supported "
-                        "FYJC Book-Keeping syllabus boundary. FT-E does not "
+                        "FYJC Book-Keeping syllabus boundary. Platrixa does not "
                         "guess an accounting treatment."),
             "next_action": ("Use standard FYJC wording - e.g. 'Purchased "
                             "goods for cash', 'Sold goods on credit to X', "
@@ -4640,12 +4640,12 @@ def generate_journal(question: str) -> Dict[str, Any]:
     if explicit is not None and sale:
         # 'Sold goods to Mohan Rs.15,000, discount allowed Rs.200' without
         # a payment step is ambiguous (discount at sale time vs at
-        # settlement) - FT-E never picks one silently.
+        # settlement) - Platrixa never picks one silently.
         return {
             "status": REVIEW_REQUIRED,
             "why_not": ("The sale carries an explicit discount amount but "
                         "does not say whether the discount is deducted at "
-                        "sale time or allowed at settlement. FT-E never "
+                        "sale time or allowed at settlement. Platrixa never "
                         "guesses which."),
             "next_action": "Split it into two steps: the credit sale, "
                            "then 'Received ... discount allowed ...'.",
@@ -4829,7 +4829,7 @@ def generate_journal(question: str) -> Dict[str, Any]:
             "status": REVIEW_REQUIRED,
             "why_not": ("The accounts for this transaction could not be "
                         "fully determined (a party name may be missing). "
-                        "FT-E never invents a person's name."),
+                        "Platrixa never invents a person's name."),
             "next_action": "Re-type the transaction with the person's name.",
             "debit_lines": [], "credit_lines": [], "narration": None,
             "calculation_records": amounts.get("steps") or [],
@@ -4928,7 +4928,7 @@ def generate_trial_balance(journals: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def build_bk_understanding(question: str) -> Dict[str, Any]:
-    """What FT-E understood for a Book-Keeping question:
+    """What Platrixa understood for a Book-Keeping question:
     question type, accounts identified, amounts identified, requested
     operation. Deterministic; never claims OCR success."""
     text = str(question or "").strip()
@@ -4992,12 +4992,12 @@ def build_bk_understanding(question: str) -> Dict[str, Any]:
         })
 
     interpretation = (
-        f"FT-E reads this as **{pattern['label']}** (Book-Keeping & "
+        f"Platrixa reads this as **{pattern['label']}** (Book-Keeping & "
         f"Accountancy). Accounts identified: "
         f"{', '.join(debit_accounts + credit_accounts) or 'none yet'}. "
         f"Requested operation: {requested}."
         if pattern else
-        "FT-E could not reliably identify the transaction type. It will "
+        "Platrixa could not reliably identify the transaction type. It will "
         "not guess - type the transaction in standard FYJC wording."
     )
 
@@ -5067,7 +5067,7 @@ def _refusal(status: str, why_not: str, next_action: str) -> Dict[str, Any]:
 
 # Wording that marks a ';'-segment as a PAYMENT / discount STEP of the
 # PREVIOUS transaction rather than a new transaction. Never a transaction
-# verb on its own, so it must be folded into the previous journal - FT-E
+# verb on its own, so it must be folded into the previous journal - Platrixa
 # never posts it as an independent entry.
 _PAYMENT_STEP_HINTS = (
     "paid", "received", "immediately", "half", "quarter", "%",
@@ -5246,7 +5246,7 @@ def _reason_multi_transaction(text: str,
         # Sprint 15I-F P1-A accounting-role continuity: a payment step
         # that PAYS the party the previous transaction established as a
         # DEBTOR ('Sold goods to Ram on credit Rs.12,000. Paid him
-        # Rs.5,000.') contradicts the debtor relationship - FT-E never
+        # Rs.5,000.') contradicts the debtor relationship - Platrixa never
         # blindly posts the generic PAID_TO direction for a debtor it
         # already placed on the debit side. REVIEW_REQUIRED so the
         # student re-states the direction ('Received from him' if the
@@ -5273,7 +5273,7 @@ def _reason_multi_transaction(text: str,
                 "why_not": (f"The previous transaction made {prior_party} "
                             "a debtor (they owe the business), so a "
                             "payment TO that party now would contradict "
-                            "the debtor relationship. FT-E never guesses "
+                            "the debtor relationship. Platrixa never guesses "
                             "the payment direction."),
                 "next_action": ("Re-type the settlement with an explicit "
                                 "direction, e.g. 'Received Rs.X from "
@@ -5337,7 +5337,7 @@ def _reason_multi_transaction(text: str,
                 # 15I-F P0-B). REVIEW_REQUIRED with the calm refusal.
                 journal = {
                     "status": REVIEW_REQUIRED,
-                    "why_not": ("FT-E will not silently re-interpret the "
+                    "why_not": ("Platrixa will not silently re-interpret the "
                                 "previous transaction while folding this "
                                 "payment step into it (it would change "
                                 "the sale/purchase mode or drop a stated "
@@ -5361,7 +5361,7 @@ def _reason_multi_transaction(text: str,
             refusal = _refusal(
                 status,
                 f"Transaction {i + 1} of {len(segments)}: "
-                + (journal.get("why_not") or "FT-E could not reason about "
+                + (journal.get("why_not") or "Platrixa could not reason about "
                    "this transaction deterministically."),
                 journal.get("next_action") or
                 "Re-type each transaction in standard FYJC wording, "
@@ -5477,10 +5477,10 @@ def reason_bk_question(question: str,
         if hint in low:
             return _refusal(
                 NOT_SUPPORTED,
-                f"'{hint}' is outside the FYJC Book-Keeping topics FT-E "
+                f"'{hint}' is outside the FYJC Book-Keeping topics Platrixa "
                 "currently supports (journal entries, ledger posting, "
                 "trial balance, debit/credit reasoning for standard "
-                "transactions). FT-E does not guess a treatment.",
+                "transactions). Platrixa does not guess a treatment.",
                 "Choose a supported topic: journal, ledger, trial balance, "
                 "or a standard transaction (purchase, sale, expense, "
                 "income, bank, drawings, returns, discounts).")
@@ -5495,7 +5495,7 @@ def reason_bk_question(question: str,
     if journal["status"] != VERIFIED:
         status = journal["status"]
         refusal = _refusal(
-            status, journal.get("why_not") or "FT-E could not reason about "
+            status, journal.get("why_not") or "Platrixa could not reason about "
             "this transaction deterministically.",
             journal.get("next_action") or
             "Re-type the transaction in standard FYJC wording.")

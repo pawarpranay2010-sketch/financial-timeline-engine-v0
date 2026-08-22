@@ -1,4 +1,4 @@
-"""FT-E reliability-layer adversarial probe (hardcore verification, test-only).
+"""Platrixa reliability-layer adversarial probe (hardcore verification, test-only).
 
 Conflicting tables / duplicate tables / low-confidence OCR / blocked states
 must surface deterministically and must never silently resolve in favor of a

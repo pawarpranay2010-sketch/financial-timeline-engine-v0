@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Deterministic Maths & Financial Reasoning Engine
 backend/maths/adapter.py
 
@@ -225,7 +225,7 @@ def get_graph_status(
 
 # ---------------------------------------------------------------------------
 # Direct maths-engine entry (used by the new-engine tests and by future
-# FT-E integration phases)
+# Platrixa integration phases)
 # ---------------------------------------------------------------------------
 
 

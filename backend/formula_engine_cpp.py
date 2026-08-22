@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 7 - Python <-> C++ Formula Engine bridge
 
 The deterministic Formula Engine (formula_engine/) is implemented in C++.
@@ -13,7 +13,7 @@ stays in Sprint 6.5. It simply hands verified facts to the C++ engine.
 
 If the compiled binary is unavailable (e.g. an environment without a C++
 toolchain), the bridge reports unavailable and the Python engine's own
-deterministic Decimal path is used as a fallback — FT-E keeps working and
+deterministic Decimal path is used as a fallback — Platrixa keeps working and
 the existing tests keep passing. Stdlib only (json, os, subprocess).
 """
 

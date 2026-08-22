@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12D - Production-Grade Financial Reasoning, Evidence Recovery &
 Adversarial Hardening
 

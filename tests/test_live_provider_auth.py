@@ -237,7 +237,7 @@ if or_key:
             import requests
             headers = {
                 "Authorization": f"Bearer {or_key}", "Content-Type": "application/json",
-                "HTTP-Referer": "https://streamlit.app", "X-Title": "Financial Timeline Engine",
+                "HTTP-Referer": "https://streamlit.app", "X-Title": "Platrixa",
             }
             payload = {"model": model_id, "messages": [{"role": "user", "content": "Reply with exactly one word: hello"}],
                        "temperature": 0.1, "max_tokens": 50}

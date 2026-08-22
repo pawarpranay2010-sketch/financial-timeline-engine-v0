@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-N - Advanced Personalization & Adaptive Learning Engine
 backend/maths/fyjc_personalization_engine.py
 
@@ -13,9 +13,9 @@ Authority boundary (non-negotiable)
   * generates or modifies canonical journals,
   * verifies or reinterprets student answers,
   * approves content or changes QuestionBank verification,
-  * overrides FT-E, and
+  * overrides Platrixa, and
   * treats any external (LLM / teacher) suggestion as accounting truth.
-FT-E remains the ONLY accounting authority. This module contains no
+Platrixa remains the ONLY accounting authority. This module contains no
 accounting rules and no LLM calls - it only decides WHAT an approved
 student should practice next, WHEN revision is due and HOW hard the
 next verified question should be.

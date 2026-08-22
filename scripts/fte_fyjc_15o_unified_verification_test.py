@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-O - Unified Bookkeeping Verification Gate
 scripts/fte_fyjc_15o_unified_verification_test.py
 
 Proves that the FYJC Study / Verify bookkeeping flow uses the SAME
-hardened FT-E engine (backend.maths.fyjc_bk_reasoning.reason_bk_question)
+hardened Platrixa engine (backend.maths.fyjc_bk_reasoning.reason_bk_question)
 that the QuestionBank / PracticeEngine path uses - there is ONE
 authoritative bookkeeping reasoning path for the FYJC product.
 

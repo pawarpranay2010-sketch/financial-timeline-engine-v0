@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - REAL-DOCUMENT E2E COMPARISON
 
 Runs the REAL Apple 10-K SEC filing (Inline XBRL HTML, ~1.5 MB) through the

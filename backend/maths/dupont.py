@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12B - Contextual Financial Reasoning Layer
 backend/maths/dupont.py
 

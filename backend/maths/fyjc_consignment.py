@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-SPEC - Specialized Accounting Authorities
 backend/maths/fyjc_consignment.py
 
@@ -20,7 +20,7 @@ Ownership invariant (Sprint 15I-SPEC Part A):
     unsold stock / abnormal loss); an amount with no role refuses;
   * missing quantity, cost, expense basis, commission rate or required
     historical value -> REVIEW_REQUIRED / BLOCKED with zero journal
-    lines - FT-E never invents a value.
+    lines - Platrixa never invents a value.
 
 Valuation conventions (FYJC):
   * non-recurring expenses (freight, carriage, insurance, loading,
@@ -712,7 +712,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     # -- goods cost is the minimum required fact ----------------------------
     if facts["goods_cost"] is None:
         return refuse("The cost of the goods sent on consignment is not "
-                      "established. FT-E never invents the consignment "
+                      "established. Platrixa never invents the consignment "
                       "value.")
 
     # -- compute -------------------------------------------------------------
@@ -744,7 +744,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
         if facts["total_units"] is None:
             return refuse("The abnormal loss is stated in units but the "
                           "total quantity consigned is not established - "
-                          "FT-E cannot compute the loss pro-rata without "
+                          "Platrixa cannot compute the loss pro-rata without "
                           "it.")
         total_units = facts["total_units"]
         if total_units <= 0:
@@ -790,12 +790,12 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
         if facts["total_units"] is None:
             return refuse("The unsold stock is stated in units but the "
                           "total quantity consigned is not established - "
-                          "FT-E cannot compute the stock value without it.")
+                          "Platrixa cannot compute the stock value without it.")
         remaining_units = facts["total_units"] - (
             facts["abnormal_loss_units"] or Decimal(0))
         if remaining_units <= 0:
             return refuse("The remaining quantity after abnormal loss is "
-                          "zero or negative - FT-E cannot value stock on "
+                          "zero or negative - Platrixa cannot value stock on "
                           "an invalid quantity.")
         remaining = valuation_base - (abnormal_value or Decimal(0))
         stock_value = remaining * (
@@ -818,7 +818,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     if commission is None and facts["commission_rate"] is not None:
         if facts["sales"] is None:
             return refuse("Commission is stated as a rate but the sales "
-                          "amount is not established - FT-E cannot "
+                          "amount is not established - Platrixa cannot "
                           "compute the commission without the sales.")
         commission = facts["sales"] * facts["commission_rate"] / Decimal(100)
     if commission is not None:
@@ -834,7 +834,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     if del_credere is None and facts["del_credere_rate"] is not None:
         if facts["sales"] is None:
             return refuse("Del credere commission is stated as a rate but "
-                          "the sales amount is not established - FT-E "
+                          "the sales amount is not established - Platrixa "
                           "cannot compute it without the sales.")
         del_credere = (facts["sales"] *
                        facts["del_credere_rate"] / Decimal(100))
@@ -891,7 +891,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
                 return refuse(
                     f"The {label} expense is stated as paid by the "
                     "consignee but no consignee party is established - "
-                    "FT-E never invents a party.")
+                    "Platrixa never invents a party.")
             journals.append(_journal(
                 [_line("Consignment", value, "debit",
                        why=f"{label.title()} incurred for the consignment "
@@ -925,7 +925,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
         else:
             if consignee is None:
                 return refuse("The goods were sold by a consignee but no "
-                              "consignee party is established - FT-E "
+                              "consignee party is established - Platrixa "
                               "never invents a party.")
             journals.append(_journal(
                 [_line(consignee, facts["sales"], "debit",
@@ -941,7 +941,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     if commission is not None:
         if consignee is None:
             return refuse("Commission is due to the consignee but no "
-                          "consignee party is established - FT-E never "
+                          "consignee party is established - Platrixa never "
                           "invents a party.")
         journals.append(_journal(
             [_line("Consignment", commission, "debit",
@@ -954,7 +954,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     if del_credere is not None:
         if consignee is None:
             return refuse("Del credere commission is due to the consignee "
-                          "but no consignee party is established - FT-E "
+                          "but no consignee party is established - Platrixa "
                           "never invents a party.")
         journals.append(_journal(
             [_line("Consignment", del_credere, "debit",
@@ -969,7 +969,7 @@ def _resolve_consignment(text: str) -> Dict[str, Any]:
     if facts["remittance"] is not None:
         if consignee is None:
             return refuse("A remittance is stated but no consignee party "
-                          "is established - FT-E never invents a party.")
+                          "is established - Platrixa never invents a party.")
         journals.append(_journal(
             [_line("Bank", facts["remittance"], "debit",
                    why="The remittance from the consignee is received in "
@@ -1190,7 +1190,7 @@ def consignment_outcome(question: str,
                      for l in credit_lines), Decimal(0)):
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The resolved consignment journal does not balance. FT-E "
+                "The resolved consignment journal does not balance. Platrixa "
                 "never reports an unbalanced entry as verified.",
                 "Re-check the stated amounts and re-type the question.",
                 result.get("consignment"))

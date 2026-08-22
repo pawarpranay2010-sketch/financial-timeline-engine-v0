@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - FinancialExtractorV2
 
 The new PRIMARY financial extractor. Structured-first, source-grounded.

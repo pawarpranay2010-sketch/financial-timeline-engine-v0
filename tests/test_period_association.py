@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Fix #4 — Period Contamination Tests
 
 Structural / contextual period validation (NO year blacklists).

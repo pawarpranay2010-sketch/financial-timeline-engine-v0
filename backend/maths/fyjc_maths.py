@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 13 - FYJC Student Maths Readiness
 backend/maths/fyjc_maths.py
 
@@ -439,7 +439,7 @@ def verify_maths_answer(
             supported = ", ".join(supported_metric_names()[:12])
             return _refusal_outcome(
                 metric, AUTHORITY_UNSUPPORTED, UNSUPPORTED,
-                f"'{metric}' is not one of the financial relationships FT-E "
+                f"'{metric}' is not one of the financial relationships Platrixa "
                 f"can compute. Sprint 13 supports ONLY the existing "
                 f"registered formulas - e.g. {supported} and the other "
                 f"12A-12F relationships. No new formulas were added and no "
@@ -451,14 +451,14 @@ def verify_maths_answer(
         return _refusal_outcome(
             metric, AUTHORITY_UNAVAILABLE, BLOCKED,
             ENGINE_UNAVAILABLE_REASON,
-            "Deploy the compiled C++ formula engine. FT-E never "
+            "Deploy the compiled C++ formula engine. Platrixa never "
             "calculates financial results in Python.",
         )
 
     # Sprint 15D derivation gate: when the requested figure belongs to a
     # registered canonical FYJC relationship, a validated derivation path
     # must exist BEFORE any execution. A covered concept with no validated
-    # path is REVIEW_REQUIRED - FT-E never guesses.
+    # path is REVIEW_REQUIRED - Platrixa never guesses.
     deriv_ok, _deriv_path, _deriv_reason = ensure_derivation_valid(concept)
     if not deriv_ok:
         refusal = derivation_refusal_outcome(metric, concept)
@@ -490,7 +490,7 @@ def verify_maths_answer(
     # formula_id=None). The only acceptable resolution is an independent
     # derivation of the SAME value through a registered formula (which
     # executes the C++ mathematical authority and carries a formula_id).
-    # Otherwise FT-E refuses - it never echoes, never labels a supplied
+    # Otherwise Platrixa refuses - it never echoes, never labels a supplied
     # value as derived.
     # ------------------------------------------------------------------
     if getattr(sol, "kind", "") == "direct" and sol.value is not None:
@@ -514,7 +514,7 @@ def verify_maths_answer(
                     "The supplied value is preserved - review required, "
                     "never silently choose between them.",
                     "Confirm which value is correct, remove the incorrect "
-                    "one, and re-submit so FT-E can calculate the answer "
+                    "one, and re-submit so Platrixa can calculate the answer "
                     "through the registered formula.",
                 )
                 refusal["concept"] = concept
@@ -526,9 +526,9 @@ def verify_maths_answer(
         else:
             refusal = _refusal_outcome(
                 metric, AUTHORITY_CPP, BLOCKED,
-                f"{concept} was supplied as an input, and FT-E found no "
+                f"{concept} was supplied as an input, and Platrixa found no "
                 "registered formula that can derive it from the other "
-                "inputs. FT-E never presents a supplied value as a "
+                "inputs. Platrixa never presents a supplied value as a "
                 "calculated answer.",
                 f"Remove the supplied '{concept}' value, then provide its "
                 "inputs so the registered formula can derive it (re-type "
@@ -636,7 +636,7 @@ def verify_maths_answer(
 
 FYJC_MATHS_CHECKLIST: List[Dict[str, str]] = [
     {
-        "question": "What did FT-E calculate?",
+        "question": "What did Platrixa calculate?",
         "payload_field": "what",
         "explanation": "The metric name and its value (or a refusal).",
     },

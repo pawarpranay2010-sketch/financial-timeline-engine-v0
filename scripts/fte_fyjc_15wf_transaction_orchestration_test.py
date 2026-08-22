@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-WF - Unified Transaction Orchestration & Authority Composition
 scripts/fte_fyjc_15wf_transaction_orchestration_test.py
 

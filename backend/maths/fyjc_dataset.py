@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 13 - FYJC Student Maths & Book-Keeping Readiness
 backend/maths/fyjc_dataset.py
 

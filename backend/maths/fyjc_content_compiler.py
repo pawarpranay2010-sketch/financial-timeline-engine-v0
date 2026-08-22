@@ -1,12 +1,12 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-G - Content Compiler (Question Infrastructure)
 backend/maths/fyjc_content_compiler.py
 
 An ISOLATED internal Content Compiler for the verified FYJC Book-Keeping
 question bank. It is NOT another accounting reasoning engine - it never
 decides an accounting treatment itself. Every accounting decision comes
-from the existing deterministic FT-E engine (backend.maths.fyjc_bk_reasoning
+from the existing deterministic Platrixa engine (backend.maths.fyjc_bk_reasoning
 -> reason_bk_question / classify_bk_type / _split_transactions), which is
 consumed READ-ONLY: this module never modifies transaction parsing,
 journal generation, refusal thresholds or any 15E-15I behavior.
@@ -20,13 +20,13 @@ Pipeline:
         |  compile_question()             (id, metadata, transaction count/types)
         v
     DETERMINISTIC VALIDATION
-        |  verify_question()              (FT-E engine = authority + invariants)
+        |  verify_question()              (Platrixa engine = authority + invariants)
         v
     APPROVED / REJECTED                   (bank lifecycle owns the state)
 
 Trust contract
 --------------
-* The FT-E engine is the authority. A candidate is APPROVED only when the
+* The Platrixa engine is the authority. A candidate is APPROVED only when the
   engine returns VERIFIED and every accounting invariant holds (balanced,
   all accounts resolved, amounts present and consistent, deterministic
   across repeated runs).
@@ -305,7 +305,7 @@ def _journal_total(lines: List[List[Any]]) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic verification through the FT-E authority
+# Deterministic verification through the Platrixa authority
 # ---------------------------------------------------------------------------
 
 def _compact_reasoning(raw: str) -> Dict[str, Any]:
@@ -326,7 +326,7 @@ def _compact_reasoning(raw: str) -> Dict[str, Any]:
 
 
 def verify_question(raw: str) -> Dict[str, Any]:
-    """Run the candidate through the FT-E deterministic engine and check
+    """Run the candidate through the Platrixa deterministic engine and check
     every accounting invariant. Returns a verification record; NEVER
     mutates the question or the engine.
 
@@ -553,7 +553,7 @@ def default_metadata(raw: str) -> Dict[str, Any]:
     }
     # JSON-safe: Decimal values become floats (metadata is presentation
     # metadata, never accounting arithmetic - the journal amounts stay
-    # Decimal in the FT-E engine).
+    # Decimal in the Platrixa engine).
     for key in ("discount_percentage", "discount_amount", "gross_amount",
                 "net_amount", "settlement_amount"):
         value = meta[key]

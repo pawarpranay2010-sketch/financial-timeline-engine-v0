@@ -1,6 +1,6 @@
 """Sprint 12.3 - Zero-Panic Student Onboarding & Guided Recovery
 
-Deterministic adversarial test suite. The FT-E core workflow is already
+Deterministic adversarial test suite. The Platrixa core workflow is already
 strong (assignment understanding, requirement extraction, metric
 normalization, period analysis, driver analysis, qualitative catalysts,
 evidence verification, Excel working model, Student Memo, student-authored

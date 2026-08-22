@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine - Ingestion Package
+Platrixa - Ingestion Package
 Exports the public ingestion API.
 """
 

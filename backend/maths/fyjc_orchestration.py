@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-WF - Unified Transaction Orchestration & Authority Composition
 backend/maths/fyjc_orchestration.py
 
@@ -616,7 +616,7 @@ def _authority_boundary_notes(graph: TransactionGraph) -> None:
                 "reason": ("The segment is owned by the Asset Authority, "
                             "but GST wording routes it to the GST "
                             "Authority, whose verified surface does not "
-                            "extend to asset disposals. FT-E refuses "
+                            "extend to asset disposals. Platrixa refuses "
                             "instead of applying the goods-GST rule to an "
                             "asset."),
             })
@@ -628,7 +628,7 @@ def _authority_boundary_notes(graph: TransactionGraph) -> None:
                 "reason": ("The segment is owned by the Asset Authority, "
                             "but a trade-discount rate is a Commercial "
                             "Core rule that the Asset Authority does not "
-                            "consume. FT-E refuses instead of silently "
+                            "consume. Platrixa refuses instead of silently "
                             "dropping the discount."),
             })
 
@@ -780,7 +780,7 @@ def _assign_ownership(graph: TransactionGraph) -> None:
                         "transaction value and once as a paid/received "
                         "figure. Two authorities would double-count the "
                         "same stated amount, and no reconciliation clause "
-                        "binds them. FT-E never guesses which claim owns "
+                        "binds them. Platrixa never guesses which claim owns "
                         "the amount."),
                 })
     for node in graph.segments:
@@ -801,7 +801,7 @@ def _assign_ownership(graph: TransactionGraph) -> None:
                     "reason": (
                         f"Segment {node.index + 1} states multiple amounts "
                         f"({', '.join('Rs.' + _fmt_amt(v) for v in values)}) "
-                        f"that all claim the '{role}' role. FT-E cannot "
+                        f"that all claim the '{role}' role. Platrixa cannot "
                         "deterministically split that role, so it never "
                         "guesses which amount owns it."),
                 })
@@ -828,7 +828,7 @@ def _assign_ownership(graph: TransactionGraph) -> None:
                     "reason": (
                         f"'{fact.original}' is a stated fact that belongs "
                         f"to the {authority['name']}, which is not "
-                        "implemented yet. FT-E never silently drops a "
+                        "implemented yet. Platrixa never silently drops a "
                         "stated fact and never guesses a treatment for "
                         "it."),
                 })
@@ -858,7 +858,7 @@ def _completeness_violations(graph: TransactionGraph,
                     f"The hardened authority resolved {len(journals)} "
                     f"journals for {len(graph.segments)} transaction "
                     "segments. A valid segment would be silently dropped, "
-                    "so FT-E refuses the whole question."),
+                    "so Platrixa refuses the whole question."),
             })
         return violations
     return violations
@@ -1103,7 +1103,7 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         violations.append({
             "kind": "merge_conflict",
             "reason": "Two authorities produced conflicting journal "
-                      "postings for the same account. FT-E never lets one "
+                      "postings for the same account. Platrixa never lets one "
                       "authority override another - it refuses instead.",
             "conflicts": merge["conflicts"],
         })
@@ -1111,7 +1111,7 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         violations.append({
             "kind": "unbalanced_merge",
             "reason": ("The merged journal does not balance (debit total "
-                       "differs from credit total). FT-E never reports an "
+                       "differs from credit total). Platrixa never reports an "
                        "unbalanced entry as verified."),
         })
 
@@ -1212,7 +1212,7 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
             status = first["status"]  # REVIEW_REQUIRED | NOT_SUPPORTED
         why = first["reason"]
         if first["kind"] == "duplicated_amount_ownership":
-            why = (first["reason"] + " FT-E refuses the whole question "
+            why = (first["reason"] + " Platrixa refuses the whole question "
                    "rather than guess which amount owns the role.")
             status = REVIEW_REQUIRED
         if first["kind"] == "dropped_valid_segment":
@@ -1226,7 +1226,7 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
                   "separately.")
         if status == NOT_SUPPORTED:
             action = ("This belongs to an FYJC topic whose authority is "
-                      "not implemented yet. FT-E refuses instead of "
+                      "not implemented yet. Platrixa refuses instead of "
                       "guessing a treatment.")
         refusal = _refusal(status, why, action)
         refusal["orchestration"] = graph_payload

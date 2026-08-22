@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 14 - FYJC Student End-to-End Journey Orchestration
 backend/maths/fyjc_student_flow.py
 
@@ -18,7 +18,7 @@ Architectural rules (unchanged from Sprint 12F/13)
 * C++ remains the sole mathematical authority. Every numerical result
   in a Maths flow comes from verify_maths_answer (-> solve_strict ->
   C++). Python never performs a fallback calculation.
-* Accounting treatment comes from the hardened FT-E book-keeping
+* Accounting treatment comes from the hardened Platrixa book-keeping
   engine (backend.maths.fyjc_bk_reasoning.reason_bk_question, routed
   through hardened_bookkeeping_outcome) - the SAME authority the
   QuestionBank / PracticeEngine path uses (Sprint 15I-O). The legacy
@@ -93,7 +93,7 @@ TRADITIONAL_CLASS: Dict[str, str] = {
 
 # Percent tokens (e.g. "10% trade discount") are a signal that the
 # description carries a discount/rate that no registered formula can
-# deterministically net. FT-E surfaces it as a concern instead of
+# deterministically net. Platrixa surfaces it as a concern instead of
 # silently computing around the C++ authority.
 _PERCENT_RE = re.compile(r"\b\d+(?:\.\d+)?\s*%")
 
@@ -127,7 +127,7 @@ def _fmt_amount(value: Any) -> str:
 
 
 def build_understanding(question: str) -> Dict[str, Any]:
-    """What FT-E understood from the question text (never a guess).
+    """What Platrixa understood from the question text (never a guess).
 
     Returns {classified, domain, kind, metric, facts, interpretation,
     concerns, status}. `concerns` lists student-readability issues that
@@ -162,9 +162,9 @@ def build_understanding(question: str) -> Dict[str, Any]:
     info_notes: List[str] = []
     # Sprint 15I-O: rate/discount and multi-amount concerns are only
     # raised for the MATHS domain. The FYJC book-keeping Study / Verify
-    # flow now routes through the hardened FT-E engine, which handles
+    # flow now routes through the hardened Platrixa engine, which handles
     # trade / cash discounts, GST and multi-amount settlements
-    # deterministically (15E/15I-K/15I-L) - a stale 'FT-E will not
+    # deterministically (15E/15I-K/15I-L) - a stale 'Platrixa will not
     # compute a discounted amount' warning next to a VERIFIED journal
     # would be wrong. If the hardened engine cannot resolve a
     # book-keeping question, it refuses with its own why_not /
@@ -173,7 +173,7 @@ def build_understanding(question: str) -> Dict[str, Any]:
     if q and not is_bookkeeping:
         for m in _PERCENT_RE.finditer(q):
             concerns.append(
-                f"'{m.group(0).strip()}' is a rate/discount. FT-E has no "
+                f"'{m.group(0).strip()}' is a rate/discount. Platrixa has no "
                 "registered formula for netting it, so it will not compute "
                 "a discounted amount. Enter the net amount if the question "
                 "asks for one."
@@ -220,7 +220,7 @@ def build_understanding(question: str) -> Dict[str, Any]:
 def _interpretation(classification: Dict[str, Any],
                     fact_rows: List[Dict[str, Any]],
                     question: str) -> str:
-    """A one-paragraph student-readable reading of what FT-E understood."""
+    """A one-paragraph student-readable reading of what Platrixa understood."""
     if not question:
         return "No question was provided."
     domain = classification.get("domain")
@@ -230,19 +230,19 @@ def _interpretation(classification: Dict[str, Any],
             from backend.maths.fyjc_maths import known_concept_display
             display = known_concept_display(metric) or metric
             return (
-                f"FT-E reads this as a Maths question asking for "
+                f"Platrixa reads this as a Maths question asking for "
                 f"**{display}** (Requested: {display})."
             )
         if classification.get("requested_uncertain"):
             return (
-                "FT-E sees a numerical Maths question, but the requested "
+                "Platrixa sees a numerical Maths question, but the requested "
                 "figure is unclear - it will ask which figure to calculate "
                 "rather than guess."
             )
         return (
-            "FT-E reads this as a numerical Maths question, but no "
+            "Platrixa reads this as a numerical Maths question, but no "
             "registered metric was matched - it will refuse unless the "
-            "metric is one FT-E can compute."
+            "metric is one Platrixa can compute."
         )
     if domain == DOMAIN_BOOKKEEPING:
         kind = classification.get("kind")
@@ -253,13 +253,13 @@ def _interpretation(classification: Dict[str, Any],
             KIND_TRANSACTION: "a transaction analysis",
         }.get(kind, "a book-keeping task")
         return (
-            f"FT-E reads this as **{kind_label}** (Book-Keeping & "
+            f"Platrixa reads this as **{kind_label}** (Book-Keeping & "
             "Accountancy)."
         )
     return (
-        "FT-E could not reliably identify the question type. It will not "
+        "Platrixa could not reliably identify the question type. It will not "
         "guess - type the question in standard wording, or ask for a "
-        "metric FT-E supports."
+        "metric Platrixa supports."
     )
 
 
@@ -394,7 +394,7 @@ def run_fyjc_accounting_flow(description: str,
     """Run the student Book-Keeping journey for one transaction.
 
     Sprint 15I-O: the accounting TREATMENT comes exclusively from the
-    hardened FT-E engine (reason_bk_question via
+    hardened Platrixa engine (reason_bk_question via
     hardened_bookkeeping_outcome) - the same authority the QuestionBank
     / PracticeEngine path uses. Steps 5-8 are the journal entry, ledger
     effect, trial-balance effect and verification over that SAME
@@ -414,7 +414,7 @@ def run_fyjc_accounting_flow(description: str,
     steps.append({
         "number": 1,
         "title": "Identify Accounts",
-        "body": accounts or ["FT-E could not identify the accounts."],
+        "body": accounts or ["Platrixa could not identify the accounts."],
     })
 
     # Step 2 - classify accounts (modern role + FYJC traditional class)
@@ -765,9 +765,9 @@ def run_fyjc_student_flow(question: str,
             "status_label": "🟡 NOT SUPPORTED YET",
             "authority_state": "unsupported",
             "understanding": understanding,
-            "what": "FT-E could not reliably identify the question type.",
+            "what": "Platrixa could not reliably identify the question type.",
             "why_not": (
-                "FT-E only answers supported Maths metrics and Book-Keeping "
+                "Platrixa only answers supported Maths metrics and Book-Keeping "
                 "& Accountancy questions (journal, ledger, trial balance, "
                 "transaction analysis). No answer was generated - it never "
                 "guesses."
@@ -786,7 +786,7 @@ def run_fyjc_student_flow(question: str,
         if not metric:
             if understanding.get("requested_uncertain"):
                 # Sprint 15: an uncertain requested concept is REVIEW_
-                # REQUIRED - FT-E never guesses which figure is asked for.
+                # REQUIRED - Platrixa never guesses which figure is asked for.
                 return {
                     "flow": "refusal",
                     "status": REVIEW_REQUIRED,
@@ -795,13 +795,13 @@ def run_fyjc_student_flow(question: str,
                     "authority_state": "review_required",
                     "understanding": understanding,
                     "what": (
-                        "FT-E is not certain which figure this question "
+                        "Platrixa is not certain which figure this question "
                         "asks for."
                     ),
                     "why_not": (
                         understanding.get("reason")
                         or "Multiple possible requested figures were found. "
-                        "FT-E does not guess."
+                        "Platrixa does not guess."
                     ),
                     "next_action": (
                         "Re-type the question naming the figure explicitly - "
@@ -818,7 +818,7 @@ def run_fyjc_student_flow(question: str,
                 "understanding": understanding,
                 "what": "No supported Maths metric was detected.",
                 "why_not": (
-                    "This looks like a numerical Maths question, but FT-E "
+                    "This looks like a numerical Maths question, but Platrixa "
                     "supports only the registered financial relationships "
                     "(profit, margins, ratios, EPS, CAGR ...). No new "
                     "formulas were added and no calculation is invented."
@@ -857,7 +857,7 @@ def run_fyjc_student_flow(question: str,
         "status_label": STATUS_WORDS.get(BLOCKED, BLOCKED),
         "authority_state": "blocked",
         "understanding": understanding,
-        "what": "FT-E could not proceed with this question.",
+        "what": "Platrixa could not proceed with this question.",
         "why_not": str(understanding.get("reason") or ""),
         "next_action": "Re-type the question in standard wording.",
         "audit": {"authority": "blocked"},
@@ -963,7 +963,7 @@ def parse_numeric(value: Any) -> Optional[float]:
 
 
 def fyjc_study_topics() -> Dict[str, List[str]]:
-    """Student-facing list of what FT-E can verify for the FYJC exam."""
+    """Student-facing list of what Platrixa can verify for the FYJC exam."""
     from backend.maths.fyjc_maths import supported_metric_names
     return {
         "maths": sorted(supported_metric_names()),

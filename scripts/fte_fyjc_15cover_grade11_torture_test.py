@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-COVER - Complex Grade 11 Bookkeeping Torture Test
 scripts/fte_fyjc_15cover_grade11_torture_test.py
 

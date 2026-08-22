@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - Table Extractor
 
 Layout-aware financial table extraction.

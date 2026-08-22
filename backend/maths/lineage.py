@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Deterministic Maths & Financial Reasoning Engine
 backend/maths/lineage.py
 
@@ -107,7 +107,7 @@ class LineageRecord:
         }
 
     def render_text(self) -> str:
-        """Human-readable lineage tree (auditable, mirrors the FT-E
+        """Human-readable lineage tree (auditable, mirrors the Platrixa
         lineage convention)."""
         lines = [f"{self.target}"]
         if self.formula_id:

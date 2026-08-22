@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 11 - Evidence-Backed Qualitative Catalyst & Driver Analysis
 
 A DETERMINISTIC qualitative layer above the verified fact graph.

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Deterministic Maths & Financial Reasoning Engine
 backend/maths/fact_model.py
 
@@ -147,7 +147,7 @@ class FactNode:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline-fact translation (existing FT-E fact dict -> FactNode)
+# Pipeline-fact translation (existing Platrixa fact dict -> FactNode)
 # ---------------------------------------------------------------------------
 
 _PIPELINE_TIER_KEYS = (

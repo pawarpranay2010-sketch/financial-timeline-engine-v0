@@ -1,11 +1,11 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15 - FYJC Real-Question Student Pilot Dataset
 backend/maths/fyjc_pilot_dataset.py
 
 A small, controlled pilot dataset of 40 authentic FYJC-style questions
 (20 Maths + 20 Book-Keeping & Accountancy) used to validate that a real
-student can use FT-E end to end. This is PURE DATA:
+student can use Platrixa end to end. This is PURE DATA:
 
 * No imports from the engine, no computation.
 * Every expected value is an INDEPENDENT, hand-verified constant (an
@@ -34,7 +34,7 @@ Maths cases (FYJC_PILOT_MATHS):
                   {status} for refusals
     human_reference  the hand-computed true numeric answer for questions
                   the registry does NOT support - documented so the gap
-                  is explicit (FT-E must refuse, not guess)
+                  is explicit (Platrixa must refuse, not guess)
 
 Book-Keeping cases (FYJC_PILOT_BK):
     id            B01..B20
@@ -46,7 +46,7 @@ Book-Keeping cases (FYJC_PILOT_BK):
                   result
     entries       reference journal entries for ledger/TB/verify cases
                   (derived by the test from the classified transactions
-                  - never hand-written into FT-E)
+                  - never hand-written into Platrixa)
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ FYJC_PILOT_MATHS = [
         "expected": {"status": "DERIVED", "verdict": "CORRECT",
                      "display": "4000.00"},
         # narrative prose without 'Concept: value' lines is NOT parsed by the
-        # 12D normalizer (documented extraction gap). FT-E must refuse rather
+        # 12D normalizer (documented extraction gap). Platrixa must refuse rather
         # than guess - independent human answer is 4000.
         "human_reference": 4000,
     },
@@ -198,7 +198,7 @@ FYJC_PILOT_MATHS = [
         "difficulty": 1,
         "student_answer": 1920,
         "expected": {"status": "UNSUPPORTED"},
-        "human_reference": 1920,  # 8000 x 8 x 3 / 100 - NOT computable by FT-E
+        "human_reference": 1920,  # 8000 x 8 x 3 / 100 - NOT computable by Platrixa
     },
     {
         "id": "P13",
@@ -271,7 +271,7 @@ FYJC_PILOT_MATHS = [
         "difficulty": 3,
         "student_answer": None,
         "expected": {"status": "REVIEW_REQUIRED"},
-        # two pages give different Current Assets values - FT-E must not
+        # two pages give different Current Assets values - Platrixa must not
         # silently pick one
         "documents": [
             {"document_name": "page-1.png", "tier": "DOCUMENT",
@@ -476,7 +476,7 @@ FYJC_PILOT_BK = [
         "student_tb": "Cash, 45000, 0\nPurchases, 10000, 0\n"
                       "Sales, 0, 15000\nCapital, 0, 50000",
         "expected": {"verdict": "INCORRECT"},
-        "note": "student misread the Cash balance - FT-E must flag the "
+        "note": "student misread the Cash balance - Platrixa must flag the "
                 "discrepancy, not accept it",
     },
     {
@@ -517,7 +517,7 @@ FYJC_PILOT_BK = [
         "kind": "transaction",
         "expected": {"status": "BLOCKED"},
         # Sprint 15I-O: the Study / Verify flow now routes through the
-        # hardened FT-E engine, whose verified invariant is that a
+        # hardened Platrixa engine, whose verified invariant is that a
         # refusal NEVER carries journal lines (15I-J/K/L safety gates) -
         # a BLOCKED outcome shows no would-be accounts.
         "note": "amount is missing; refusal carries no journal lines",
@@ -530,7 +530,7 @@ FYJC_PILOT_BK = [
         "difficulty": 2,
         "kind": "transaction",
         "expected": {"status": "REVIEW_REQUIRED"},
-        "note": "cash vs credit is not stated - FT-E never assumes one",
+        "note": "cash vs credit is not stated - Platrixa never assumes one",
     },
     {
         "id": "B19",

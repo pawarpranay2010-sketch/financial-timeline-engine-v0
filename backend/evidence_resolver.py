@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 6.5 - Deterministic External Evidence Recovery
 
 A single, centralized resolver abstraction for missing financial metrics.

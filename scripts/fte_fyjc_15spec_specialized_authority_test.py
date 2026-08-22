@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-SPEC - Specialized Accounting Authorities
 scripts/fte_fyjc_15spec_specialized_authority_test.py
 

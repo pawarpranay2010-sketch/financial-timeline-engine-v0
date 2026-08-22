@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-DISC - Discrepancy Authority
 scripts/fte_fyjc_15disc_discrepancy_authority_test.py
 

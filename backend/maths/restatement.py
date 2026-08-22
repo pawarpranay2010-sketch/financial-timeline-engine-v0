@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12D - Production-Grade Financial Reasoning, Evidence Recovery &
 Adversarial Hardening
 backend/maths/restatement.py

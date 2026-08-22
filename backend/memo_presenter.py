@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 8 - Module B: Student + Professional Adaptive Memo Presenter
 
 A PURE presentation layer (no Streamlit import) that renders the SAME

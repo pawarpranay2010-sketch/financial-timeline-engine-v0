@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-H - Mastery Engine
 backend/maths/fyjc_mastery_engine.py
 
@@ -7,7 +7,7 @@ Maintains deterministic per-student mastery evidence by concept.
 
 The mastery engine decides WHAT to practice next - it NEVER decides
 whether an accounting answer is correct. Correctness comes exclusively
-from the FT-E verification path (via the Practice Engine). Every state
+from the Platrixa verification path (via the Practice Engine). Every state
 transition records the evidence that produced it.
 
 Mastery states
@@ -140,7 +140,7 @@ class MasteryEngine:
         """Apply ONE verified attempt outcome to a concept's mastery.
 
         outcome is CORRECT / INCORRECT / REVIEW_REQUIRED / NOT_SUPPORTED
-        (as produced by the FT-E verification path). REVIEW_REQUIRED and
+        (as produced by the Platrixa verification path). REVIEW_REQUIRED and
         NOT_SUPPORTED never count as correct or incorrect, never resolve
         mistakes and never move a concept toward MASTERED.
         """

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-CHAOS-HARDEN-2 — Boundary Audit & Production Safety Closure
 scripts/fte_fyjc_15chaos_harden2_boundary_audit_test.py
 

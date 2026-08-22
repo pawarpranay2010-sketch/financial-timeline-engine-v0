@@ -1,6 +1,6 @@
 # core/logging.py
 """
-Structured logging for the Financial Timeline Engine.
+Structured logging for the Platrixa.
 
 Two things live here:
 

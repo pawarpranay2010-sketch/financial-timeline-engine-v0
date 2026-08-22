@@ -610,7 +610,7 @@
 
 ### REFUSAL::REVIEW_REQUIRED
 
-**Description:** The wording is ambiguous (cash vs credit, mode, discount context) - FT-E never guesses
+**Description:** The wording is ambiguous (cash vs credit, mode, discount context) - Platrixa never guesses
 
 **Category:** Refusals
 

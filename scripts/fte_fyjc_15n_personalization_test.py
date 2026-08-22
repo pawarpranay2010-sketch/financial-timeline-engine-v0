@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-N - Advanced Personalization & Adaptive Learning Engine gate
 scripts/fte_fyjc_15n_personalization_test.py
 
@@ -840,7 +840,7 @@ check("AG1 personalizer pick is APPROVED",
 canon_before = json.dumps(q.get("expected_journal"), sort_keys=True)
 d_accs, d_amts, c_accs, c_amts = CANON_ENTRY(BANK, qid)
 ok = submit(eng, sid, qid, d_accs, d_amts, c_accs, c_amts)
-check("AG2 correct answer still verified CORRECT by FT-E",
+check("AG2 correct answer still verified CORRECT by Platrixa",
       ok["outcome"] == OUTCOME_CORRECT
       and ok["verification_status"] == "VERIFIED",
       f"{ok['outcome']} / {ok['verification_status']}")

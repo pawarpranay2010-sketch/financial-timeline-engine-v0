@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 13 - FYJC Book-Keeping & Accountancy Readiness
 backend/maths/fyjc_accounting.py
 
@@ -19,7 +19,7 @@ Rules
   - Assets & Expenses increase on the Debit side.
   - Liabilities, Capital & Income increase on the Credit side.
   - Personal accounts: debit the receiver, credit the giver.
-* FT-E NEVER invents accounting rules, never infers an ambiguous
+* Platrixa NEVER invents accounting rules, never infers an ambiguous
   transaction, and never guesses an amount. When the description does not
   determine the treatment, the outcome is REVIEW_REQUIRED with a
   student-readable explanation; when essential information is missing, it
@@ -622,7 +622,7 @@ def _asset_purchase_rule(description: str) -> Optional[Dict[str, Any]]:
             "key": "ASSET_PURCHASE_AMBIGUOUS",
             "refuse": True,
             "rule": (f"The description names more than one fixed asset "
-                     f"({', '.join(assets)}) in one transaction. FT-E never "
+                     f"({', '.join(assets)}) in one transaction. Platrixa never "
                      "guesses how the amount is split between assets."),
         }
     asset = assets[0]
@@ -666,7 +666,7 @@ def _asset_sale_rule(description: str) -> Optional[Dict[str, Any]]:
             "key": "ASSET_SALE_AMBIGUOUS",
             "refuse": True,
             "rule": (f"The description names more than one fixed asset "
-                     f"({', '.join(assets)}) in one transaction. FT-E never "
+                     f"({', '.join(assets)}) in one transaction. Platrixa never "
                      "guesses how the amount is split."),
         }
     asset = assets[0]
@@ -720,7 +720,7 @@ def _party_from(description: str, preposition: str) -> Optional[str]:
     # 'from' / 'to' / 'by' is a PERSONAL account (covers asset
     # transactions such as 'Purchased Furniture from Rahul on credit'
     # and 'Sold Machinery to Sharma for cash'). Lower-case nouns (the
-    # bank, the seller) never match - FT-E never invents a party.
+    # bank, the seller) never match - Platrixa never invents a party.
     for marker in (" from ", " to ", " by "):
         if marker in low:
             idx = low.index(marker) + len(marker)
@@ -759,7 +759,7 @@ def _resolve_side(entries: List[Any], cash_or_bank: List[str]) -> str:
 
 def hardened_bookkeeping_outcome(description: str,
                                  amount: Any = None) -> Dict[str, Any]:
-    """Route ONE bookkeeping question through the hardened FT-E engine
+    """Route ONE bookkeeping question through the hardened Platrixa engine
     (backend.maths.fyjc_bk_reasoning.reason_bk_question) - the SAME
     accounting authority the QuestionBank / PracticeEngine path uses -
     and shape the canonical result into the legacy Study/Verify outcome
@@ -923,7 +923,7 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
             "debit_lines": [], "credit_lines": [],
             "rule": None,
             "why_not": ("This transaction could not be recognised "
-                        "deterministically from the description. FT-E never "
+                        "deterministically from the description. Platrixa never "
                         "guesses an accounting treatment."),
             "next_action": ("Re-write the transaction in standard FYJC "
                             "wording (e.g. 'Purchased goods for cash', "
@@ -938,7 +938,7 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
             "rule": pattern["rule"],
             "why_not": ("The transaction is ambiguous: 'purchased goods' "
                         "does not say whether it was for cash or on "
-                        "credit. FT-E never assumes one."),
+                        "credit. Platrixa never assumes one."),
             "next_action": ("Add 'for cash' or 'on credit from <name>' to "
                             "the transaction description."),
         }
@@ -975,7 +975,7 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
                 "rule": pattern["rule"],
                 "why_not": ("The transaction names a party but the "
                             "counterparty name could not be read "
-                            "deterministically. FT-E never invents a "
+                            "deterministically. Platrixa never invents a "
                             "person's name."),
                 "next_action": ("Re-type the transaction with the person's "
                                 "name (e.g. 'Sold goods on credit to "
@@ -998,7 +998,7 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
             "debit_lines": [], "credit_lines": [],
             "rule": pattern["rule"],
             "why_not": ("More than one amount was found in the description "
-                        "and the mapping to accounts is ambiguous. FT-E "
+                        "and the mapping to accounts is ambiguous. Platrixa "
                         "never guesses which amount belongs to which "
                         "account."),
             "next_action": ("Submit the journal entry directly (debit line "
@@ -1012,7 +1012,7 @@ def classify_transaction(description: str, amount: Any = None) -> Dict[str, Any]
             "debit_lines": [], "credit_lines": [],
             "rule": pattern["rule"],
             "why_not": ("An amount could not be read cleanly (OCR-style "
-                        "uncertainty). FT-E never silently corrects an "
+                        "uncertainty). Platrixa never silently corrects an "
                         "uncertain value."),
             "next_action": "Re-enter the amount clearly (e.g. 5,000).",
         }
@@ -1284,7 +1284,7 @@ def verify_journal_entry(description: Optional[str],
     ]
 
     # -- direction check against the golden rule --------------------------
-    # Sprint 15I-O: the treatment reference is the hardened FT-E engine
+    # Sprint 15I-O: the treatment reference is the hardened Platrixa engine
     # (reason_bk_question) - the same authority the QuestionBank /
     # PracticeEngine path uses. The legacy classifier is never the
     # reference for FYJC bookkeeping verification.
@@ -1392,12 +1392,12 @@ def verify_journal_entry(description: Optional[str],
         "what": "The entry is balanced (Debit = Credit).",
         "why_not": (
             "No transaction description was provided (or the treatment is "
-            "ambiguous), so FT-E cannot confirm the direction of the "
+            "ambiguous), so Platrixa cannot confirm the direction of the "
             "accounts."
             if not (description and str(description).strip())
             else reference.get("why_not", "The treatment is ambiguous.")
         ),
-        "next_action": "Provide the original transaction wording so FT-E "
+        "next_action": "Provide the original transaction wording so Platrixa "
                        "can verify debit/credit direction.",
         "debit_lines": canonical_debits,
         "credit_lines": canonical_credits,

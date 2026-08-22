@@ -18,7 +18,7 @@ def check_exceptions(at, label):
 
 
 def main():
-    # --- FT-E entrance (first paint, no session state) ---
+    # --- Platrixa entrance (first paint, no session state) ---
     at = AppTest.from_file(APP, default_timeout=120)
     at.run()
     if not check_exceptions(at, "entrance page"):

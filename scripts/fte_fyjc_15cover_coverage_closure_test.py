@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-COVER - Coverage Closure & Boundary Audit
 scripts/fte_fyjc_15cover_coverage_closure_test.py
 

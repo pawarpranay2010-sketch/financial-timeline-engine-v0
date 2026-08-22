@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-I - Student Practice UI + Teacher Dashboard
 backend/fyjc_practice_ui.py
 
@@ -10,7 +10,7 @@ Every verdict, mistake record and mastery update is produced by the
 15I-H engines; every question comes from the 15I-G bank's APPROVED set.
 
 Authority chain preserved (never inverted):
-    FT-E verified journal
+    Platrixa verified journal
         -> QuestionBank canonical expected_journal
         -> PracticeEngine (verdict)
         -> MistakeLedger + MasteryEngine
@@ -138,11 +138,11 @@ _EXPLAIN: Dict[str, str] = {
         "cash discount received/allowed is recorded separately."
     ),
     "UNSUPPORTED_RESPONSE": (
-        "This response is outside the verified syllabus range, so FT-E "
+        "This response is outside the verified syllabus range, so Platrixa "
         "will not guess an answer for it."
     ),
     "AMBIGUOUS_RESPONSE": (
-        "Your answer is ambiguous - FT-E cannot verify it. Rewrite it "
+        "Your answer is ambiguous - Platrixa cannot verify it. Rewrite it "
         "with clear accounts and amounts and try again."
     ),
 }
@@ -371,7 +371,7 @@ def _render_verdict(engine: PracticeEngine, question: Dict[str, Any],
         st.markdown(
             '<div class="fte-pi-verdict warn">'
             f'{_chip("REVIEW REQUIRED", "amber")} '
-            "<b>This transaction is ambiguous - FT-E cannot verify it "
+            "<b>This transaction is ambiguous - Platrixa cannot verify it "
             "without more clarity.</b><br/>"
             "<span class=\"fte-pi-note\">Rewrite the question or your "
             "answer with clear accounts and amounts. This attempt does "
@@ -384,9 +384,9 @@ def _render_verdict(engine: PracticeEngine, question: Dict[str, Any],
     st.markdown(
         '<div class="fte-pi-verdict neutral">'
         f'{_chip("NOT SUPPORTED", "gray")} '
-        "<b>This transaction type is outside FT-E's current verified "
+        "<b>This transaction type is outside Platrixa's current verified "
         "syllabus range.</b><br/>"
-        "<span class=\"fte-pi-note\">FT-E never guesses an answer - "
+        "<span class=\"fte-pi-note\">Platrixa never guesses an answer - "
         "this attempt does not count as a mistake.</span></div>",
         unsafe_allow_html=True,
     )
@@ -755,7 +755,7 @@ def render_practice_section(demo: bool = False) -> None:
                 unsafe_allow_html=True)
     st.markdown(
         '<div class="fte-pi-sub">Practice verified questions, get '
-        'FT-E-backed feedback, and watch your mastery grow.</div>',
+        'Platrixa-backed feedback, and watch your mastery grow.</div>',
         unsafe_allow_html=True,
     )
     student_id = st.text_input(
@@ -1188,7 +1188,7 @@ def render_teacher_section(demo: bool = False) -> None:
                 unsafe_allow_html=True)
     st.markdown(
         '<div class="fte-pi-sub">Inspect approved content and student '
-        'learning evidence. FT-E remains the sole accounting authority.</div>',
+        'learning evidence. Platrixa remains the sole accounting authority.</div>',
         unsafe_allow_html=True,
     )
     engine = _load_engine()

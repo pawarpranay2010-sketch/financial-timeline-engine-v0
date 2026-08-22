@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0
 
 Structured, table-aware, source-grounded financial extraction.

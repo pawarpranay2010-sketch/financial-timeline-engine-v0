@@ -1,11 +1,11 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15F - FYJC Book-Keeping Ch.1-3 Textbook Pattern Expansion benchmark
 backend/maths/fyjc_bk_15f_benchmark.py
 
 A hand-verified golden dataset (162 cases) for the first three FYJC
 Book-Keeping & Accountancy chapters (Unit Test 1 scope - the EXACT 15E
-boundary). The oracle NEVER calls the FT-E engine - every expected value
+boundary). The oracle NEVER calls the Platrixa engine - every expected value
 was written from the standard FYJC journal rules (Real/Personal/Nominal
 golden rules) so the gate measures the engine against an independent
 answer.

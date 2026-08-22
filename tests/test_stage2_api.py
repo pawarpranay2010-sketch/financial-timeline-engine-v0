@@ -189,7 +189,7 @@ class TestStage2Frontend(unittest.TestCase):
     def test_frontend_served_at_root(self):
         res = self.client.get("/")
         self.assertEqual(res.status_code, 200)
-        self.assertIn("Financial Timeline Engine", res.text)
+        self.assertIn("Platrixa", res.text)
 
     def test_frontend_assets_served(self):
         css = self.client.get("/styles.css")

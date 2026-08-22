@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-UZ - Direction & Amount-Safety Gate
 scripts/fte_fyjc_15uz_direction_safety_test.py
 

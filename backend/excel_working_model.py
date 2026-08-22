@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 10 - Professional Excel Working Model
 
 Builds a 6-sheet Excel workbook from the deterministic student workspace:

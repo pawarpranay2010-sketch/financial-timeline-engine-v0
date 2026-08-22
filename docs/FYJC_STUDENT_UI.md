@@ -19,7 +19,7 @@ Streamlit workspace.
 
 ```
 📸 Photo / 📁 PDF / ✍️ Type
-   -> What FT-E understood   (editable: ✏️ Correct / Edit)
+   -> What Platrixa understood   (editable: ✏️ Correct / Edit)
    -> Maths | Book-Keeping flow (steps 1-6 / 1-8)
    -> C++ mathematical authority confirmation  (⚙️ Deterministic calculation verified)
    -> expandable technical audit (optional)
@@ -51,7 +51,7 @@ Streamlit workspace.
 - 🔴 **BLOCKED** — what is missing, why it is required, and concrete next
   steps; for Maths the page offers **enter the missing value manually**
   (labelled student-entered, never document data).
-- 🟠 **REVIEW REQUIRED** — what appears inconsistent/ambiguous and why FT-E
+- 🟠 **REVIEW REQUIRED** — what appears inconsistent/ambiguous and why Platrixa
   will not silently choose (e.g. cash-vs-credit purchases, discount % that
   no registered formula can net, conflicting sources).
 - 🟡 **NOT SUPPORTED YET** — no answer generated, with the supported-topic
@@ -67,7 +67,7 @@ Streamlit workspace.
 ## 2. Input honesty (photos)
 
 **No OCR engine is bundled in this deployment.** A photo is shown to the
-student and clearly labelled as *not machine-read*; FT-E never pretends it
+student and clearly labelled as *not machine-read*; Platrixa never pretends it
 read the photo and never guesses its text. The student types/pastes the
 question (the photo stays visible as source evidence). A scanned
 photo-PDF with no extractable text is reported honestly the same way.

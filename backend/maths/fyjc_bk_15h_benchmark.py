@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15H - Real-World FYJC BK Validation & Adversarial Hardening benchmark
 backend/maths/fyjc_bk_15h_benchmark.py
 
@@ -805,7 +805,7 @@ OCR_BOUNDARY_CASES = [
     {"question": "Purchased furniture for cash Rs.15,000.",
      "signals": {"unreadable_digit": True},
      "expected_state": "UNCERTAIN", "expected_status": "REVIEW_REQUIRED",
-     "note": "a digit could not be read - FT-E never invents it"},
+     "note": "a digit could not be read - Platrixa never invents it"},
     {"question": "Purchased goods for cash Rs.16,000.",
      "signals": {"mild_blur": True},
      "expected_state": "UNCERTAIN", "expected_status": "REVIEW_REQUIRED",

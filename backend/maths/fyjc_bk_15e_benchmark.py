@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15E - FYJC Book-Keeping Unit-Test-1 golden benchmark
 backend/maths/fyjc_bk_15e_benchmark.py
 
@@ -14,7 +14,7 @@ Book-Keeping & Accountancy chapters (Unit Test 1 scope):
          discounts, returns, multi-transaction questions)
 
 Every oracle below was written BY HAND from standard FYJC textbook
-treatment of each transaction. The oracle NEVER calls the FT-E solver -
+treatment of each transaction. The oracle NEVER calls the Platrixa solver -
 the benchmark therefore measures the engine against an independent
 expected answer, not against itself.
 

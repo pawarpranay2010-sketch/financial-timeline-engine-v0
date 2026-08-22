@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - Document Type Detector
 
 Deterministically classifies an uploaded document so the extraction

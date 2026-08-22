@@ -1,6 +1,6 @@
 # core/exceptions.py
 """
-Custom exception hierarchy for the Financial Timeline Engine.
+Custom exception hierarchy for the Platrixa.
 
 Every layer of the application (ingestion, gateway, timeline, intelligence,
 exports, backend) raises one of these instead of bare built-ins

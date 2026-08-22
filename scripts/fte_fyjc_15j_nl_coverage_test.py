@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-J - Natural-Language Coverage Expansion Gate
 scripts/fte_fyjc_15j_nl_coverage_test.py
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-C - FYJC Student UI session & refresh persistence gate
 scripts/fte_fyjc_student_session_test.py
 

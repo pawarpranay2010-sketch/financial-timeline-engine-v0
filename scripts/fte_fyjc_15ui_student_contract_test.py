@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-UI - Student Interaction Contract & Confidence Gate Test
 scripts/fte_fyjc_15ui_student_contract_test.py
 

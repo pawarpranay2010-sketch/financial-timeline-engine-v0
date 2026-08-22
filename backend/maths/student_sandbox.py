@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12F - Student Maths Sandbox
 backend/maths/student_sandbox.py
 
@@ -75,7 +75,7 @@ STATUS_WORDS = {
 # answerable from a sandbox outcome without any engine internals.
 STUDENT_CHECKLIST: List[Dict[str, str]] = [
     {
-        "question": "What did FT-E calculate?",
+        "question": "What did Platrixa calculate?",
         "payload_field": "what",
         "explanation": "The metric name and its value (or a refusal).",
     },

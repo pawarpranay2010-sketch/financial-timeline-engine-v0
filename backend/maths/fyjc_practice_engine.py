@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-H - Student Practice Engine
 backend/maths/fyjc_practice_engine.py
 
@@ -8,7 +8,7 @@ Closed deterministic learning loop:
     APPROVED QUESTION (Question Bank)
         -> PRACTICE SESSION
         -> STUDENT RESPONSE
-        -> FT-E VERIFICATION (canonical verified journal = authority)
+        -> Platrixa VERIFICATION (canonical verified journal = authority)
         -> CORRECT / INCORRECT / REVIEW_REQUIRED / NOT_SUPPORTED
         -> STRUCTURED MISTAKE RECORD (mistake ledger)
         -> MASTERY UPDATE (mastery engine)
@@ -16,7 +16,7 @@ Closed deterministic learning loop:
 
 Architectural boundaries (non-negotiable)
 -----------------------------------------
-* The FT-E reasoning engine (through the verified Question Bank) is the
+* The Platrixa reasoning engine (through the verified Question Bank) is the
   ONLY authority for journal correctness. This engine compares a student
   journal against the bank entry's canonical expected_journal - it
   contains NO accounting rules of its own.
@@ -269,7 +269,7 @@ class PracticeEngine:
         is tried first (within the same approved-only scoped pool). The
         personalizer NEVER verifies answers or mutates content - it only
         decides WHAT to practice next; the ladder below remains the
-        fallback, and FT-E verification is untouched. With no personalizer
+        fallback, and Platrixa verification is untouched. With no personalizer
         the selection is byte-identical to 15I-H behavior.
         """
         s = self._session(session_id)
@@ -573,7 +573,7 @@ class PracticeEngine:
         """Deterministic verification: student entry vs canonical verified
         journal. Returns (outcome, mistake_category, verification_status,
         metadata). No accounting rules live here - the canonical journal
-        is the FT-E engine's verified output."""
+        is the Platrixa engine's verified output."""
         metadata: Dict[str, Any] = {
             "reference": question["question_id"],
             "concept_key": question.get("concept_key"),

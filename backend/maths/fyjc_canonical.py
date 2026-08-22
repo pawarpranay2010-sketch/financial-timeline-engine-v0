@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15D - FYJC Canonical Formula / Rule Registry
 backend/maths/fyjc_canonical.py
 

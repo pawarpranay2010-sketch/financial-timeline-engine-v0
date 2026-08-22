@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-S - Ambiguous Multi-Amount Safety Gate
 scripts/fte_fyjc_15s_ambiguous_amount_safety_test.py
 
@@ -15,7 +15,7 @@ accounting authority boundary: resolve_transaction_amounts() now
 requires EVERY stated figure to be consumed by a deterministic role
 (list price, an explicit trade/cash discount amount, a stated payment,
 a full-settlement pair, or a started-business asset component). A
-figure with no role makes the transaction REVIEW_REQUIRED - FT-E never
+figure with no role makes the transaction REVIEW_REQUIRED - Platrixa never
 picks one amount over another by position ('first amount wins' is
 forbidden), and the multi-transaction merge path surfaces the merged
 refusal instead of a stale per-segment status.

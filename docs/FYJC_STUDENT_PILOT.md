@@ -1,11 +1,11 @@
 # FYJC STUDENT PILOT — SPRINT 15 STAGE-1 REPORT
 
-**Financial Timeline Engine (FT-E) · Sprint 15 · 2026-08-10**
+**Platrixa (Platrixa) · Sprint 15 · 2026-08-10**
 **Stage 1 of the pilot progression: Internal benchmark — 40 real FYJC questions.**
 
-The sprint question is not «Can FT-E solve FYJC questions?» but
-**«Can an FYJC student use FT-E independently, trust the result for the right
-reasons, verify it themselves, and recognize when FT-E should not answer?»**
+The sprint question is not «Can Platrixa solve FYJC questions?» but
+**«Can an FYJC student use Platrixa independently, trust the result for the right
+reasons, verify it themselves, and recognize when Platrixa should not answer?»**
 
 This document is the Stage-1 evidence base for that question. It reports what
 the engine honestly does on 40 authentic FYJC-style questions, classifies every
@@ -61,7 +61,7 @@ Run with `python3 scripts/fte_fyjc_pilot_test.py`.
 
 | ID | Topic | Expected | Actual | Match | Classification |
 |----|-------|----------|--------|:----:|----------------|
-| P01 | Profit/Loss (prose) | DERIVED 4000.00 | BLOCKED | ✗ | Extraction failure — narrative prose has no `Concept: value` lines, so the 12D normalizer reads nothing; FT-E refuses rather than guesses (correct behaviour, gap: prose parsing) |
+| P01 | Profit/Loss (prose) | DERIVED 4000.00 | BLOCKED | ✗ | Extraction failure — narrative prose has no `Concept: value` lines, so the 12D normalizer reads nothing; Platrixa refuses rather than guesses (correct behaviour, gap: prose parsing) |
 | P02 | Loss | DERIVED 200.00 | DERIVED 200.00 | ✓ | — |
 | P03 | Profit Margin | DERIVED 20.00% | DERIVED 20.00% | ✓ | — (mistake variant 25 → INCORRECT ✓) |
 | P04 | Current Ratio | DERIVED 2.00 | DERIVED 2.00 | ✓ | — |
@@ -146,7 +146,7 @@ INCORRECT.
 
 ### Blocker A — unsafe confident answers on reverse/"find the missing figure" questions (P07, P08)
 
-A student asks *«Find the missing figure: Expenses»* — FT-E's classifier routes
+A student asks *«Find the missing figure: Expenses»* — Platrixa's classifier routes
 the request to `profit`, the graph echoes the given `Profit: 200` fact (no
 formula runs), and the UI shows a confident **«⚙️ C++ verified — 200.00»**
 answer to a question whose answer is 800. Same class on P08 (asks for Profit,
@@ -162,7 +162,7 @@ gets Profit Margin 20.00).
 
 ### Blocker B — ROE/EPS route to `profit` (P05, P06, P18)
 
-`Calculate ROE` / `Calculate EPS` are classified as `profit`, so FT-E asks for
+`Calculate ROE` / `Calculate EPS` are classified as `profit`, so Platrixa asks for
 Revenue/Expenses instead of Equity/Shares Outstanding. It refuses correctly
 (status BLOCKED) but for the wrong reason — the student cannot supply the right
 inputs and does not learn what is missing.
@@ -203,13 +203,13 @@ silently added.
 ## 8. Student pilot protocol (Stages 2–7)
 
 ### Stage 2 — Personal use
-Use FT-E on real revision questions; log every refusal and confusion point.
+Use Platrixa on real revision questions; log every refusal and confusion point.
 
 ### Stage 3 — Zero-Hint Protocol (3–5 close FYJC friends)
 
 Give them **only**:
 
-> «Use FT-E to check this question.»
+> «Use Platrixa to check this question.»
 
 Do NOT explain the interface. Observe silently. Record for each student:
 
@@ -218,7 +218,7 @@ Do NOT explain the interface. Observe silently. Record for each student:
 | Where they hesitate | timestamp + screen |
 | Buttons they don't understand | widget name |
 | Terminology they don't understand | exact word |
-| Understands «What FT-E understood»? | yes/no/partial |
+| Understands «What Platrixa understood»? | yes/no/partial |
 | Understands the reasoning steps? | yes/no/partial |
 | Understands the C++ verification banner? | yes/no/partial |
 | Understands BLOCKED / REVIEW_REQUIRED? | yes/no/partial |
@@ -312,7 +312,7 @@ second engine, no LLM, no Python fallback was added.
   impossible to produce DERIVED/VERIFIED with `formula_id=None`. Dependency
   concepts are canonicalized to their registry spelling so reverse paths
   resolve. |
-| `backend/maths/fyjc_student_flow.py` | "What FT-E understood" shows the
+| `backend/maths/fyjc_student_flow.py` | "What Platrixa understood" shows the
   canonical **Requested:** concept; uncertain requests surface as
   REVIEW_REQUIRED with a "which figure?" next action. |
 | `backend/maths/student_sandbox.py` | Deterministic prose extraction

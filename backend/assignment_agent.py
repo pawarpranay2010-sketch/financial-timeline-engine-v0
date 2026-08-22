@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12.1 - Zero-Panic Assignment Onboarding & Excel Guidance
 
 * The Assignment Agent NEVER presents an ambiguous assignment parse as a
@@ -1546,7 +1546,7 @@ def _choices_for(stage: str, workspace: Dict[str, Any], metric: Optional[str], a
             "hint": "What each of the seven sheets is for.",
         })
         choices.append({
-            "id": "continue", "label": "Continue in FT-E",
+            "id": "continue", "label": "Continue in Platrixa",
             "hint": "Keep working in the workspace without downloading.",
         })
         choices.append(_back_choice(stage))
@@ -1686,7 +1686,7 @@ def _suggested_questions(
     elif stage == STAGE_EXCEL:
         add("excel.evidence", "Verify evidence first")
         add("excel.understand", "Understand the model")
-        add("continue", "Continue in FT-E")
+        add("continue", "Continue in Platrixa")
     elif stage == STAGE_MEMO:
         add("memo.conclusion", "Go to your conclusion")
     elif stage == STAGE_CONCLUSION:

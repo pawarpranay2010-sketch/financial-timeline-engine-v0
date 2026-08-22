@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12F - C++ Mathematical Authority & Student Production Readiness Gate
 
 The release gate that proves:
@@ -113,7 +113,7 @@ def F(value, **extra):
 # ---------------------------------------------------------------------------
 # Independent mathematical oracle (Sprint 12F section 7)
 # ---------------------------------------------------------------------------
-# Manually verified expectations. The oracle NEVER calls FT-E's solver -
+# Manually verified expectations. The oracle NEVER calls Platrixa's solver -
 # every expected value below is a hand-computed constant.
 ORACLE = [
     # (label, formula_id or target, facts, expected_display, kind)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 9.1 - Mandatory Memo Path Coverage
 
 Sprint 9.1 MUST support and verify BOTH memo paths:

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-UI - Student Interaction Contract (backend projection)
 backend/maths/fyjc_ui_contract.py
 
@@ -66,7 +66,7 @@ STATUS_PRESENTATION: Dict[str, Dict[str, str]] = {
         "headline": "✓ Verified",
         "tone": "green",
         "summary": (
-            "FT-E deterministically interpreted this question and verified "
+            "Platrixa deterministically interpreted this question and verified "
             "the result against the transaction facts."
         ),
     },
@@ -75,7 +75,7 @@ STATUS_PRESENTATION: Dict[str, Dict[str, str]] = {
         "headline": "One thing to clarify",
         "tone": "amber",
         "summary": (
-            "FT-E needs one precise clarification before it can finish - it "
+            "Platrixa needs one precise clarification before it can finish - it "
             "never guesses."
         ),
     },
@@ -90,19 +90,19 @@ STATUS_PRESENTATION: Dict[str, Dict[str, str]] = {
     },
     NOT_SUPPORTED: {
         "label": "Not supported yet",
-        "headline": "FT-E can't process this yet",
+        "headline": "Platrixa can't process this yet",
         "tone": "neutral",
         "summary": (
-            "This belongs to an accounting topic FT-E does not yet verify. "
+            "This belongs to an accounting topic Platrixa does not yet verify. "
             "It refuses instead of guessing a treatment."
         ),
     },
     BLOCKED: {
         "label": "Safety boundary",
-        "headline": "FT-E stopped before answering",
+        "headline": "Platrixa stopped before answering",
         "tone": "red",
         "summary": (
-            "FT-E could not safely determine the accounting meaning. It "
+            "Platrixa could not safely determine the accounting meaning. It "
             "will not invent facts, amounts, parties or history."
         ),
     },
@@ -273,7 +273,7 @@ def build_confidence_gate(result: Dict[str, Any],
         "question": "How should the GST on this transaction be recorded?",
         "segment": segment_text,
         "dependency": (
-            "The GST rate is stated without a tax scheme. FT-E cannot tell "
+            "The GST rate is stated without a tax scheme. Platrixa cannot tell "
             "whether the transaction is intra-state (CGST + SGST) or "
             "inter-state (IGST), and the choice changes the journal."
         ),

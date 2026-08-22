@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 10 - University Finance Assignment Workspace + Working Model
 
 A DETERMINISTIC workspace layer on top of the existing verified Fact

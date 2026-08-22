@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12C - Evidence-Aware Decision Graph & Production Integration
 backend/maths/excel_compiler.py
 

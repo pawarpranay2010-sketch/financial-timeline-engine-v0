@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 8 - Module A: Layout-Aware Financial Document Extraction
 
 A SAFE, additive enrichment layer over the existing extraction pipeline.

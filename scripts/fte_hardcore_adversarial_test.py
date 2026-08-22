@@ -1,4 +1,4 @@
-"""FT-E Hardcore Full-App Adversarial Verification (post-Sprint 11).
+"""Platrixa Hardcore Full-App Adversarial Verification (post-Sprint 11).
 
 Verification/hardening exercise ONLY — no production code is modified.
 

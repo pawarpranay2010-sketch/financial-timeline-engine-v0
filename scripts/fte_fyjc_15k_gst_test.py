@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-K - Deterministic GST Accounting Engine & Verified GST Coverage
 scripts/fte_fyjc_15k_gst_test.py
 

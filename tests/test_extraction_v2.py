@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - Test Suite
 
 Covers the 20 required scenarios:

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Module 3
 
 Event Extraction Engine

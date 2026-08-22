@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15 - Stage 4: FYJC Requested-Concept Routing Regression Gate
 scripts/fte_fyjc_routing_regression_test.py
 

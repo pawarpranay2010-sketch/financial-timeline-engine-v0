@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15H - Real-World FYJC BK Validation & Adversarial Hardening
 backend/maths/fyjc_bk_15h.py
 
@@ -12,7 +12,7 @@ oracle and provides the hardening machinery:
   1. FAILURE TAXONOMY (spec 8)  - the 15 primary categories, one per case.
   2. EXTRACTION BOUNDARY (spec 6) - a deterministic Good / Uncertain /
      Unusable gate over OCR/extraction signals. A flagged unreadable digit
-     NEVER produces a parsed amount - FT-E never invents a digit.
+     NEVER produces a parsed amount - Platrixa never invents a digit.
   3. STUDENT-ERROR CATEGORIES (spec 5) - wraps the 15F verifiers
      (verify_student_journal / verify_student_final / ledger / TB) and
      attaches the SPECIFIC error category + affected component - never a
@@ -112,7 +112,7 @@ def classify_extraction_quality(transcription: str,
 
     A flagged unreadable digit NEVER yields a parsed amount: it forces at
     least UNCERTAIN, and UNUSABLE when combined with a structurally
-    unusable signal. FT-E never invents a digit.
+    unusable signal. Platrixa never invents a digit.
     """
     signals = dict(signals or {})
     reasons: List[str] = []
@@ -125,7 +125,7 @@ def classify_extraction_quality(transcription: str,
     uncertain: List[str] = []
 
     if signals.get("unreadable_digit"):
-        uncertain.append("A digit could not be read reliably - FT-E will "
+        uncertain.append("A digit could not be read reliably - Platrixa will "
                          "not guess it.")
     if signals.get("severe_blur"):
         unusable.append("The image is severely blurred.")
@@ -180,7 +180,7 @@ def _extraction_refusal(state: str, reasons: List[str]) -> Dict[str, Any]:
         "resolved": False,
         "why_not": "The input is unusable: " + "; ".join(reasons) + ".",
         "next_action": ("Provide a clearer image or type the transaction "
-                        "text directly. FT-E does not guess unreadable "
+                        "text directly. Platrixa does not guess unreadable "
                         "digits or missing transaction text."),
         "journal": None, "ledger": None, "trial_balance": None,
         "debit_lines": [], "credit_lines": [], "calculation_records": [],

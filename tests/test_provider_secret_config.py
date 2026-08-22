@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 AI / Provider Configuration — Secret-Loading Regression Tests
 
 Verifies the production-blocker fix: provider keys are loaded through

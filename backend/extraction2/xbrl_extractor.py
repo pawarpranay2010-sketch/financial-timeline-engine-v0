@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - XBRL Extractor
 
 Structured fact extraction from SEC XBRL / Inline XBRL documents.

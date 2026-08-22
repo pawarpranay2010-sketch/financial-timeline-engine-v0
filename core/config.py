@@ -1,6 +1,6 @@
 # core/config.py
 """
-Central configuration for the Financial Timeline Engine.
+Central configuration for the Platrixa.
 
 Two concerns live here, kept deliberately separate (Single Responsibility):
 

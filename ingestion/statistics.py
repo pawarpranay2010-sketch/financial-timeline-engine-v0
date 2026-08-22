@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Module 2 - Document Statistics
 
 Provides detailed analytics for uploaded documents.

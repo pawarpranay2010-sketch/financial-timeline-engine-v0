@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15G - Deterministic Financial Engineering Layer
 backend/maths/fyjc_15g.py
 
@@ -41,11 +41,11 @@ Deliverables in this module:
                                 arithmetic relationships). Original wording
                                 is preserved separately for auditability.
                                 Insufficient confidence -> REVIEW_REQUIRED;
-                                FT-E never guesses.
+                                Platrixa never guesses.
        canonical_equivalent() - two wordings converge to the same IR.
 
   3. LINEAGE PASSPORT
-       build_lineage()        - machine-readable chain answering: what FT-E
+       build_lineage()        - machine-readable chain answering: what Platrixa
                                 received, understood, which canonical
                                 concepts/rules/formulas were selected, which
                                 values were supplied vs calculated, what was
@@ -339,7 +339,7 @@ def canonicalize_bk(question: str) -> Dict[str, Any]:
             "original_wording": text,
             "why": (
                 (pattern.get("why") or "") if refuse else
-                "The wording is ambiguous - FT-E never guesses a canonical "
+                "The wording is ambiguous - Platrixa never guesses a canonical "
                 "treatment."
             ),
         }
@@ -1155,7 +1155,7 @@ def _lines_key(lines: List[Dict[str, Any]]) -> List[Tuple[str, str, str]]:
 
 def build_lineage(question: str, out: Dict[str, Any]) -> Dict[str, Any]:
     """Machine-readable lineage chain for a resolved case, answering:
-    1 what FT-E received, 2 what it understood, 3 which canonical concepts
+    1 what Platrixa received, 2 what it understood, 3 which canonical concepts
     were selected, 4 which rule/formula was used, 5 which values were
     supplied vs calculated, 6 what was sent to C++, 7 what C++ verified,
     8 why the result is VERIFIED. A supplied fact never appears as a

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 7 - Deterministic Formula Doer / Formula Engine
 
 A centralized, deterministic financial calculation layer.
@@ -65,7 +65,7 @@ except Exception:  # pragma: no cover
 
 
 # ---------------------------------------------------------------
-# Status model (adapted from the existing FT-E classification)
+# Status model (adapted from the existing Platrixa classification)
 # ---------------------------------------------------------------
 
 STATUS_REPORTED = "reported"

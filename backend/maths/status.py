@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Deterministic Maths & Financial Reasoning Engine
 backend/maths/status.py
 
@@ -61,7 +61,7 @@ ALL_STATUSES = (
     BLOCKED,
 )
 
-# Friendly labels (mirroring the FT-E status-label convention).
+# Friendly labels (mirroring the Platrixa status-label convention).
 STATUS_LABELS = {
     VERIFIED: "🟢 VERIFIED",
     DERIVED: "🔵 DERIVED",
@@ -136,7 +136,7 @@ def is_computable(status: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# FT-E compatibility
+# Platrixa compatibility
 # ---------------------------------------------------------------------------
 
 # Mapping from the existing Formula Engine status vocabulary to the

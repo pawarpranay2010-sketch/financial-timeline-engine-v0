@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-TX - FYJC Accounting Capability Expansion & Transaction
 Completeness
 scripts/fte_fyjc_15tx_capability_expansion_test.py

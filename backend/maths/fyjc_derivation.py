@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15D - Controlled Formula Derivation Engine
 backend/maths/fyjc_derivation.py
 
@@ -623,7 +623,7 @@ def ensure_derivation_valid(concept: str) -> Tuple[bool, Optional[DerivedPath], 
         return True, first, "validated derivation path"
     return False, None, (
         f"No validated derivation path exists for {concept!r} through the "
-        "registered canonical relationships - FT-E refuses rather than "
+        "registered canonical relationships - Platrixa refuses rather than "
         "guess."
     )
 
@@ -734,8 +734,8 @@ def describe_derivation(concept: str, sol: Any) -> Optional[Dict[str, Any]]:
 
 DERIVATION_REFUSAL_REASON = (
     "The requested figure is a variable of a registered FYJC relationship, "
-    "but FT-E could not derive and validate a safe solution path for it. "
-    "FT-E never guesses - re-check the question wording and the registered "
+    "but Platrixa could not derive and validate a safe solution path for it. "
+    "Platrixa never guesses - re-check the question wording and the registered "
     "relationship."
 )
 

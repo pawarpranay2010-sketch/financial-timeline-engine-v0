@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-R - Student-Facing Explanation & UI Simplification Gate
 scripts/fte_fyjc_15r_ui_test.py
 
@@ -30,7 +30,7 @@ hardened_bookkeeping_outcome -> reason_bk_question -> canonical journal):
      INCORRECT (15I-P exact comparison preserved).
   F. Real Streamlit AppTest - the exact TD case renders without the
      blocking 'Almost there' panel, shows VERIFIED + ₹22,500 + the
-     journal table, the FT-E verified badge, the 'Why?' explanation with
+     journal table, the Platrixa verified badge, the 'Why?' explanation with
      'Credit the giver', and the 'Show detailed reasoning' / 'Check my
      answer' expanders; the verify widgets still work (exact CORRECT,
      wrong amount INCORRECT).
@@ -363,7 +363,7 @@ def test_f_apptest():
           "Credit incomes and gains" not in md, md[:200])
     check("F.11 trade discount breakdown shown",
           "List price" in md and "Net amount" in md, md[:200])
-    check("F.12 FT-E verified this entry", "FT-E verified this entry" in md,
+    check("F.12 Platrixa verified this entry", "Platrixa verified this entry" in md,
           md[:200])
     labels = [e.label for e in at.expander]
     check("F.13 detailed reasoning expander present",

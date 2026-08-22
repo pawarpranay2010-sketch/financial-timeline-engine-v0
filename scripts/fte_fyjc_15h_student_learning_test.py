@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-H - Student Practice / Mistake Ledger / Mastery Engine gate
 scripts/fte_fyjc_15h_student_learning_test.py
 
@@ -517,10 +517,10 @@ for name, qkey, dr_a, dr_m, cr_a, cr_m, (cat, out) in adv_checks:
 # 7 repeated 5x / 8 mistake then success (K/L already)
 # 9 MASTERED -> REVIEW (O already)
 # 10 LLM wrong canonical (U already)
-# 11 teacher expected conflict with FT-E: canonical wins.
+# 11 teacher expected conflict with Platrixa: canonical wins.
 st2 = eng.create_session("adv_teacher", MODE_NORMAL)
 t = submit(eng, st2, Q["q_credit_sale"], ["Ram"], [12000], ["Cash"], [12000])
-check("A11 teacher-style expectation cannot override FT-E canonical",
+check("A11 teacher-style expectation cannot override Platrixa canonical",
       t["outcome"] == OUTCOME_INCORRECT
       and t["mistake_category"] == "ACCOUNT_SELECTION",
       f"{t['outcome']} {t['mistake_category']}")

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Module 2 - Intelligent Document Chunking
 """
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 14 - FYJC Student End-to-End UI Integration Acceptance Gate
 scripts/fte_fyjc_student_ui_test.py
 
@@ -8,7 +8,7 @@ The release gate for the student-facing FYJC Study / Verify workflow.
 It proves the complete student journey works end to end:
 
     Photo / PDF / typed question
-      -> what FT-E understood (editable)
+      -> what Platrixa understood (editable)
       -> Maths | Book-Keeping flow (steps 1-6 / 1-8)
       -> C++ mathematical authority confirmation
       -> independent verification (correct + incorrect student work)
@@ -187,9 +187,9 @@ def test_b_understanding():
           str(u.get("interpretation")))
 
     # B2: Sprint 15I-O - the FYJC book-keeping Study / Verify flow now
-    # routes through the hardened FT-E engine, which nets trade / cash
+    # routes through the hardened Platrixa engine, which nets trade / cash
     # discounts deterministically (15E/15I-L). A rate/discount token in a
-    # BOOK-KEEPING question is therefore no longer a "FT-E will not net
+    # BOOK-KEEPING question is therefore no longer a "Platrixa will not net
     # it" concern: the flow resolves it and shows the canonical net
     # journal. The concern surface is retained for the MATHS domain
     # (where no discount-netting formula is registered).

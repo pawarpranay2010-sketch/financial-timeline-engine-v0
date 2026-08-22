@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 AI Financial Assistant — conversational layer
 
 This module is a *conversational UI/orchestration layer* on top of the

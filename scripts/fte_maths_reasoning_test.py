@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12B - Contextual Financial Reasoning Layer
 
 Comprehensive deterministic test suite for the reasoning layer built on the

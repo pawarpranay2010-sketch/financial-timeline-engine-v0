@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-BILLS - Bills of Exchange Authority
 backend/maths/fyjc_bills.py
 
@@ -757,7 +757,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         bills["duplicate_correction"] = True
         return _refusal(
             REVIEW_REQUIRED,
-            "The bill is stated to be dishonoured more than once. FT-E "
+            "The bill is stated to be dishonoured more than once. Platrixa "
             "never books a duplicate correction - state the dishonour "
             "exactly once.",
             "Re-type the dishonour once with the exact amount and party.",
@@ -769,7 +769,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             REVIEW_REQUIRED,
             "The bill's origin is ambiguous: the question both states that "
             "the bill was received from a party and that it was drawn by "
-            "another. FT-E never guesses whose bill it is.",
+            "another. Platrixa never guesses whose bill it is.",
             "State the bill's origin exactly once (received from X, or "
             "drawn by X on Y).",
             bills)
@@ -780,7 +780,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         return _refusal(
             REVIEW_REQUIRED,
             "The bill's drawer is not established: the question states that "
-            "a bill was accepted but not who drew it. FT-E never invents "
+            "a bill was accepted but not who drew it. Platrixa never invents "
             "the party who drew the bill.",
             "State the acceptance as 'X accepted Y's bill' or include the "
             "drawing (e.g. 'Y drew a bill on X which X accepted').",
@@ -796,7 +796,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             "The dishonoured bill's prior state and amount cannot be "
             "established: the question does not record the bill being "
             "drawn, received, discounted or otherwise brought into the "
-            "books. FT-E never reconstructs missing bill history.",
+            "books. Platrixa never reconstructs missing bill history.",
             "Enter the bill's creation (e.g. 'Received a bill of exchange "
             "from Ram for Rs.10,000') and then its dishonour.",
             bills)
@@ -811,7 +811,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             "The bill amount cannot be established deterministically: the "
             "stated amounts do not resolve to exactly one bill amount "
             "after the noting charges / discount / proceeds roles are "
-            "consumed. FT-E never guesses which amount belongs to the bill.",
+            "consumed. Platrixa never guesses which amount belongs to the bill.",
             "State the bill amount exactly once (e.g. 'a bill of "
             "Rs.10,000').",
             bills)
@@ -828,7 +828,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         return _refusal(
             REVIEW_REQUIRED,
             f"A stated rate ({m.group(1)}%) has no deterministic role in "
-            "this bills-of-exchange transaction. FT-E never silently "
+            "this bills-of-exchange transaction. Platrixa never silently "
             "ignores a stated rate.",
             "Remove the rate, or state it as the bank-discount rate "
             "('discounted at X% per annum').",
@@ -838,7 +838,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
     if noting is not None and not dishonoured:
         return _refusal(
             REVIEW_REQUIRED,
-            "Noting charges are stated, but no dishonour is stated. FT-E "
+            "Noting charges are stated, but no dishonour is stated. Platrixa "
             "never books noting charges without the dishonour that "
             "justifies them.",
             "State the bill's dishonour together with the noting charges.",
@@ -850,7 +850,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         return _refusal(
             REVIEW_REQUIRED,
             "The bill's acceptor differs from its drawee. In the FYJC "
-            "bills-of-exchange surface the acceptor is the drawee; FT-E "
+            "bills-of-exchange surface the acceptor is the drawee; Platrixa "
             "never infers which party owes the bill.",
             "State the drawee and acceptor as the same party.",
             bills)
@@ -859,14 +859,14 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         return _refusal(
             REVIEW_REQUIRED,
             "The accepted bill's drawer cannot be established "
-            "deterministically from the wording. FT-E never invents the "
+            "deterministically from the wording. Platrixa never invents the "
             "party who drew the bill.",
             "State who drew the bill that was accepted.",
             bills)
     if roles["endorsee"] is None and endorsed:
         return _refusal(
             REVIEW_REQUIRED,
-            "The endorsee of the bill is not established. FT-E never "
+            "The endorsee of the bill is not established. Platrixa never "
             "invents the creditor to whom the bill was endorsed.",
             "State the party to whom the bill was endorsed.",
             bills)
@@ -884,7 +884,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                 (f"The stated due date ({due_str}) contradicts the draw "
                  f"date ({draw_str}) plus the stated period "
                  f"({period[0]} {period[1]}) and the FYJC three days of "
-                 f"grace (due {computed_str}). FT-E never journals a bill "
+                 f"grace (due {computed_str}). Platrixa never journals a bill "
                  "whose dates contradict."),
                 "Correct the draw date, the period or the due date so the "
                 "maturity mathematics reconcile.",
@@ -907,7 +907,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                     (f"INVALID_INPUT_MATH: the discounted proceeds "
                      f"(Rs.{_fmt_amt(proceeds)}) exceed the bill amount "
                      f"(Rs.{_fmt_amt(bill_amt)}), implying a negative "
-                     "bank discount. FT-E never journals an impossible "
+                     "bank discount. Platrixa never journals an impossible "
                      "discount."),
                     "Correct the proceeds or the bill amount.",
                     bills)
@@ -918,7 +918,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                      f"(Rs.{_fmt_amt(proceeds)}) imply a discount of "
                      f"Rs.{_fmt_amt(derived)}, which contradicts the "
                      f"stated rate ({rate}% p.a. for {period[0]} "
-                     f"{period[1]} = Rs.{_fmt_amt(computed)}). FT-E never "
+                     f"{period[1]} = Rs.{_fmt_amt(computed)}). Platrixa never "
                      "journals a contradictory discount."),
                     "Correct the proceeds or the rate/period so the "
                     "discount reconciles.",
@@ -940,7 +940,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                     (f"INVALID_INPUT_MATH: the stated discount "
                      f"(Rs.{_fmt_amt(discount_stated)}) contradicts the "
                      f"stated rate ({rate}% p.a. for {period[0]} "
-                     f"{period[1]} = Rs.{_fmt_amt(computed)}). FT-E never "
+                     f"{period[1]} = Rs.{_fmt_amt(computed)}). Platrixa never "
                      "journals a contradictory discount."),
                     "Correct the discount amount or the rate/period so "
                     "they reconcile.",
@@ -971,7 +971,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                 REVIEW_REQUIRED,
                 "The bank discount cannot be computed: the question does "
                 "not state the discount rate and period, the discounted "
-                "proceeds, or the discount amount. FT-E never silently "
+                "proceeds, or the discount amount. Platrixa never silently "
                 "assumes a rate or a maturity period.",
                 "State the discount rate and period (e.g. 'at 12% per "
                 "annum for 3 months'), the discounted proceeds, or the "
@@ -981,7 +981,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             return _refusal(
                 INVALID_INPUT_MATH,
                 "INVALID_INPUT_MATH: the resolved bank discount is zero or "
-                "negative. FT-E never journals a discount that does not "
+                "negative. Platrixa never journals a discount that does not "
                 "reduce the proceeds.",
                 "Correct the rate, period or stated amounts.",
                 bills)
@@ -1063,7 +1063,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
         return _refusal(
             REVIEW_REQUIRED,
             "The bill's outcome is ambiguous: the question states both that "
-            "the bill was collected and that it was honoured. FT-E never "
+            "the bill was collected and that it was honoured. Platrixa never "
             "journals two settlements for one bill.",
             "State the bill's outcome exactly once.",
             bills)
@@ -1086,7 +1086,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             NOT_SUPPORTED,
             "The bill was endorsed to the endorsee, so its later "
             "settlement (honour / dishonour / collection) is recorded in "
-            "the endorsee's books, not the endorser's. FT-E does not "
+            "the endorsee's books, not the endorser's. Platrixa does not "
             "invent that record.",
             "Enter the endorsement only, or state the bill's outcome from "
             "the endorsee's perspective.",
@@ -1098,7 +1098,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             REVIEW_REQUIRED,
             "The question does not establish a bill lifecycle event "
             "(drawn / received / accepted / discounted / endorsed / "
-            "collection / honour / dishonour). FT-E never invents a bill "
+            "collection / honour / dishonour). Platrixa never invents a bill "
             "transaction.",
             "Re-type the question with an explicit bill event.",
             bills)
@@ -1108,7 +1108,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
             "The stated bill lifecycle violates the valid state "
             "transitions (DRAWN -> ACCEPTED -> HELD / DISCOUNTED / "
             "ENDORSED / SENT_FOR_COLLECTION -> HONOURED / DISHONOURED). "
-            "FT-E never journals an invalid bill transition.",
+            "Platrixa never journals an invalid bill transition.",
             "Re-type the bill lifecycle in a valid order.",
             bills)
 
@@ -1131,7 +1131,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                 REVIEW_REQUIRED,
                 "The bill's drawee / acceptor is not established, so the "
                 "Bills Receivable entry cannot be credited to anyone. "
-                "FT-E never invents the party who owes the bill.",
+                "Platrixa never invents the party who owes the bill.",
                 "State the party on whom the bill was drawn (e.g. 'on "
                 "Mohan').",
                 bills)
@@ -1226,7 +1226,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
                 REVIEW_REQUIRED,
                 "The dishonoured bill's drawee / acceptor is not "
                 "established, so the reinstated debtor cannot be named. "
-                "FT-E never invents the party who owes the bill.",
+                "Platrixa never invents the party who owes the bill.",
                 "State the party on whom the bill was drawn.",
                 bills)
         total_claim = bill_amt + (noting or Decimal(0))
@@ -1310,7 +1310,7 @@ def _resolve_bills(text: str) -> Dict[str, Any]:
     if debit_total != credit_total:
         return _refusal(
             REVIEW_REQUIRED,
-            "The resolved bills journals do not balance. FT-E never "
+            "The resolved bills journals do not balance. Platrixa never "
             "reports an unbalanced bill treatment as verified.",
             "Re-check the stated amounts and re-type the question.",
             bills)

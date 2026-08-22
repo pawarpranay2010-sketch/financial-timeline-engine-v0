@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15G - Deterministic Financial Engineering Layer Gate
 scripts/fte_fyjc_15g_test.py
 
@@ -390,10 +390,10 @@ def test_lineage() -> None:
     lineage = build_lineage(
         "Purchased goods for cash Rs.16,000.",
         reason_bk_question("Purchased goods for cash Rs.16,000."))
-    check("lineage: 'what FT-E received' is recorded",
+    check("lineage: 'what Platrixa received' is recorded",
           bool(lineage["received"].get("raw_input")),
           "missing raw input")
-    check("lineage: 'what FT-E understood' is recorded",
+    check("lineage: 'what Platrixa understood' is recorded",
           bool(lineage["understood"].get("pattern_key")),
           str(lineage["understood"]))
     check("lineage: 'which canonical concepts' is recorded",

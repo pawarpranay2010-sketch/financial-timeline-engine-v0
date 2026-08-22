@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-SPEC - Specialized Accounting Authorities
 backend/maths/fyjc_single_entry.py
 
@@ -24,7 +24,7 @@ Boundaries (Sprint 15I-SPEC Part C):
     movement pattern). A lone 'drawings' / 'withdrew' transaction is
     NEVER routed here (it stays an ordinary transaction);
   * exactly ONE unknown variable is solved; two or more unknowns refuse
-    with REVIEW_REQUIRED - FT-E never invents a value;
+    with REVIEW_REQUIRED - Platrixa never invents a value;
   * a stated profit that contradicts the computed net-worth movement is
     INVALID_INPUT_MATH (a deterministic input error, zero journal
     lines).
@@ -384,7 +384,7 @@ def _resolve_single_entry(text: str) -> Dict[str, Any]:
                     "A statement of affairs gives assets and liabilities, "
                     "but the period (opening or closing) cannot be "
                     "determined and both capital figures are already "
-                    "stated. FT-E never guesses which statement applies "
+                    "stated. Platrixa never guesses which statement applies "
                     "to which period.")
         elif len(assets) == 2 and len(liabilities) == 2:
             if opening is None:
@@ -423,7 +423,7 @@ def _resolve_single_entry(text: str) -> Dict[str, Any]:
         if len(missing) > 1:
             return refusal(
                 "The profit is stated but more than one capital value is "
-                "missing - FT-E cannot solve the net-worth relationship "
+                "missing - Platrixa cannot solve the net-worth relationship "
                 "with more than one unknown.")
         if len(missing) == 1:
             target = missing[0]
@@ -491,7 +491,7 @@ def _resolve_single_entry(text: str) -> Dict[str, Any]:
                 (f"The stated profit Rs.{_fmt_amt(profit_stated)} "
                  f"contradicts the net-worth movement "
                  f"Rs.{_fmt_amt(computed)} (closing capital + drawings - "
-                 "fresh capital - opening capital). FT-E never reports a "
+                 "fresh capital - opening capital). Platrixa never reports a "
                  "contradictory figure as verified."),
                 "Re-check the stated capital, drawings and profit "
                 "figures.",
@@ -509,7 +509,7 @@ def _resolve_single_entry(text: str) -> Dict[str, Any]:
         return refusal(
             "The profit is not stated and fewer than four of (opening "
             "capital, closing capital, drawings, fresh capital) are "
-            "established - FT-E cannot solve the net-worth relationship "
+            "established - Platrixa cannot solve the net-worth relationship "
             "with more than one unknown.")
     profit = closing + drawings - fresh - opening
     formula = (f"closing capital + drawings - fresh capital - opening "
@@ -541,7 +541,7 @@ def _resolve_single_entry(text: str) -> Dict[str, Any]:
             INVALID_INPUT_MATH,
             "The question asks for a loss but the net-worth movement is a "
             "profit - the stated direction contradicts the computed "
-            "figure. FT-E never reports a contradictory figure as "
+            "figure. Platrixa never reports a contradictory figure as "
             "verified.",
             "Re-check the stated capital and drawings figures.",
             payload)

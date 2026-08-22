@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15F - FYJC Book-Keeping Ch.1-3 Textbook Pattern Expansion Gate
 scripts/fte_fyjc_bk15f_test.py
 

@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Real Apple FY2024 10-K — Current Ratio Fixture Pipeline Test
 
 Runs the REAL Apple 10-K (Inline XBRL HTML fixture) through the actual

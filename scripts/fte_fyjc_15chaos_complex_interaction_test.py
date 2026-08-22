@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-CHAOS — Complex Transaction & Interaction Stress
 scripts/fte_fyjc_15chaos_complex_interaction_test.py
 

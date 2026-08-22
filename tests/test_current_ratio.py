@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Current Ratio — Regression Test Suite
 
 Current Ratio = Current Assets / Current Liabilities

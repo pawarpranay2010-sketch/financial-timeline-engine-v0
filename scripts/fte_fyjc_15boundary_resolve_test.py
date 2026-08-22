@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-BOUNDARY-RESOLVE — Multi-Payment, GST Resolution & Confidence Gate Closure
 scripts/fte_fyjc_15boundary_resolve_test.py
 

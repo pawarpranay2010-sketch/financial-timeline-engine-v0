@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15H - Real-World FYJC BK Validation & Adversarial Hardening Gate
 scripts/fte_fyjc_15h_test.py
 

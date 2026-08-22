@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 14 - FYJC Student UI smoke test (Streamlit AppTest)
 scripts/fte_fyjc_student_ui_apptest.py
 

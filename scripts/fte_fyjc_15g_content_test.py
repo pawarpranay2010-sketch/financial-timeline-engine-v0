@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-G - Content Compiler / Verified Question Bank gate
 scripts/fte_fyjc_15g_content_test.py
 
 Drives the REAL 15I-G modules (backend/maths/fyjc_content_compiler.py +
-backend/maths/fyjc_question_bank.py) through the REAL FT-E engine. Tests
+backend/maths/fyjc_question_bank.py) through the REAL Platrixa engine. Tests
 A-R from the sprint spec:
 
   A. Valid question ingestion

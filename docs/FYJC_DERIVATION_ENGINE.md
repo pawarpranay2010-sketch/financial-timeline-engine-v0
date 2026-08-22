@@ -1,6 +1,6 @@
 # FYJC Formula / Rule Derivation & Textbook Coverage Engine (Sprint 15D)
 
-The FYJC Student section of FT-E is extended from a collection of manually
+The FYJC Student section of Platrixa is extended from a collection of manually
 registered question patterns into a **registry-driven reasoning system**:
 
 ```

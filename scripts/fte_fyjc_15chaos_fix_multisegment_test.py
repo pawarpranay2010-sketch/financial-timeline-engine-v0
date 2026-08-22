@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-CHAOS-FIX — Multi-Segment & 8-Line Transaction Closure
 scripts/fte_fyjc_15chaos_fix_multisegment_test.py
 

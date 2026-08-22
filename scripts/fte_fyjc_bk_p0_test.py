@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15C - FYJC BK P0 Transaction Semantics & Basic Journal Hardening
 scripts/fte_fyjc_bk_p0_test.py
 

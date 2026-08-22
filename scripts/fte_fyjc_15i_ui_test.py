@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-I - Student Practice UI + Teacher Dashboard Integration Gate
 scripts/fte_fyjc_15i_ui_test.py
 
@@ -18,7 +18,7 @@ engines and the REAL 15I-G bank (Sprint 15I-I spec section 12).
                        provenance display data, approved integrity
   D. Safety          - canonical journal cannot be overridden from the UI
                        path, teacher expected journal cannot override
-                       FT-E, unapproved content never reaches practice,
+                       Platrixa, unapproved content never reaches practice,
                        no LLM path, no silent repair, immutable attempts
   E. UI render smoke - the real Streamlit UI modules render and drive a
                        practice session through AppTest with temp storage
@@ -451,7 +451,7 @@ def test_d_safety():
     check("D.27 canonical journal unchanged",
           canonical_before == canonical_after, "")
 
-    # D.28 teacher expected journal cannot override FT-E: a wrong
+    # D.28 teacher expected journal cannot override Platrixa: a wrong
     # teacher_expected_journal forces REVIEW_REQUIRED, never APPROVED.
     wrong = bank.create_question(
         "Sold goods to Ram on credit ₹9,000.", source_type="manual",
@@ -467,7 +467,7 @@ def test_d_safety():
             approved = True
         except ValueError:
             approved = False
-    check("D.28 teacher journal cannot override FT-E",
+    check("D.28 teacher journal cannot override Platrixa",
           st_wrong == STATUS_REVIEW_REQUIRED and not approved,
           f"status={st_wrong} approved={approved}")
 

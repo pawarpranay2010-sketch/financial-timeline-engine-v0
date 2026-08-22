@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-SPEC - Specialized Accounting Authorities
 backend/maths/fyjc_joint_venture.py
 
@@ -20,7 +20,7 @@ Boundaries (Sprint 15I-SPEC Part B):
     be computed, unless an unambiguous default (equal sharing) is
     explicitly established by the input;
   * a contribution whose form (cash vs goods) is not stated refuses -
-    FT-E never guesses the basis;
+    Platrixa never guesses the basis;
   * when both venturers are active subjects and no books-holder is
     named, the first-named venturer in 'X and Y entered into a joint
     venture' is the books-holder (explicit 'in the books of X' /
@@ -535,7 +535,7 @@ def _resolve_joint_venture(text: str) -> Dict[str, Any]:
     if contributed and not facts["contribution_goods"] and \
             not facts["contribution_cash"]:
         return refuse("A contribution is stated but its form (goods or "
-                      "cash) is not established - FT-E never guesses the "
+                      "cash) is not established - Platrixa never guesses the "
                       "basis.")
 
     if not contributed and not facts["purchases"] and not facts["expenses"] \
@@ -550,7 +550,7 @@ def _resolve_joint_venture(text: str) -> Dict[str, Any]:
                            facts["contribution_cash"])):
         return refuse("A co-venturer is required to record this "
                       "joint-venture transaction but none is established "
-                      "- FT-E never invents a party.")
+                      "- Platrixa never invents a party.")
 
     def _who_text(who: str) -> str:
         if who == "firm":
@@ -588,7 +588,7 @@ def _resolve_joint_venture(text: str) -> Dict[str, Any]:
     if facts["commission_rate"] is not None:
         if facts["sales"] is None:
             return refuse("Commission is stated as a rate but the sales "
-                          "amount is not established - FT-E cannot "
+                          "amount is not established - Platrixa cannot "
                           "compute it without the sales.")
         commission = facts["sales"] * facts["commission_rate"] / Decimal(100)
         debit_total += commission
@@ -621,7 +621,7 @@ def _resolve_joint_venture(text: str) -> Dict[str, Any]:
             return refuse(
                 "The venture made a profit but the profit-sharing basis "
                 "is not established (no ratio and no 'shared equally' "
-                "wording). FT-E never invents a sharing rule.")
+                "wording). Platrixa never invents a sharing rule.")
         record("co_venturer_share", "Co-venturer's share of profit",
                co_share,
                (f"profit x {_fmt_amt(facts['co_share_fraction'])}"
@@ -785,7 +785,7 @@ def _resolve_joint_venture(text: str) -> Dict[str, Any]:
     if facts["settlement"]:
         if co is None:
             return refuse("A settlement is stated but no co-venturer "
-                          "party is established - FT-E never invents a "
+                          "party is established - Platrixa never invents a "
                           "party.")
         if co_share is None and profit is not None and profit > 0:
             return refuse(
@@ -970,7 +970,7 @@ def joint_venture_outcome(question: str,
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The resolved joint-venture journal does not balance. "
-                "FT-E never reports an unbalanced entry as verified.",
+                "Platrixa never reports an unbalanced entry as verified.",
                 "Re-check the stated amounts and re-type the question.",
                 result.get("joint_venture"))
     return result

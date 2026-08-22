@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Extraction 2.0 - Negative Detector
 
 Correctly distinguishes accounting negatives written in parentheses

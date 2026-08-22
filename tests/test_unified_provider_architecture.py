@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Unified AI Provider Architecture — Regression Test Suite
 
 Verifies the canonical provider unification (backend/gateway becomes the

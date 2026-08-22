@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 13 - FYJC Student Maths & Book-Keeping Readiness Gate
 scripts/fte_fyjc_readiness_test.py
 
 The release gate for the FYJC student-facing layer on top of the
 existing 12A-12F deterministic architecture. It proves that a student
-who understands finance but knows nothing about FT-E's internals can:
+who understands finance but knows nothing about Platrixa's internals can:
 
     Photo/Question -> Extraction -> Interpretation -> Accounting
     Reasoning -> C++ Calculation -> Answer -> Explanation
 
 and receives a correct evidence-backed result when sufficient evidence
 exists, or a clear, deterministic explanation (never a guessed value)
-when FT-E cannot safely calculate.
+when Platrixa cannot safely calculate.
 
 Areas verified (Sprint 13 section H):
     1.  FYJC question classification

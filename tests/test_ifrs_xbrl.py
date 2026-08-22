@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Fix #1 - IFRS XBRL Support - Test Suite
 
 Proves:

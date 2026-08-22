@@ -1,6 +1,6 @@
 # Sprint 15G — Deterministic Financial Engineering Layer
 
-**FT-E (Financial Timeline Engine)** · `docs/FYJC_15G_DETERMINISTIC_LAYER.md`
+**Platrixa (Platrixa)** · `docs/FYJC_15G_DETERMINISTIC_LAYER.md`
 
 Sprint 15G hardens the existing FYJC reasoning pipeline (Sprint 15E + 15F,
 which remain the untouched baseline) with HFT + Private Equity engineering
@@ -100,7 +100,7 @@ Bought goods on credit from Rahul ₹22,000.   ==   Bought goods on account from
 ```
 
 Insufficient confidence (unrecognised wording, ambiguous cash/credit, a party
-placeholder that resolved to nothing) ⇒ **REVIEW_REQUIRED** — FT-E never
+placeholder that resolved to nothing) ⇒ **REVIEW_REQUIRED** — Platrixa never
 guesses a canonical concept. `canonical_equivalent(a, b)` asserts convergence.
 
 A small pipeline-consistency fix was required here (15G-required, verified
@@ -116,8 +116,8 @@ of the two equivalent wordings converges. Journal lines are unchanged (15E and
 Every confident output carries `build_lineage(...)`, which answers the eight
 lineage questions:
 
-1. **What did FT-E receive?** — `received.raw_input` + segments.
-2. **What did FT-E understand?** — `understood.pattern_key/label/requested_operation`.
+1. **What did Platrixa receive?** — `received.raw_input` + segments.
+2. **What did Platrixa understand?** — `understood.pattern_key/label/requested_operation`.
 3. **Which canonical concepts were selected?** — `canonical` (ids + accounts).
 4. **Which rule/formula was used?** — `rules_used` + `formulas_used`.
 5. **Which values were supplied vs calculated?** — `values[]` each tagged

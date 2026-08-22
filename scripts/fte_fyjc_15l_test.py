@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-L - Deterministic Trade Discount & Cash Discount Engine
 scripts/fte_fyjc_15l_test.py
 

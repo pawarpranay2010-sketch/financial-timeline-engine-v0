@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 8 - Module A: Layout-Aware Financial Document Extraction test suite.
 
 Builds REAL PDFs (reportlab) and asserts the enrichment layer behaves

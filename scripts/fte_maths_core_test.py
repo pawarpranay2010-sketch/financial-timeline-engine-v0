@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 12A - Core Deterministic Mathematics Engine (Phase 1)
 
 Comprehensive deterministic test suite for backend/maths:

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-M - Verified Automatic Question Generation gate
 scripts/fte_fyjc_15m_question_generation_test.py
 
 Proves the 15I-M generation pipeline (backend/maths/fyjc_question_generator.py)
 against the REAL production stack: the 15I-G Content Compiler / Question
-Bank lifecycle, the hardened FT-E reasoning engine (sole accounting
+Bank lifecycle, the hardened Platrixa reasoning engine (sole accounting
 authority), the 15I-J/K/L released capabilities and the 15I-H practice
 engine.
 
@@ -24,12 +24,12 @@ Sections (sprint spec section 17):
   K. duplicate rejection
   L. variant acceptance
   M. meaning-changing variant rejection
-  N. LLM wrong-journal suggestion cannot override FT-E
+  N. LLM wrong-journal suggestion cannot override Platrixa
   O. LLM metadata cannot bypass verification
   P. generator cannot directly approve
   Q. dry-run does not mutate bank
   R. provenance persistence
-  S. canonical journal comes from FT-E
+  S. canonical journal comes from Platrixa
   T. deterministic batch statistics
   U. historical QuestionBank integrity
   V. 15I-J compatibility
@@ -243,7 +243,7 @@ j_rep = run_live(bank=bank(), candidates=[
     {"raw_text": "Purchased goods for cash Rs.10,000, GST inclusive."}])
 check("J.1 invalid/unsupported GST never approved", j_rep["approved"] == 0,
       str(j_rep))
-# request-level: a GST request is refused when FT-E cannot verify the rate
+# request-level: a GST request is refused when Platrixa cannot verify the rate
 try:
     generate_batch(request=GenerationRequest(
         count=2, seed=1, transaction_type="GST_PURCHASE_CASH",
@@ -293,7 +293,7 @@ check("M.2 rejection reason names the variant boundary",
       str(m_rep["candidate_records"]))
 
 # ------------------------------------------------------------------ N
-print("\n--- N. LLM wrong-journal suggestion cannot override FT-E ---")
+print("\n--- N. LLM wrong-journal suggestion cannot override Platrixa ---")
 
 
 def wrong_llm(req):
@@ -399,10 +399,10 @@ check("R.3 generator version recorded", gen.get("generator_version")
       == GENERATOR_VERSION, str(gen.get("generator_version")))
 
 # ------------------------------------------------------------------ S
-print("\n--- S. Canonical journal comes from FT-E ---")
+print("\n--- S. Canonical journal comes from Platrixa ---")
 s_q = r_bank.get_question(r_rep["candidate_records"][0]["question_id"])
 s_verify = verify_question(s_q["raw_text"])
-check("S.1 expected journal == FT-E verified journal",
+check("S.1 expected journal == Platrixa verified journal",
       s_q["expected_journal"] == s_verify["expected_journal"],
       str(s_q["expected_journal"]))
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-Q - Deterministic Trade-Discount Study/Verify Reachability Gate
 scripts/fte_fyjc_15q_td_reachability_test.py
 
 Proves that every supported Trade Discount (TD) form reaches the hardened
-FT-E engine through the REAL Study / Verify production path:
+Platrixa engine through the REAL Study / Verify production path:
 
   Streamlit UI -> run_fyjc_student_flow -> run_fyjc_accounting_flow ->
   hardened_bookkeeping_outcome -> reason_bk_question -> canonical journal

@@ -93,7 +93,7 @@ sentence -> `REVIEW_REQUIRED` (submit the entry as lines instead).
 | State | Meaning | What the student sees |
 |---|---|---|
 | 🟢 VERIFIED | Treatment/value determinable from approved evidence | final answer, formula/rule, verified inputs, concise working, C++ authority, source/lineage |
-| 🟠 REVIEW REQUIRED | Ambiguous or conflicting - FT-E cannot safely decide | what is inconsistent, why FT-E cannot decide, what to check. **No guessed answer.** |
+| 🟠 REVIEW REQUIRED | Ambiguous or conflicting - Platrixa cannot safely decide | what is inconsistent, why Platrixa cannot decide, what to check. **No guessed answer.** |
 | 🔴 BLOCKED | Essential evidence missing | what is missing, why it is required, what to provide next (e.g. "Upload the relevant balance-sheet page or enter the verified value manually") |
 
 Every outcome exposes: `what`, `how`, `inputs`, `where`, `status`, `why_not`,

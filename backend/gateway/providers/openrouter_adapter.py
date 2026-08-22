@@ -37,7 +37,7 @@ class OpenRouterAdapter(ProviderAdapter):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://streamlit.app",
-            "X-Title": "Financial Timeline Engine",
+            "X-Title": "Platrixa",
         }
         messages = []
         if system_prompt:

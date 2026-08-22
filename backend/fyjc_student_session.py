@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-C - FYJC Student UI session & refresh persistence
 backend/fyjc_student_session.py
 

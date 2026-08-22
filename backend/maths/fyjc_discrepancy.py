@@ -1,5 +1,5 @@
 """
-Financial Timeline Engine
+Platrixa
 Sprint 15I-DISC - Discrepancy Authority
 backend/maths/fyjc_discrepancy.py
 
@@ -33,7 +33,7 @@ Supported surfaces:    * BRS (bank reconciliation) single-case adjustments: a ch
     (or the sale/purchase it settled), the authority reverses the
     original bank effect and reinstates the customer's balance at the
     SAME stated amount. A dishonour with NO reliable prior record
-    refuses - FT-E never reconstructs missing ledger history.
+    refuses - Platrixa never reconstructs missing ledger history.
   * Omitted transactions whose transaction type, accounts and amount
     are all deterministically established (purchase / sale / return /
     expense). The missing canonical accounting effect is generated;
@@ -567,7 +567,7 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
             "REVIEW_REQUIRED",
             ("The question states the same cheque was dishonoured more than "
              "once. A second dishonour would duplicate the reversal of the "
-             "first - FT-E never posts a double correction, and it does not "
+             "first - Platrixa never posts a double correction, and it does not "
              "guess which dishonour the question means."),
             "State the dishonour of ONE cheque (or enter a new cheque "
             "separately).",
@@ -579,7 +579,7 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
         return _refusal(
             "REVIEW_REQUIRED",
             "The dishonoured cheque has no stated amount (or several "
-            "amounts whose roles are unclear). FT-E never invents the "
+            "amounts whose roles are unclear). Platrixa never invents the "
             "amount of a bounced cheque.",
             "State the cheque amount, e.g. 'Ram's cheque of Rs.5,000 was "
             "dishonoured.'",
@@ -591,7 +591,7 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
         return _refusal(
             "REVIEW_REQUIRED",
             "The dishonoured cheque does not name whose cheque it was. "
-            "FT-E never invents a party identity.",
+            "Platrixa never invents a party identity.",
             "Name the party, e.g. 'Received a cheque from Ram for Rs.10,000 "
             "which was dishonoured.'",
             discrepancy)
@@ -603,10 +603,10 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
         discrepancy["history"]["established"] = False
         return _refusal(
             "REVIEW_REQUIRED",
-            (f"FT-E has no reliable record that the Rs.{_fmt_amt(cheque_amount)} "
+            (f"Platrixa has no reliable record that the Rs.{_fmt_amt(cheque_amount)} "
              f"cheque was previously received or recorded - the question "
              f"states only the dishonour, not the original receipt/deposit. "
-             "FT-E never reconstructs the missing ledger history and never "
+             "Platrixa never reconstructs the missing ledger history and never "
              "treats a dishonoured cheque as a new unrelated receipt."),
             ("Enter the original receipt first (e.g. 'Received a cheque from "
              f"{party} for Rs.{_fmt_amt(cheque_amount)}'), then state the "
@@ -631,7 +631,7 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
         if sale_value is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The question states several amounts and FT-E cannot tell "
+                "The question states several amounts and Platrixa cannot tell "
                 "which is the sale value and which is the cheque. It never "
                 "guesses the split.",
                 "State the sale value and the cheque amount explicitly.",
@@ -652,7 +652,7 @@ def _resolve_dishonour(text: str, brs_context: bool) -> Dict[str, Any]:
         return _refusal(
             "REVIEW_REQUIRED",
             "The question combines a purchase with a RECEIVED cheque that "
-            "was dishonoured. FT-E cannot determine the settlement structure "
+            "was dishonoured. Platrixa cannot determine the settlement structure "
             "deterministically - it never guesses.",
             "Enter the purchase and the cheque receipt as separate "
             "transactions.",
@@ -739,7 +739,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
     amount = _single_amount(text)
 
     # -- 0. list-form BRS (a particulars statement) is NOT supported --------
-    # FT-E resolves ONE adjustment per question; a statement built from a
+    # Platrixa resolves ONE adjustment per question; a statement built from a
     # list of particulars (with several adjustments) would silently drop
     # items. NOT_SUPPORTED, never a partial statement.
     if re.search(r"\b(?:particulars|the\s+following|given\s+below|"
@@ -747,7 +747,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
         return _refusal(
             "NOT_SUPPORTED",
             ("A full Bank Reconciliation Statement from a list of "
-             "particulars is not supported yet - FT-E resolves ONE "
+             "particulars is not supported yet - Platrixa resolves ONE "
              "adjustment at a time (an unpresented cheque, an uncleared "
              "cheque, bank charges, bank interest, a direct bank payment, "
              "or a dishonoured cheque)."),
@@ -761,14 +761,14 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
                 "REVIEW_REQUIRED",
                 ("The cheque was received but not yet presented to the bank "
                  "for collection - it is a cheque in hand, not an unpresented "
-                 "cheque in the BRS sense. FT-E does not guess whether it "
+                 "cheque in the BRS sense. Platrixa does not guess whether it "
                  "was banked."),
                 "State whether the cheque was deposited or kept in hand.",
                 discrepancy)
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The unpresented cheque has no single stated amount. FT-E "
+                "The unpresented cheque has no single stated amount. Platrixa "
                 "never invents the amount of a timing difference.",
                 "State the cheque amount.",
                 discrepancy)
@@ -796,7 +796,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The uncleared cheque has no single stated amount. FT-E "
+                "The uncleared cheque has no single stated amount. Platrixa "
                 "never invents the amount of a timing difference.",
                 "State the cheque amount.",
                 discrepancy)
@@ -824,7 +824,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The bank charges have no single stated amount. FT-E never "
+                "The bank charges have no single stated amount. Platrixa never "
                 "invents the amount.",
                 "State the bank-charges amount.",
                 discrepancy)
@@ -862,7 +862,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The bank interest has no single stated amount. FT-E never "
+                "The bank interest has no single stated amount. Platrixa never "
                 "invents the amount.",
                 "State the interest amount.",
                 discrepancy)
@@ -920,7 +920,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The direct bank payment has no single stated amount. FT-E "
+                "The direct bank payment has no single stated amount. Platrixa "
                 "never invents the amount.",
                 "State the payment amount.",
                 discrepancy)
@@ -929,7 +929,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The direct bank payment does not name which expense the "
-                "bank paid (rent, insurance, electricity, ...). FT-E never "
+                "bank paid (rent, insurance, electricity, ...). Platrixa never "
                 "invents the expense account.",
                 "Name the expense paid by the bank, e.g. 'Insurance premium "
                 "paid directly by the bank.'",
@@ -962,7 +962,7 @@ def _resolve_brs(text: str) -> Dict[str, Any]:
     return _refusal(
         "NOT_SUPPORTED",
         ("A full Bank Reconciliation Statement from a list of particulars "
-         "is not supported yet - FT-E resolves ONE adjustment at a time "
+         "is not supported yet - Platrixa resolves ONE adjustment at a time "
          "(an unpresented cheque, an uncleared cheque, bank charges, bank "
          "interest, a direct bank payment, or a dishonoured cheque)."),
         "Enter each BRS adjustment separately as its own question.",
@@ -991,7 +991,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
     if amount is None:
         return _refusal(
             "REVIEW_REQUIRED",
-            "The omitted transaction has no single stated amount. FT-E never "
+            "The omitted transaction has no single stated amount. Platrixa never "
             "invents the amount of a missing entry.",
             "State the amount of the omitted transaction.",
             discrepancy)
@@ -1010,7 +1010,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
                 return _refusal(
                     "REVIEW_REQUIRED",
                     "The omitted customer-return does not name the customer. "
-                    "FT-E never invents a party.",
+                    "Platrixa never invents a party.",
                     "Name the customer, e.g. 'Goods returned by Mohan worth "
                     "Rs.1,200.'",
                     discrepancy)
@@ -1029,7 +1029,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
                 return _refusal(
                     "REVIEW_REQUIRED",
                     "The omitted supplier-return does not name the supplier. "
-                    "FT-E never invents a party.",
+                    "Platrixa never invents a party.",
                     "Name the supplier, e.g. 'Returned goods worth Rs.800 to "
                     "Rahul.'",
                     discrepancy)
@@ -1047,7 +1047,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The omitted return does not say who returned the goods (or "
-                "to whom they were returned). FT-E never guesses the "
+                "to whom they were returned). Platrixa never guesses the "
                 "direction of a return.",
                 "State the return fully, e.g. 'Goods returned by Mohan worth "
                 "Rs.1,200' or 'Returned goods to Rahul worth Rs.800.'",
@@ -1067,7 +1067,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             if party is None:
                 return _refusal(
                     "REVIEW_REQUIRED",
-                    "The omitted purchase does not name the supplier. FT-E "
+                    "The omitted purchase does not name the supplier. Platrixa "
                     "never invents a party.",
                     "Name the supplier, e.g. 'Purchased goods from Rahul for "
                     "Rs.20,000.'",
@@ -1106,7 +1106,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The omitted purchase does not state whether it was for cash "
-                "or on credit (and from whom). FT-E never guesses the mode.",
+                "or on credit (and from whom). Platrixa never guesses the mode.",
                 "Add 'for cash' or 'on credit from <name>' to the "
                 "description.",
                 discrepancy)
@@ -1125,7 +1125,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             if party is None:
                 return _refusal(
                     "REVIEW_REQUIRED",
-                    "The omitted sale does not name the customer. FT-E never "
+                    "The omitted sale does not name the customer. Platrixa never "
                     "invents a party.",
                     "Name the customer, e.g. 'Sold goods to Ram for "
                     "Rs.10,000.'",
@@ -1160,7 +1160,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The omitted sale does not state whether it was for cash or "
-                "on credit (and to whom). FT-E never guesses the mode.",
+                "on credit (and to whom). Platrixa never guesses the mode.",
                 "Add 'for cash' or 'on credit to <name>' to the description.",
                 discrepancy)
         discrepancy["notes"].append(
@@ -1181,7 +1181,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The omitted expense does not name a registered expense "
-                "account. FT-E never invents an expense.",
+                "account. Platrixa never invents an expense.",
                 "Name the expense (rent, salaries, insurance, electricity, "
                 "...).",
                 discrepancy)
@@ -1209,7 +1209,7 @@ def _resolve_omission(text: str) -> Dict[str, Any]:
     return _refusal(
         "REVIEW_REQUIRED",
         ("The omitted transaction's type and accounts cannot be "
-         "deterministically established from the wording (FT-E cannot tell "
+         "deterministically established from the wording (Platrixa cannot tell "
          "what was purchased/sold/returned or from/to whom). It never "
          "guesses the missing entry."),
         "State the omitted transaction fully, e.g. 'Purchased goods from "
@@ -1274,7 +1274,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if not m:
             return _refusal(
                 "REVIEW_REQUIRED",
-                ("A trial-balance discrepancy is stated, but FT-E only "
+                ("A trial-balance discrepancy is stated, but Platrixa only "
                  "rectifies a book-total error it can read deterministically "
                  "(an undercast/overcast Sales or Purchases book). It never "
                  "invents the error."),
@@ -1286,7 +1286,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The undercast/overcast amount could not be read. FT-E never "
+                "The undercast/overcast amount could not be read. Platrixa never "
                 "invents it.",
                 "State the amount of the book-total error.",
                 discrepancy)
@@ -1368,7 +1368,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The wrong-account error has no single stated amount. FT-E "
+                "The wrong-account error has no single stated amount. Platrixa "
                 "never invents the amount.",
                 "State the amount of the wrongly-posted entry.",
                 discrepancy)
@@ -1433,7 +1433,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
                 "REVIEW_REQUIRED",
                 ("The rectification says an entry was posted to the wrong "
                  "account, but the correct account cannot be derived from "
-                 "the transaction wording. FT-E never guesses which account "
+                 "the transaction wording. Platrixa never guesses which account "
                  "was meant."),
                 "Name the correct account explicitly (e.g. '... instead of "
                 "Rahul').",
@@ -1443,7 +1443,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The wrong-account error has no single stated amount. FT-E "
+                "The wrong-account error has no single stated amount. Platrixa "
                 "never invents the amount.",
                 "State the amount of the wrongly-posted entry.",
                 discrepancy)
@@ -1506,7 +1506,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The wrong-side error has no single stated amount. FT-E "
+                "The wrong-side error has no single stated amount. Platrixa "
                 "never invents the amount.",
                 "State the amount of the wrongly-posted entry.",
                 discrepancy)
@@ -1550,7 +1550,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if amount is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The wrong-side error has no single stated amount. FT-E "
+                "The wrong-side error has no single stated amount. Platrixa "
                 "never invents the amount.",
                 "State the amount of the wrongly-posted entry.",
                 discrepancy)
@@ -1596,7 +1596,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if recorded is None:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The recorded amount could not be read. FT-E never invents "
+                "The recorded amount could not be read. Platrixa never invents "
                 "it.",
                 "State the recorded amount explicitly.",
                 discrepancy)
@@ -1604,7 +1604,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         if len(others) != 1:
             return _refusal(
                 "REVIEW_REQUIRED",
-                "FT-E cannot tell which stated amount is the correct one. "
+                "Platrixa cannot tell which stated amount is the correct one. "
                 "It never guesses the correct amount.",
                 "State the recorded amount and the correct amount "
                 "explicitly.",
@@ -1615,7 +1615,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
             return _refusal(
                 "REVIEW_REQUIRED",
                 "The wrong-amount entry's accounts cannot be derived from "
-                "the transaction wording. FT-E never invents the accounts.",
+                "the transaction wording. Platrixa never invents the accounts.",
                 "State the transaction fully (e.g. 'Purchased goods from "
                 "Rahul for Rs.20,000 ...').",
                 discrepancy)
@@ -1675,7 +1675,7 @@ def _resolve_rectification(text: str) -> Dict[str, Any]:
         "REVIEW_REQUIRED",
         ("This is a rectification question, but no error is established by "
          "the wording (no wrongly-posted account, no wrong amount, no wrong "
-         "side, no omission, and no stated trial-balance discrepancy). FT-E "
+         "side, no omission, and no stated trial-balance discrepancy). Platrixa "
          "never invents an error to rectify."),
         "Describe the error explicitly - what was recorded, what should "
         "have been recorded, and (only when established) the trial-balance "
@@ -1718,7 +1718,7 @@ def _resolve(topics: List[str], text: str) -> Dict[str, Any]:
         "REVIEW_REQUIRED",
         ("This question combines several discrepancy topics ("
          + ", ".join(sorted(topic_set))
-         + "). FT-E cannot deterministically pick one treatment without "
+         + "). Platrixa cannot deterministically pick one treatment without "
          "dropping or re-interpreting a stated fact - it never guesses."),
         "Enter each discrepancy correction separately.",
         {"authority": "discrepancy-authority", "topic": sorted(topic_set),
@@ -1793,7 +1793,7 @@ def discrepancy_outcome(question: str,
                      for l in credit_lines), Decimal(0)):
             return _refusal(
                 "REVIEW_REQUIRED",
-                "The resolved discrepancy journal does not balance. FT-E "
+                "The resolved discrepancy journal does not balance. Platrixa "
                 "never reports an unbalanced correction as verified.",
                 "Re-check the stated amounts and re-type the question.",
                 result.get("discrepancy"))

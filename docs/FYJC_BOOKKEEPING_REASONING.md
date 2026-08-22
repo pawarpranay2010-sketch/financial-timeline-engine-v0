@@ -1,6 +1,6 @@
 # FYJC BOOK-KEEPING REASONING — SPRINT 15B IMPLEMENTATION REPORT
 
-**Component:** Financial Timeline Engine (FT-E) — FYJC Student section
+**Component:** Platrixa (Platrixa) — FYJC Student section
 **Sprint:** 15B — Book-Keeping Question Understanding & Reasoning Hardening
 **Date:** 2026-08-10
 **Verdict:** ✅ **PASS** — deterministic, C++-authoritative, hallucination-safe
@@ -10,7 +10,7 @@
 ## 1. Objective
 
 Harden the complete FYJC Book-Keeping & Accountancy reasoning pipeline so
-FT-E can understand realistic FYJC textbook-style questions and produce a
+Platrixa can understand realistic FYJC textbook-style questions and produce a
 correct, student-readable solution:
 
 ```
@@ -34,7 +34,7 @@ Photo / PDF / typed question
                                                  authority_state == cpp)
   -> refusal boundaries                         (BLOCKED / REVIEW_REQUIRED /
                                                  NOT_SUPPORTED)
-  -> student-facing "What FT-E understood"
+  -> student-facing "What Platrixa understood"
 ```
 
 ## 2. Files
@@ -67,7 +67,7 @@ party is named: `Sold goods to Mohan for cash` is a CASH sale
 ₹15,000` produces exactly Furniture A/c Dr / Cash A/c Cr. The asset account
 comes only from the asset word actually present; a question naming two
 assets (`Purchased machinery and furniture for cash`) is refused as
-ambiguous - FT-E never guesses the split. Regression-tested against the
+ambiguous - Platrixa never guesses the split. Regression-tested against the
 Furniture/Machinery/Building/Vehicle hallucination class.
 
 **Traditional FYJC reasoning (section 3).** Every account is classified
@@ -146,7 +146,7 @@ pass:
 | 3 | `Purchased stationery for cash` / `Paid telephone bill` → NOT_SUPPORTED | Added stationery-purchase and telephone-bill expense phrases + account words |
 | 4 | Bare `Purchased goods.` refused as NOT_SUPPORTED | Now REVIEW_REQUIRED ("does not say whether for cash or on credit") |
 | 5 | `Received ... discount` questions routed to INCOME_RECEIVED | Discount phrases owned exclusively by the DISCOUNT_RECEIVED pattern |
-| 6 | Explicit-discount settlements showed a misleading paid/credit split in "What FT-E understood" | The naive split is skipped when an explicit discount settles the account |
+| 6 | Explicit-discount settlements showed a misleading paid/credit split in "What Platrixa understood" | The naive split is skipped when an explicit discount settles the account |
 | 7 | `Interest on drawings charged` routed to the cash-withdrawal pattern (bare `drawings` phrase) | Dedicated pre-rule so `interest on drawings` is its own transaction |
 | 8 | `Goods taken for personal use` credited Cash instead of Purchases | `goods ... personal use` pre-rule wins over the generic withdrawal phrase |
 | 9 | `Office equipment` purchase produced a phantom `Equipment` account | `named_assets` is span-aware: a phrase inside a longer match is not a second asset |
@@ -193,7 +193,7 @@ The Unit-Test-1 scope is the **first three FYJC Book-Keeping & Accountancy
 chapters** as declared by the golden benchmark
 (`backend/maths/fyjc_bk_15e_benchmark.py`):
 
-| Ch | Chapter | Scope in FT-E |
+| Ch | Chapter | Scope in Platrixa |
 |----|---------|---------------|
 | 1 | Introduction to Book-Keeping & Accountancy | business entity, double entry, Real / Personal / Nominal classification |
 | 2 | Basic Accounting Terms / accounting equation | capital, drawings, debtors, creditors, purchases, sales, assets, expenses, incomes, discounts |
@@ -279,7 +279,7 @@ violations, deterministic & C++-authoritative
 
 ## F.1 Exact Ch.1–3 boundary (unchanged from 15E — never silently expanded)
 
-| Ch | Chapter | Scope in FT-E |
+| Ch | Chapter | Scope in Platrixa |
 |----|---------|---------------|
 | 1 | Introduction to Book-Keeping & Accountancy | business entity, double entry, Real / Personal / Nominal classification |
 | 2 | Basic Accounting Terms / accounting equation | capital, drawings, debtors, creditors, purchases, sales, assets, expenses, incomes, discounts |
