@@ -400,6 +400,99 @@ _HIST_FRACTION_AMOUNT_RE = re.compile(
 )
 
 
+
+# Sprint 20: "remaining" resolution helper
+_REMAINING_RE = re.compile(
+    r"\b(?:remaining|balance|the\s+rest|what\s+remains)\b",
+    re.IGNORECASE)
+
+
+def _resolve_remaining_text(
+    text: str,
+    historical_index: List[HistoricalReference],
+    current_tx_index: int,
+) -> Tuple[str, List[HistoricalReference], bool]:
+    """Resolve 'remaining goods from <entity>' by computing:
+    remaining = verified_purchase_amount - sum(verified_prior_sales)
+
+    Only resolves when:
+    - exactly one purchase from the entity exists in the historical index
+    - the prior sales amount is deterministically known
+
+    Returns (rewritten_text, references_used, is_ambiguous).
+    """
+    if not historical_index:
+        return text, [], False
+
+    low = text.lower()
+
+    if not _REMAINING_RE.search(low):
+        return text, [], False
+
+    # Extract entity from text
+    entities = _extract_entities_from_text(text)
+    if not entities:
+        entity_pat = re.compile(
+            r"(?:from|of|to|purchased\s+from|bought\s+from|sold\s+to)\s+"
+            r"([A-Z][A-Za-z.' ]+?)(?:\s|,|\.|;|$)", re.IGNORECASE
+        )
+        for m in entity_pat.finditer(text):
+            name = m.group(1).strip().rstrip(".,;:")
+            if name and len(name) > 1 and name.lower() not in (
+                "the", "a", "an", "his", "her", "its", "our", "their",
+                "goods", "stock", "inventory", "half", "balance",
+                "remaining", "purchase", "purchased"
+            ):
+                entities.append(name)
+
+    if not entities:
+        return text, [], False
+
+    prior_index = [ref for ref in historical_index
+                   if ref.transaction_index < current_tx_index]
+    if not prior_index:
+        return text, [], False
+
+    for entity in entities:
+        # Query all historical references for this entity
+        all_refs = _query_historical_index(
+            prior_index, HistoricalQuery(entity=entity))
+        if len(all_refs) < 2:
+            continue
+
+        # Identify base purchase = reference with the largest amount
+        purchase_ref = max(all_refs, key=lambda r: r.amount)
+        base_amount = purchase_ref.amount
+
+        # Compute remaining = purchase - sum(all other entity amounts)
+        total_prior_reductions = Decimal(0)
+        for ref in all_refs:
+            if ref.transaction_index == purchase_ref.transaction_index:
+                continue
+            total_prior_reductions += ref.amount
+
+        remaining = base_amount - total_prior_reductions
+        if remaining <= 0:
+            return text, [], False
+
+        remaining = remaining.quantize(Decimal("1"))
+
+        # Rewrite: replace "remaining/balance ... from <entity>" with amount
+        rewrite_pat = re.compile(
+            r"\b(?:remaining|balance|the\s+rest|what\s+remains)\b"
+            r"[^.]*?\b(?:of|from)\b"
+            r"[^.]*?\b" + re.escape(entity) + r"\b",
+            re.IGNORECASE
+        )
+
+        replacement = "goods worth Rs.{} from {}".format(remaining, entity)
+        new_text = rewrite_pat.sub(replacement, text, count=1)
+
+        if new_text != text:
+            return new_text, [purchase_ref], False
+
+    return text, [], False
+
 def _resolve_historical_text(
     text: str,
     historical_index: List[HistoricalReference],
@@ -426,6 +519,11 @@ def _resolve_historical_text(
     # Check for fraction-word patterns
     frac_match = _HIST_FRACTION_AMOUNT_RE.search(low)
     if not frac_match:
+        # Sprint 20: check for "remaining"/"balance" patterns
+        remaining_match = _REMAINING_RE.search(low)
+        if remaining_match:
+            return _resolve_remaining_text(
+                text, historical_index, current_tx_index)
         return text, [], False
 
     fraction_word = frac_match.group(1).lower()
