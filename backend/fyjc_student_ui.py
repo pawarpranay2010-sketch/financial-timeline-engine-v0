@@ -1825,6 +1825,241 @@ def _debug_enabled() -> bool:
     return os.environ.get("FTE_DEBUG_GRAPH", "").strip().lower() == "true"
 
 
+# ---------------------------------------------------------------------------
+# Sprint 17 -- Stateful Student Problem Workflow
+# ---------------------------------------------------------------------------
+
+from backend.fyjc_student_session import (
+    K_PROBLEM_WORKFLOW, K_PROBLEM_WORKFLOW_FP, K_PROBLEM_CURRENT_TX,
+    K_PROBLEM_DECISIONS, K_PROBLEM_DECISIONS_FP,
+)
+
+# Transaction status icons
+_TX_ICON = {
+    "VERIFIED": "\u2705",
+    "REVIEW_REQUIRED": "\u26a0\ufe0f",
+    "NOT_SUPPORTED": "\u274c",
+    "INVALID_INPUT_MATH": "\u274c",
+    "INFORMATIONAL_EVENT": "\u2139\ufe0f",
+    "OPENING_BALANCE": "\u2139\ufe0f",
+    "BLOCKED": "\u274c",
+}
+
+
+def _is_multi_tx_problem(projection):
+    """Check if this projection contains a problem-engine result."""
+    return bool(projection.get("problem_engine"))
+
+
+def _init_problem_workflow(question, projection):
+    """Initialize or refresh the problem workflow state from projection."""
+    pe = projection.get("problem_engine")
+    if not pe:
+        return
+    fp = question_fingerprint(question)
+    current_fp = st.session_state.get(K_PROBLEM_WORKFLOW_FP)
+    if current_fp == fp and K_PROBLEM_WORKFLOW in st.session_state:
+        return  # already initialized for this question
+    st.session_state[K_PROBLEM_WORKFLOW] = pe
+    st.session_state[K_PROBLEM_WORKFLOW_FP] = fp
+    st.session_state[K_PROBLEM_CURRENT_TX] = 0
+    st.session_state[K_PROBLEM_DECISIONS] = {}
+    st.session_state[K_PROBLEM_DECISIONS_FP] = fp
+
+
+def _get_workflow_state():
+    """Get the current problem workflow state."""
+    return st.session_state.get(K_PROBLEM_WORKFLOW, {})
+
+
+def _get_current_tx_index():
+    """Get the current transaction index the student is viewing."""
+    return st.session_state.get(K_PROBLEM_CURRENT_TX, 0)
+
+
+def _advance_to_next_tx():
+    """Advance the workflow to the next transaction."""
+    current = _get_current_tx_index()
+    wf = _get_workflow_state()
+    txns = wf.get("transactions", [])
+    if current < len(txns) - 1:
+        st.session_state[K_PROBLEM_CURRENT_TX] = current + 1
+
+
+def _tx_status_icon(status):
+    """Get the icon for a transaction status."""
+    return _TX_ICON.get(status, "\u25cb")
+
+
+def _render_problem_timeline(wf, current_idx):
+    """Render the transaction timeline/progress component."""
+    txns = wf.get("transactions", [])
+    total = len(txns)
+    if total == 0:
+        return
+
+    # Count completed
+    completed = sum(1 for t in txns if t["status"] in ("VERIFIED", "INFORMATIONAL_EVENT", "OPENING_BALANCE"))
+    st.markdown("**Accounting Problem**  \u2014  Progress: {} / {} transactions".format(completed, total))
+
+    for i, tx in enumerate(txns):
+        idx = tx["index"]
+        status = tx["status"]
+        text = tx["text"]
+        icon = _tx_status_icon(status)
+
+        if i < current_idx:
+            detail = text[:55] + ("..." if len(text) > 55 else "")
+            st.markdown("  {} T{}  {}".format(icon, idx, detail))
+        elif i == current_idx:
+            st.markdown("**\u25b6 T{}**  {}".format(idx, text[:60]))
+        else:
+            detail = text[:55] + ("..." if len(text) > 55 else "")
+            st.markdown("  \u25cb T{}  {}".format(idx, detail))
+
+
+def _render_tx_detail(tx, wf):
+    """Render the detailed view of a single transaction."""
+    idx = tx["index"]
+    status = tx["status"]
+    text = tx["text"]
+    ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
+
+    st.markdown("### Transaction {}".format(idx))
+
+    if status == "VERIFIED":
+        st.success("\u2705 Verified")
+    elif status == "REVIEW_REQUIRED":
+        st.warning("\u26a0\ufe0f Clarification required")
+    elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
+        st.error("\u274c {}".format(status.replace("_", " ").title()))
+    elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
+        st.info("\u2139\ufe0f {} \u2014 no accounting entry".format(ev.replace("_", " ").title()))
+
+    st.markdown("**Input:** {}".format(text))
+
+    if tx.get("historical_references"):
+        st.markdown("**Historical dependency detected:**")
+        for ref in tx["historical_references"]:
+            st.markdown(
+                "  - Referenced T{} ({}): Rs.{}".format(
+                    ref["transaction_index"], ref["event_type"], ref["amount"]
+                )
+            )
+
+    if tx.get("journal"):
+        j = tx["journal"]
+        dr = j.get("debit_lines", [])
+        cr = j.get("credit_lines", [])
+        if dr or cr:
+            st.markdown("**Journal:**")
+            for line in dr:
+                st.markdown("  DR {} Rs.{}".format(line["account"], line["amount"]))
+            for line in cr:
+                st.markdown("  CR {} Rs.{}".format(line["account"], line["amount"]))
+
+    if tx.get("state_delta"):
+        sd = tx["state_delta"]
+        st.markdown("**State change:**")
+        for d in sd["deltas"]:
+            arrow = "\u2191" if d["direction"] == "debit" else "\u2193"
+            st.markdown("  {} {}: Rs.{}".format(arrow, d["account"], d["amount"]))
+
+    if tx.get("why_not"):
+        st.markdown("**Why:** {}".format(tx["why_not"]))
+    if tx.get("next_action"):
+        st.markdown("**Next step:** {}".format(tx["next_action"]))
+
+
+def _render_problem_result(wf):
+    """Render the final cumulative problem result."""
+    problem_status = wf.get("problem_status", "UNKNOWN")
+    txns = wf.get("transactions", [])
+    ledger = wf.get("ledger_snapshot", {})
+
+    st.markdown("---")
+    st.markdown("## \U0001f389 Problem Complete")
+
+    if problem_status == "PROBLEM_VERIFIED":
+        st.success("**All transactions verified successfully.**")
+    elif problem_status == "PROBLEM_REVIEW_REQUIRED":
+        st.warning("**A transaction requires clarification.**")
+    elif problem_status == "PROBLEM_INVALID_INPUT_MATH":
+        st.error("**The problem contains a mathematical contradiction.**")
+    elif problem_status == "PROBLEM_NOT_SUPPORTED":
+        st.error("**The problem exceeds the supported accounting boundary.**")
+
+    st.markdown("### Transaction Summary")
+    for tx in txns:
+        icon = _tx_status_icon(tx["status"])
+        text = tx["text"][:50] + ("..." if len(tx["text"]) > 50 else "")
+        note = ""
+        if tx["status"] == "REVIEW_REQUIRED":
+            note = " (needs clarification)"
+        elif tx.get("event_type") in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
+            note = " (informational)"
+        st.markdown("  {} T{} {}{}".format(icon, tx["index"], text, note))
+
+    balances = ledger.get("balances", {})
+    if balances:
+        st.markdown("### Final Ledger")
+        for acc, bal in sorted(balances.items()):
+            sign = "+" if not bal.startswith("-") else ""
+            st.markdown("  **{}** Rs.{}{}".format(acc, sign, bal))
+
+    violations = wf.get("safety_violations", [])
+    if violations:
+        st.error("Safety violations: {}".format(violations))
+    else:
+        st.caption("Safety invariants: all zero")
+
+
+def _render_problem_workflow(question, projection):
+    """Main Sprint 17 workflow renderer for multi-transaction problems."""
+    pe = projection.get("problem_engine")
+    if not pe:
+        return
+
+    _init_problem_workflow(question, projection)
+    wf = _get_workflow_state()
+    current_idx = _get_current_tx_index()
+    txns = wf.get("transactions", [])
+
+    if not txns:
+        st.info("No transactions detected in this problem.")
+        return
+
+    _render_problem_timeline(wf, current_idx)
+    st.markdown("---")
+
+    if current_idx < len(txns):
+        tx = txns[current_idx]
+        _render_tx_detail(tx, wf)
+
+        col1, col2, col3 = st.columns([1, 2, 1])
+
+        with col1:
+            if current_idx > 0:
+                if st.button("\u25c0 Previous"):
+                    st.session_state[K_PROBLEM_CURRENT_TX] = current_idx - 1
+                    st.rerun()
+
+        with col3:
+            status = tx["status"]
+            is_completed = status in ("VERIFIED", "INFORMATIONAL_EVENT", "OPENING_BALANCE")
+
+            if status == "REVIEW_REQUIRED":
+                st.info("This transaction needs clarification before proceeding.")
+            elif is_completed and current_idx < len(txns) - 1:
+                if st.button("Next \u25b6"):
+                    _advance_to_next_tx()
+                    st.rerun()
+            elif is_completed and current_idx == len(txns) - 1:
+                st.success("All transactions processed!")
+    else:
+        _render_problem_result(wf)
+
+
 def _render_debug_graph(projection: Dict[str, Any]) -> None:
     """Read-only developer surface over the production graph. Never
     exposed in normal Student Mode and never mutates the graph."""
@@ -1967,8 +2202,12 @@ def _render_15i_student_workspace(demo: bool, landing: bool) -> None:
     st.markdown("---")
     if gate_is_pending(projection):
         _render_confidence_gate(projection, question)
-        # the read-only debug surface is rendered in every state so a
-        # developer can inspect the graph behind a pending gate too
+        _render_debug_graph(projection)
+        return
+
+    # Sprint 17: multi-transaction problem workflow
+    if _is_multi_tx_problem(projection):
+        _render_problem_workflow(question, projection)
         _render_debug_graph(projection)
         return
 

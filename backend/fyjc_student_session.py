@@ -88,6 +88,16 @@ K_GATE_PENDING_FP = "fte_fyjc_gate_pending_fp"
 K_GATE_DECISION = "fte_fyjc_gate_decision"  # plain key - resolved decision
 K_GATE_DECISION_FP = "fte_fyjc_gate_decision_fp"
 
+# Sprint 17 additions: multi-transaction problem workflow state.
+# K_PROBLEM_WORKFLOW holds the full problem engine result and the
+# current workflow position.  It is keyed to the question fingerprint
+# so switching questions resets the workflow cleanly.
+K_PROBLEM_WORKFLOW = "fte_fyjc_problem_workflow"   # dict - full workflow state
+K_PROBLEM_WORKFLOW_FP = "fte_fyjc_problem_workflow_fp"
+K_PROBLEM_CURRENT_TX = "fte_fyjc_problem_current_tx"  # int - current transaction index
+K_PROBLEM_DECISIONS = "fte_fyjc_problem_decisions"    # dict - student decisions per tx
+K_PROBLEM_DECISIONS_FP = "fte_fyjc_problem_decisions_fp"
+
 # Widget keys of the uploaders (reset must clear them too).
 K_PHOTO_UPLOAD = "fte_fyjc_photo"
 K_DOC_UPLOAD = "fte_fyjc_doc"
@@ -225,6 +235,8 @@ _RESET_KEYS = (
     K_PHOTO_UPLOAD, K_DOC_UPLOAD,
     K_PROJ, K_PROJ_FP, K_GATE_PENDING, K_GATE_PENDING_FP,
     K_GATE_DECISION, K_GATE_DECISION_FP,
+    K_PROBLEM_WORKFLOW, K_PROBLEM_WORKFLOW_FP, K_PROBLEM_CURRENT_TX,
+    K_PROBLEM_DECISIONS, K_PROBLEM_DECISIONS_FP,
 )
 
 

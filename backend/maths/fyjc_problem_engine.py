@@ -336,6 +336,35 @@ _FRAC_WORDS = {
 }
 
 
+def _extract_opening_balances(text: str) -> Dict[str, Decimal]:
+    """Extract account balances from opening balance text.
+
+    Example: "Balances as on 1st April: Cash Rs.50000, Bank Rs.100000"
+    Returns: {"Cash": Decimal("50000"), "Bank": Decimal("100000")}
+    """
+    balances = {}
+    # Pattern: AccountName Rs.Amount or AccountName amount
+    pat = re.compile(
+        r"([A-Z][A-Za-z]+)\s+(?:Rs\.?|\u20b9|INR)?\s*([\d,]+(?:\.\d+)?)",
+        re.IGNORECASE
+    )
+    for m in pat.finditer(text):
+        account = m.group(1).strip()
+        try:
+            amount = Decimal(m.group(2).replace(",", ""))
+        except InvalidOperation:
+            continue
+        # Skip common non-account words
+        if account.lower() in ("as", "on", "the", "april", "march",
+                                "january", "february", "may", "june",
+                                "july", "august", "september", "october",
+                                "november", "december", "rs", "inr",
+                                "first", "second", "third", "balances"):
+            continue
+        balances[account] = amount
+    return balances
+
+
 def _extract_absolute_amount(text: str) -> Optional[Decimal]:
     """Extract the primary absolute amount from text."""
     amounts = []
@@ -701,6 +730,10 @@ def process_problem(
 
         # Detect opening balances
         if event_type == "OPENING_BALANCE":
+            # Extract account balances from text and seed the ledger
+            ob = _extract_opening_balances(tx_text)
+            for acc, amt in ob.items():
+                session.ledger.balances[acc] = amt
             result = TransactionResult(
                 index=tx_index,
                 text=tx_text,
