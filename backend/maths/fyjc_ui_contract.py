@@ -153,6 +153,13 @@ WHY_LOCALIZATION: Dict[str, str] = {
 # whether it is intra-state (CGST + SGST) or inter-state (IGST)..."
 _GST_SCHEME_SIGNATURE = "does not say whether it is intra-state"
 
+# Sprint 25: Cash/credit ambiguity signature from the engine:
+# "The transaction does not say whether it was for cash or on credit."
+_CASH_CREDIT_SIGNATURE = "does not say whether it was for cash or on credit"
+
+# Sprint 25: Historical ambiguity signature
+_HISTORICAL_MULTI_SIGNATURE = "Multiple historical candidates"
+
 # Rate-clause forms the engine recognizes: "at 18% GST" and "GST @ 18%".
 _RATE_AT_RE = re.compile(r"at\s+(\d+(?:\.\d+)?)\s*%\s*GST", re.IGNORECASE)
 _RATE_SIGN_RE = re.compile(r"GST\s*@\s*(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
@@ -239,6 +246,40 @@ def _gst_rewrite(question: str, decision_id: str, rate: float) -> str:
     return question
 
 
+# Sprint 25: Cash/credit rewrite patterns
+_PURCHASE_CASH_RE = re.compile(
+    r"(purchased\s+(?:goods|stock|merchandise)\s+)(?:for\s+)?Rs\.?\s*([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE)
+_PURCHASE_CREDIT_RE = re.compile(
+    r"(purchased\s+(?:goods|stock|merchandise)\s+)(?:for\s+)?Rs\.?\s*([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE)
+_SALE_CASH_RE = re.compile(
+    r"(sold\s+(?:goods|stock|merchandise)\s+)(?:for\s+)?Rs\.?\s*([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE)
+
+
+def _cash_credit_rewrite(question: str, decision_id: str) -> str:
+    """Deterministic rewrite for cash/credit ambiguity. Appends the missing
+    cash/credit mode to the original question text."""
+    low = question.strip()
+    if decision_id == "cash":
+        # Append 'for cash' if not already present
+        if "for cash" not in low.lower() and "by cash" not in low.lower():
+            # Insert before trailing period
+            if low.endswith("."):
+                return low[:-1] + " for cash."
+            return low + " for cash"
+        return low
+    elif decision_id == "credit":
+        # Append 'on credit' if not already present
+        if "on credit" not in low.lower() and "credit" not in low.lower():
+            if low.endswith("."):
+                return low[:-1] + " on credit."
+            return low + " on credit"
+        return low
+    return low
+
+
 def _graph_segments(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return (result.get("orchestration") or {}).get("segments") or []
 
@@ -261,15 +302,16 @@ def build_confidence_gate(result: Dict[str, Any],
     if (result or {}).get("status") != REVIEW_REQUIRED:
         return None
     why = _graph_why_not(result)
-    if _GST_SCHEME_SIGNATURE not in why:
-        return None
-    rate = _find_rate_clause(str(question or ""))
-    if rate is None:
-        return None
     segments = _graph_segments(result)
     segment_text = segments[0]["text"] if segments else str(question or "")
-    return {
-        "gate_id": "GST_SCHEME",
+
+    # --- GST Scheme Gate (Sprint 15I) ------------------------------------
+    if _GST_SCHEME_SIGNATURE in why:
+        rate = _find_rate_clause(str(question or ""))
+        if rate is None:
+            return None
+        return {
+            "gate_id": "GST_SCHEME",
         "question": "How should the GST on this transaction be recorded?",
         "segment": segment_text,
         "dependency": (
@@ -296,7 +338,46 @@ def build_confidence_gate(result: Dict[str, Any],
                 ),
             },
         ],
-    }
+        }
+
+    # --- Cash/Credit Gate (Sprint 25) ------------------------------------
+    if _CASH_CREDIT_SIGNATURE in why:
+        q_lower = str(question or "").lower()
+        has_cash = "for cash" in q_lower or "by cash" in q_lower
+        has_credit = "on credit" in q_lower or "credit from" in q_lower
+        if has_cash or has_credit:
+            return None
+        return {
+            "gate_id": "CASH_CREDIT",
+            "question": "Was this transaction for cash or on credit?",
+            "segment": segment_text,
+            "dependency": (
+                "The transaction does not specify the payment mode. "
+                "Platrixa needs to know whether goods were paid for in cash "
+                "or purchased on credit."
+            ),
+            "reason": why,
+            "alternatives": [
+                {
+                    "id": "cash",
+                    "label": "For cash",
+                    "effect": (
+                        "The payment is recorded as a cash transaction. "
+                        "Cash decreases."
+                    ),
+                },
+                {
+                    "id": "credit",
+                    "label": "On credit",
+                    "effect": (
+                        "The purchase is on credit from a party. "
+                        "A creditor account is created."
+                    ),
+                },
+            ],
+        }
+
+    return None
 
 
 def resolve_confidence_gate(question: str,
@@ -312,36 +393,60 @@ def resolve_confidence_gate(question: str,
     """
     from backend.maths.fyjc_orchestration import orchestrate
 
-    if gate_id != "GST_SCHEME":
-        return _projection_for_unknown_gate(question, gate_id, decision_id)
-
-    rate = _find_rate_clause(str(question or ""))
-    valid = {
-        "intra_state": "Intra-state — CGST and SGST",
-        "inter_state": "Inter-state — IGST",
-    }
-    if rate is None or decision_id not in valid:
-        # Unsafe gate invocation: run the plain input and report honestly.
-        result = orchestrate(question)
+    # --- GST Scheme Gate -------------------------------------------------
+    if gate_id == "GST_SCHEME":
+        rate = _find_rate_clause(str(question or ""))
+        valid = {
+            "intra_state": "Intra-state \u2014 CGST and SGST",
+            "inter_state": "Inter-state \u2014 IGST",
+        }
+        if rate is None or decision_id not in valid:
+            result = orchestrate(question)
+            return project_student_result(result, question, gate_resolution={
+                "gate_id": gate_id,
+                "decision_id": decision_id,
+                "accepted": False,
+                "reason": "The decision is not a registered alternative.",
+                "original_question": question,
+            })
+        resolved_question = _gst_rewrite(question, decision_id, rate)
+        result = orchestrate(resolved_question)
         return project_student_result(result, question, gate_resolution={
             "gate_id": gate_id,
             "decision_id": decision_id,
-            "accepted": False,
-            "reason": "The decision is not a registered alternative.",
+            "decision_label": valid[decision_id],
+            "accepted": True,
             "original_question": question,
+            "resolved_question": resolved_question,
+            "final_status": result.get("status"),
         })
 
-    resolved_question = _gst_rewrite(question, decision_id, rate)
-    result = orchestrate(resolved_question)
-    return project_student_result(result, question, gate_resolution={
-        "gate_id": gate_id,
-        "decision_id": decision_id,
-        "decision_label": valid[decision_id],
-        "accepted": True,
-        "original_question": question,
-        "resolved_question": resolved_question,
-        "final_status": result.get("status"),
-    })
+    # --- Cash/Credit Gate (Sprint 25) ------------------------------------
+    if gate_id == "CASH_CREDIT":
+        valid_cc = {"cash": "For cash", "credit": "On credit"}
+        if decision_id not in valid_cc:
+            result = orchestrate(question)
+            return project_student_result(result, question, gate_resolution={
+                "gate_id": gate_id,
+                "decision_id": decision_id,
+                "accepted": False,
+                "reason": "The decision is not a registered alternative.",
+                "original_question": question,
+            })
+        resolved_question = _cash_credit_rewrite(question, decision_id)
+        result = orchestrate(resolved_question)
+        return project_student_result(result, question, gate_resolution={
+            "gate_id": gate_id,
+            "decision_id": decision_id,
+            "decision_label": valid_cc[decision_id],
+            "accepted": True,
+            "original_question": question,
+            "resolved_question": resolved_question,
+            "final_status": result.get("status"),
+        })
+
+    # --- Unknown gate: fallback ------------------------------------------
+    return _projection_for_unknown_gate(question, gate_id, decision_id)
 
 
 def _projection_for_unknown_gate(question: str,

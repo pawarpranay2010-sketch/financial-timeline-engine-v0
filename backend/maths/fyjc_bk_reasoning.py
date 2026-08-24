@@ -3383,6 +3383,7 @@ def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
         except (InvalidOperation, ValueError):
             continue
         before = low_rates[max(0, match.start() - 40):match.start()]
+        after = low_rates[match.end():match.end() + 20]
         # Sprint 15I-TX: the look-back is truncated at the nearest
         # preceding clause boundary (comma / semicolon / period) so a
         # rate in a LATER clause is never labelled by a GST token from
@@ -3393,11 +3394,21 @@ def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
                    before.rfind("."))
         if _cut != -1:
             before = before[_cut + 1:]
-        if not _GST_TOKEN_RE.search(before):
+        # Sprint 24: also check text immediately AFTER the % token
+        # for a GST label - 'plus 18% GST' has 'gst' after the rate.
+        _cut_after = min(
+            (after.find(",") if "," in after else 999),
+            (after.find(";") if ";" in after else 999),
+            (after.find(".") if "." in after else 999),
+        )
+        if _cut_after != 999:
+            after = after[:_cut_after]
+        combined = before + " " + after
+        if not _GST_TOKEN_RE.search(combined):
             continue
         kind = "total"
         for comp in ("igst", "cgst", "sgst"):
-            if comp in before:
+            if comp in combined:
                 kind = comp
                 break
         facts["rates"].append((rate, kind))
@@ -3435,12 +3446,12 @@ def _gst_facts(text: str) -> Optional[Dict[str, Any]]:
         else:
             facts["unlabeled"].append(value)
     # inclusive / exclusive markers (deterministic, mutually exclusive)
-    if re.search(r"\binclusive\s+of\s+gst\b|\bgst\s+inclusive\b|"
-                 r"\bincluding\s+gst\b|\bgst\s+included\b", low):
+    if re.search(r"\binclusive\s+of\s+(?:[\d,]+%\s+)?gst\b|\bgst\s+inclusive\b|"
+                 r"\bincluding\s+(?:[\d,]+%\s+)?gst\b|\bgst\s+included\b", low):
         facts["inclusive"] = True
     if re.search(r"\bexclusive\s+of\s+gst\b|\bgst\s+exclusive\b|"
                  r"\bexcluding\s+gst\b|\bgst\s+excluded\b|"
-                 r"\bplus\s+gst\b|\bgst\s+extra\b|"
+                 r"\bplus\s+(?:[\d,]+%\s+)?gst\b|\bgst\s+extra\b|"
                  r"\bgst\s+added\s+separately\b|"
                  r"\bin\s+addition\s+to\s+gst\b", low):
         facts["exclusive"] = True
@@ -3585,12 +3596,23 @@ def _gst_journal(text: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         elif facts["inter_state"]:
             scheme = "IGST"
         else:
-            return _refuse(
-                "GST is mentioned with a rate but the question does not "
-                "say whether it is intra-state (CGST + SGST) or "
-                "inter-state (IGST). Platrixa never picks one.",
-                "Name the components ('CGST and SGST') or state the "
-                "intra/inter-state status.")
+            # Sprint 24: "plus X% GST" without explicit components or
+            # state markers defaults to CGST_SGST (intra-state) which is
+            # the standard FYJC syllabus assumption.  Exclusive GST with
+            # a total rate and no CGST/SGST/IGST components means the
+            # student is expected to split the rate equally.
+            if facts.get("exclusive") or facts.get("inclusive"):
+                # "plus X% GST" (exclusive) or "inclusive of GST" (inclusive)
+                # without explicit components defaults to CGST_SGST (intra-state)
+                # which is the standard FYJC syllabus assumption.
+                scheme = "CGST_SGST"
+            else:
+                return _refuse(
+                    "GST is mentioned with a rate but the question does not "
+                    "say whether it is intra-state (CGST + SGST) or "
+                    "inter-state (IGST). Platrixa never picks one.",
+                    "Name the components ('CGST and SGST') or state the "
+                    "intra/inter-state status.")
 
     if scheme == "CGST_SGST" and facts["inter_state"]:
         return _refuse(

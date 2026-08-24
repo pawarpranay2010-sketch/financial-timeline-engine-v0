@@ -787,6 +787,7 @@ def process_problem(
     """
     from backend.maths.fyjc_bk_reasoning import _split_transactions
     from backend.maths.fyjc_orchestration import orchestrate
+    from backend.maths.fyjc_ui_contract import build_confidence_gate
 
     # 16-B: Reuse existing segmentation
     transactions = _split_transactions(problem_text)
@@ -810,6 +811,7 @@ def process_problem(
             session.ledger.balances[account] = amount
 
     # 16-C: Sequential execution
+    orch_result_by_index: Dict[int, Dict[str, Any]] = {}
     for i, tx_text in enumerate(transactions):
         tx_index = i + 1
 
@@ -873,6 +875,7 @@ def process_problem(
             continue
 
         status = orch_result.get("status", NOT_SUPPORTED)
+        orch_result_by_index[tx_index] = orch_result
         journal = orch_result.get("journal")
         why_not = orch_result.get("why_not")
         next_action = orch_result.get("next_action")
@@ -950,6 +953,12 @@ def process_problem(
                 "debit_total": str(r.state_delta.debit_total),
                 "credit_total": str(r.state_delta.credit_total),
             }
+        # Sprint 25: attach confidence gate for REVIEW_REQUIRED transactions
+        if r.status == REVIEW_REQUIRED:
+            orch_raw = orch_result_by_index.get(r.index, {})
+            gate = build_confidence_gate(orch_raw, r.text)
+            if gate:
+                tx_out["confidence_gate"] = gate
         tx_outputs.append(tx_out)
 
     return {
@@ -971,3 +980,124 @@ def process_problem(
             ),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Sprint 25: resolve_problem_transaction() — Student Confirmation
+# ---------------------------------------------------------------------------
+
+def resolve_problem_transaction(
+    problem_text: str,
+    transaction_index: int,
+    gate_id: str,
+    decision_id: str,
+) -> Dict[str, Any]:
+    """Resolve a single REVIEW_REQUIRED transaction in a multi-transaction
+    problem using the student's confidence-gate decision.
+
+    This re-runs process_problem() from scratch but injects the student's
+    resolved question for the target transaction. Subsequent transactions
+    see the updated ledger state.
+
+    Args:
+        problem_text: The original full problem text.
+        transaction_index: 1-based index of the transaction to resolve.
+        gate_id: The confidence gate type (e.g. "CASH_CREDIT", "GST_SCHEME").
+        decision_id: The student's selected alternative.
+
+    Returns:
+        Same dict as process_problem() with updated results.
+    """
+    from backend.maths.fyjc_bk_reasoning import _split_transactions
+    from backend.maths.fyjc_ui_contract import resolve_confidence_gate
+
+    # Re-process the full problem
+    result = process_problem(problem_text)
+
+    # Find the target transaction
+    target_tx = None
+    for tx in result.get("transactions", []):
+        if tx.get("index") == transaction_index and tx.get("status") == REVIEW_REQUIRED:
+            target_tx = tx
+            break
+
+    if target_tx is None:
+        # Transaction not found or not REVIEW_REQUIRED
+        return result
+
+    # Resolve through the confidence gate
+    resolved = resolve_confidence_gate(
+        target_tx["text"], gate_id, decision_id
+    )
+
+    # If the resolved result is still not VERIFIED, return with the
+    # honest verdict
+    if resolved.get("status") != VERIFIED:
+        # Update just this transaction's status in the result
+        for tx in result["transactions"]:
+            if tx.get("index") == transaction_index:
+                tx["status"] = resolved.get("status", REVIEW_REQUIRED)
+                tx["gate_resolution"] = resolved.get("gate_resolution")
+                if resolved.get("journal"):
+                    tx["journal"] = resolved["journal"]
+                if resolved.get("why_not"):
+                    tx["why_not"] = resolved["why_not"]
+                break
+        result["problem_status"] = _compute_problem_status_from_txs(
+            result["transactions"]
+        )
+        return result
+
+    # The resolved transaction is VERIFIED - re-run the full problem
+    # with the resolved question injected. We do this by replacing
+    # the transaction text in the problem and re-processing.
+    transactions = _split_transactions(problem_text)
+    if transaction_index < 1 or transaction_index > len(transactions):
+        return result
+
+    resolved_question = resolved.get("gate_resolution", {}).get(
+        "resolved_question", target_tx["text"]
+    )
+    # Replace the target transaction text
+    transactions[transaction_index - 1] = resolved_question
+    new_problem = ". ".join(transactions)
+
+    # Re-process with the resolved text
+    result = process_problem(new_problem)
+    return result
+
+
+def _compute_problem_status_from_txs(transactions: List[Dict[str, Any]]) -> str:
+    """Compute problem-level status from a list of transaction output dicts."""
+    has_verified = False
+    has_review = False
+    has_invalid = False
+    has_unsupported = False
+    has_info = False
+
+    for tx in transactions:
+        et = tx.get("event_type", "ACCOUNTING_TRANSACTION")
+        if et in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
+            has_info = True
+            continue
+        s = tx.get("status")
+        if s == VERIFIED:
+            has_verified = True
+        elif s == REVIEW_REQUIRED:
+            has_review = True
+        elif s == INVALID_INPUT_MATH:
+            has_invalid = True
+        elif s == NOT_SUPPORTED:
+            has_unsupported = True
+
+    if not has_verified and not has_review and not has_invalid and not has_unsupported:
+        if has_info:
+            return PROBLEM_VERIFIED
+        return PROBLEM_NOT_SUPPORTED
+    if has_invalid:
+        return PROBLEM_INVALID_INPUT_MATH
+    if has_review:
+        return PROBLEM_REVIEW_REQUIRED
+    if has_unsupported:
+        return PROBLEM_NOT_SUPPORTED
+    return PROBLEM_VERIFIED
