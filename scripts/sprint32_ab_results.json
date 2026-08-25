@@ -1,0 +1,459 @@
+{
+  "total": 20,
+  "a_verified": 15,
+  "b_verified": 15,
+  "a_rr": 2,
+  "b_rr": 4,
+  "a_correct": 15,
+  "b_correct": 15,
+  "improvements": 0,
+  "regressions": 0,
+  "determinism_pass": 4,
+  "determinism_fail": 0,
+  "safety_all_zero": true,
+  "transitions": [
+    {
+      "id": "G02",
+      "from": "BLOCKED",
+      "to": "REVIEW_REQUIRED",
+      "improvement": "BLOCKED \u2192 REVIEW_REQUIRED",
+      "text": "Amount received from Suresh settled account"
+    },
+    {
+      "id": "H01",
+      "from": "PROBLEM_REVIEW_REQUIRED",
+      "to": "REVIEW_REQUIRED",
+      "improvement": "PROBLEM_REVIEW_REQUIRED \u2192 REVIEW_REQUIRED",
+      "text": "Opening: Cash Rs.50000 Bank Rs.30000 Capital Rs.80000.\nPurchased goods from Raj "
+    },
+    {
+      "id": "H02",
+      "from": "PROBLEM_NOT_SUPPORTED",
+      "to": "NOT_SUPPORTED",
+      "improvement": "PROBLEM_NOT_SUPPORTED \u2192 NOT_SUPPORTED",
+      "text": "Cash in hand Rs.10000\nBank Balance Rs.25000\nCapital Rs.35000\nPurchased goods fro"
+    }
+  ],
+  "decision": "C \u2014 REJECT",
+  "reason": "No measurable improvement",
+  "categories": {
+    "simple": {
+      "a_v": 3,
+      "b_v": 3,
+      "total": 4
+    },
+    "instrument": {
+      "a_v": 4,
+      "b_v": 4,
+      "total": 4
+    },
+    "gst": {
+      "a_v": 2,
+      "b_v": 2,
+      "total": 2
+    },
+    "return": {
+      "a_v": 1,
+      "b_v": 1,
+      "total": 1
+    },
+    "discount": {
+      "a_v": 2,
+      "b_v": 2,
+      "total": 2
+    },
+    "compound": {
+      "a_v": 1,
+      "b_v": 1,
+      "total": 2
+    },
+    "phrasing": {
+      "a_v": 2,
+      "b_v": 2,
+      "total": 3
+    },
+    "whole_problem": {
+      "a_v": 0,
+      "b_v": 0,
+      "total": 2
+    }
+  },
+  "results": [
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "determinism": {
+        "runs": 3,
+        "identical": true,
+        "fingerprints": [
+          "7d881280b3c753d0",
+          "7d881280b3c753d0",
+          "7d881280b3c753d0"
+        ]
+      },
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "REVIEW_REQUIRED",
+      "b_status": "REVIEW_REQUIRED",
+      "expected_status": "VERIFIED",
+      "a_correct": false,
+      "b_correct": false,
+      "changed": false,
+      "transition": "REVIEW_REQUIRED",
+      "improvement": "NO_CHANGE",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "determinism": {
+        "runs": 3,
+        "identical": true,
+        "fingerprints": [
+          "2de0be91c00cd9a9",
+          "2de0be91c00cd9a9",
+          "2de0be91c00cd9a9"
+        ]
+      },
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "REVIEW_REQUIRED",
+      "b_status": "REVIEW_REQUIRED",
+      "expected_status": "REVIEW_REQUIRED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "REVIEW_REQUIRED",
+      "improvement": "NO_CHANGE",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "REVIEW_REQUIRED",
+      "a_correct": false,
+      "b_correct": false,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "determinism": {
+        "runs": 3,
+        "identical": true,
+        "fingerprints": [
+          "beee0e420948c230",
+          "beee0e420948c230",
+          "beee0e420948c230"
+        ]
+      },
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "BLOCKED",
+      "b_status": "REVIEW_REQUIRED",
+      "expected_status": "VERIFIED",
+      "a_correct": false,
+      "b_correct": false,
+      "changed": true,
+      "transition": "BLOCKED \u2192 REVIEW_REQUIRED",
+      "improvement": "BLOCKED \u2192 REVIEW_REQUIRED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "VERIFIED",
+      "b_status": "VERIFIED",
+      "expected_status": "VERIFIED",
+      "a_correct": true,
+      "b_correct": true,
+      "changed": false,
+      "transition": "VERIFIED",
+      "improvement": "MAINTAINED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "PROBLEM_REVIEW_REQUIRED",
+      "b_status": "REVIEW_REQUIRED",
+      "expected_status": "PROBLEM_VERIFIED",
+      "a_correct": false,
+      "b_correct": false,
+      "changed": true,
+      "transition": "PROBLEM_REVIEW_REQUIRED \u2192 REVIEW_REQUIRED",
+      "improvement": "PROBLEM_REVIEW_REQUIRED \u2192 REVIEW_REQUIRED",
+      "determinism": {
+        "runs": 3,
+        "identical": true,
+        "fingerprints": [
+          "c0f821c66adcac74",
+          "c0f821c66adcac74",
+          "c0f821c66adcac74"
+        ]
+      },
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    },
+    {
+      "a_status": "PROBLEM_NOT_SUPPORTED",
+      "b_status": "NOT_SUPPORTED",
+      "expected_status": "PROBLEM_REVIEW_REQUIRED",
+      "a_correct": false,
+      "b_correct": false,
+      "changed": true,
+      "transition": "PROBLEM_NOT_SUPPORTED \u2192 NOT_SUPPORTED",
+      "improvement": "PROBLEM_NOT_SUPPORTED \u2192 NOT_SUPPORTED",
+      "safety": {
+        "no_invented_accounts": true,
+        "no_invented_amounts": true,
+        "no_state_leaks": true,
+        "no_nondeterminism": true,
+        "no_unsafe_confident": true
+      }
+    }
+  ]
+}

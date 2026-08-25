@@ -215,6 +215,47 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
     out = _PA_RE.sub(lambda m: _dotted_sub(m, "BK_NORM_PER_ANNUM",
                                            "per annum"), out)
 
+    # Sprint 34-FIX3: Convert numeric fractions to word forms BEFORE
+    # date consumption so '1/3rd' is recognized as a fraction, not as
+    # ordinal date '3rd'.  The existing _FRACTION_WORDS mechanism then
+    # handles the word form.  '1/3rd' leaks '1' and '3' into
+    # _extract_amounts as phantom monetary amounts without this.
+    _NUMERIC_FRACTION_RE = re.compile(
+        r"\b(\d+)\s*/\s*(\d+)(?:st|nd|rd|th)?\b", re.IGNORECASE)
+    _FRAC_MAP = {
+        (1, 2): "half", (1, 3): "one-third", (2, 3): "two-thirds",
+        (1, 4): "one-fourth", (3, 4): "three-fourths",
+        (1, 5): "one-fifth", (2, 5): "two-fifths",
+        (3, 5): "three-fifths", (4, 5): "four-fifths",
+        (1, 6): "one-sixth", (5, 6): "five-sixths",
+    }
+    def _replace_frac(m: "re.Match[str]") -> str:
+        num, den = int(m.group(1)), int(m.group(2))
+        word = _FRAC_MAP.get((num, den))
+        if word is None:
+            return m.group(0)
+        return _record(provenance, "BK_NORM_NUMERIC_FRACTION",
+                       m.group(0), word)
+    out = _NUMERIC_FRACTION_RE.sub(_replace_frac, out)
+
+    # Sprint 34-FIX1: Consume date tokens so their digits cannot leak
+    # into monetary amount extraction.  '1st April 2026' contains '1'
+    # and '2026' which _NUMBER_TOKEN matches as phantom monetary amounts,
+    # causing REVIEW_REQUIRED when only one real amount exists.
+    # Dates are never monetary amounts in FYJC accounting problems.
+    _ORDINAL_DATE_RE = re.compile(
+        r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.IGNORECASE)
+    out = _ORDINAL_DATE_RE.sub(
+        lambda m: _record(provenance, "BK_NORM_DATE_ORDINAL",
+                          m.group(0), "<DATE>"), out)
+    _YEAR_RE = re.compile(
+        r"\b(January|February|March|April|May|June|July|August|"
+        r"September|October|November|December)\s+(\d{4})\b",
+        re.IGNORECASE)
+    out = _YEAR_RE.sub(
+        lambda m: _record(provenance, "BK_NORM_DATE_YEAR",
+                          m.group(0), m.group(1) + " <YEAR>"), out)
+
     # 4) Convert newlines to sentence boundaries before collapsing
     #    horizontal whitespace.  The existing splitter uses '.' as a
     #    sentence separator, so this restores the structural information

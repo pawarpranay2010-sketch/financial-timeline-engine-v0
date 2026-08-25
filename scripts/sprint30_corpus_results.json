@@ -33,7 +33,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 54.6
+    "execution_time_ms": 47.5
   },
   {
     "id": "S30-A2",
@@ -67,7 +67,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 66.0
+    "execution_time_ms": 70.0
   },
   {
     "id": "S30-A3",
@@ -129,7 +129,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 4.0
+    "execution_time_ms": 4.1
   },
   {
     "id": "S30-A5",
@@ -163,7 +163,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 1,
-    "execution_time_ms": 73.0
+    "execution_time_ms": 65.1
   },
   {
     "id": "S30-B1",
@@ -200,7 +200,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 12.4
+    "execution_time_ms": 8.1
   },
   {
     "id": "S30-B2",
@@ -235,7 +235,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 62.9
+    "execution_time_ms": 54.8
   },
   {
     "id": "S30-C1",
@@ -268,7 +268,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 66.2
+    "execution_time_ms": 60.9
   },
   {
     "id": "S30-C2",
@@ -304,7 +304,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 8.2
+    "execution_time_ms": 9.6
   },
   {
     "id": "S30-D1",
@@ -338,7 +338,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 5.0
+    "execution_time_ms": 4.0
   },
   {
     "id": "S30-D2",
@@ -367,7 +367,7 @@
     "instruments_preserved": false,
     "balanced": true,
     "merged_segments": 1,
-    "execution_time_ms": 56.9
+    "execution_time_ms": 58.3
   },
   {
     "id": "S30-E1",
@@ -396,7 +396,7 @@
     "instruments_preserved": false,
     "balanced": true,
     "merged_segments": 1,
-    "execution_time_ms": 8.3
+    "execution_time_ms": 8.7
   },
   {
     "id": "S30-E2",
@@ -431,7 +431,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 1,
-    "execution_time_ms": 61.8
+    "execution_time_ms": 59.3
   },
   {
     "id": "S30-F1",
@@ -471,7 +471,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 70.1
+    "execution_time_ms": 68.8
   },
   {
     "id": "S30-G1",
@@ -505,7 +505,7 @@
     "instruments_preserved": true,
     "balanced": true,
     "merged_segments": 0,
-    "execution_time_ms": 5.9
+    "execution_time_ms": 6.0
   },
   {
     "id": "S30-H1_DWP003",

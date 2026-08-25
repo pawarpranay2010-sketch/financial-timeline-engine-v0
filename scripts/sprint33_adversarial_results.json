@@ -1,0 +1,3000 @@
+{
+  "counters": {
+    "total_problems": 20,
+    "total_transactions": 177,
+    "verified_correct": 21,
+    "review_required_correct": 37,
+    "incorrect_verified": 0,
+    "not_supported_correct": 0,
+    "balanced_but_wrong": 95,
+    "missing_entities": 25,
+    "missing_amounts": 13,
+    "tx_order_errors": 0,
+    "safety_violations_total": 0,
+    "determinism_failures": 0
+  },
+  "critical": true,
+  "results": [
+    {
+      "problem_id": "ADV01",
+      "category": "basic_cycle",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 6,
+      "expected_transaction_count": 8,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.50000 Bank Rs.30000 Capital Rs.80000",
+          "notes": "Opening balances \u2014 informational"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.20000 on credit; Paid Raj Rs.10000 cash",
+          "notes": "Credit purchase from Raj"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Sold goods to Amit Rs.25000 on credit",
+          "notes": "Splitter merges purchase+payment same party \u2192 REVIEW_REQUIRED"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Amit"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "10000"
+          ],
+          "expected_amount": "25000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Received Rs.10000 from Amit by cheque",
+          "notes": "Credit sale to Amit"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Amit",
+          "amount_match": false,
+          "actual_amounts": [
+            "5000"
+          ],
+          "expected_amount": "10000",
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Paid rent Rs.5000 cash",
+          "notes": "Receipt by cheque from Amit"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Purchases"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Bank"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": false,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "5000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Purchased goods from Suresh Rs.15000 on credit; Paid Rs.5000 to Suresh by cheque",
+          "notes": "Rent paid cash"
+        }
+      ],
+      "execution_time_ms": 117.82288551330566,
+      "deterministic_hash": "7bbec3aa67ae6595"
+    },
+    {
+      "problem_id": "ADV02",
+      "category": "gst_settlement",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 10,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.40000 Bank Rs.25000 Capital Rs.65000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Purchases",
+            "Input CGST",
+            "Input SGST"
+          ],
+          "expected_dr": "Purchases",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Ram"
+          ],
+          "expected_cr": "Ram",
+          "amount_match": true,
+          "actual_amounts": [
+            "10000.00",
+            "900.00",
+            "900.00"
+          ],
+          "expected_amount": "10000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Ram on credit Rs.11800 inclusive of GST @18%",
+          "notes": "Inclusive GST \u2014 net = 11800/1.18 = 10000"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Purchases"
+          ],
+          "expected_dr": "Purchases",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Raj"
+          ],
+          "expected_cr": "Raj",
+          "amount_match": true,
+          "actual_amounts": [
+            "22000"
+          ],
+          "expected_amount": "22000",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Raj Rs.22000 on credit",
+          "notes": "Credit purchase \u2014 may be merged with Ram purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Amit"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales",
+            "Output CGST",
+            "Output SGST"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "29500.00"
+          ],
+          "expected_amount": "25000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.29500 inclusive of GST @18% on credit",
+          "notes": "Inclusive GST sale \u2014 net = 29500/1.18 = 25000"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Amit"
+          ],
+          "expected_cr": "Amit",
+          "amount_match": true,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "15000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.15000 from Amit by cheque",
+          "notes": "Receipt by cheque"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Allowed trade discount 10% to Amit on balance",
+          "notes": "Discount on Amit's balance \u2014 may be merged with receipt"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Raj"
+          ],
+          "expected_dr": "Raj",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Bank"
+          ],
+          "expected_cr": "Bank",
+          "amount_match": true,
+          "actual_amounts": [
+            "10000"
+          ],
+          "expected_amount": "10000",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid Rs.10000 to Raj by cheque",
+          "notes": "Payment to Raj"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Cash"
+          ],
+          "expected_dr": "Cash",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Suresh"
+          ],
+          "expected_cr": "Suresh",
+          "amount_match": true,
+          "actual_amounts": [
+            "5000"
+          ],
+          "expected_amount": "5000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Received Rs.5000 cash from Suresh",
+          "notes": "Cash receipt from Suresh"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Ram"
+          ],
+          "expected_dr": "Ram",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Bank"
+          ],
+          "expected_cr": "Bank",
+          "amount_match": true,
+          "actual_amounts": [
+            "3000"
+          ],
+          "expected_amount": "3000",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Paid Rs.3000 to Ram by cheque",
+          "notes": "Payment to Ram \u2014 may be merged with prior"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "4000"
+          ],
+          "expected_amount": "4000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 10,
+          "tx_text": "Paid rent Rs.4000 cash.",
+          "notes": "Rent paid"
+        }
+      ],
+      "execution_time_ms": 16.025543212890625,
+      "deterministic_hash": "a99f486372e926ff"
+    },
+    {
+      "problem_id": "ADV03",
+      "category": "multi_party",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 10,
+      "expected_transaction_count": 11,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.30000 Bank Rs.20000 Capital Rs.50000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.12000 on credit",
+          "notes": "May be merged with Mehta purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Mehta Rs.8000 on credit",
+          "notes": "May be merged with Raj purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Paid Rs.10000 to Raj by cheque",
+          "notes": "Payment to Raj \u2014 may be merged with prior purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Amit"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": true,
+          "actual_amounts": [
+            "20000"
+          ],
+          "expected_amount": "20000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Sold goods to Amit Rs.20000 on credit",
+          "notes": "Credit sale to Amit"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Received Rs.10000 from Amit cash",
+          "notes": "Cash receipt from Amit"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Purchased goods from Suresh Rs.15000 on credit; Paid Rs.5000 to Suresh cash",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Suresh",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Sold goods to Ramesh Rs.18000 on credit",
+          "notes": "Payment to Suresh \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Ramesh",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Ramesh"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "8000"
+          ],
+          "expected_amount": "18000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Received Rs.8000 from Ramesh by cheque",
+          "notes": "Credit sale to Ramesh"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 10,
+          "tx_text": "Paid Rs.3000 to Mehta cash.",
+          "notes": "Receipt by cheque from Ramesh"
+        }
+      ],
+      "execution_time_ms": 12.748241424560547,
+      "deterministic_hash": "b3accfa135eb629c"
+    },
+    {
+      "problem_id": "ADV04",
+      "category": "cheque_direction",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 10,
+      "expected_transaction_count": 11,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.25000 Bank Rs.35000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.18000 on credit; Paid Rs.18000 to Raj by cheque",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Sold goods to Amit Rs.30000 on credit",
+          "notes": "Payment to Raj \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Amit"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": true,
+          "actual_amounts": [
+            "30000"
+          ],
+          "expected_amount": "30000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Received Rs.30000 from Amit by cheque",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Received Rs.23600 from Suresh by cheque",
+          "notes": "Receipt \u2014 may be merged with sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Mehta"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Bank"
+          ],
+          "expected_cr": "Suresh",
+          "amount_match": false,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "23600",
+          "party_missing": "Suresh",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Paid Rs.15000 to Mehta by cheque",
+          "notes": "Receipt by cheque (Sprint 29 fix)"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Mehta",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Suresh paid Rs.23600 by cheque",
+          "notes": "Payment to Mehta"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Suresh",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Amit paid Rs.15000 cash",
+          "notes": "Duplicate receipt \u2014 may be merged with prior"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Cash",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Ramesh"
+          ],
+          "expected_cr": "Amit",
+          "amount_match": false,
+          "actual_amounts": [
+            "10000"
+          ],
+          "expected_amount": "15000",
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Received cheque of Rs.10000 from Ramesh",
+          "notes": "Cash receipt from Amit"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Ramesh",
+          "amount_match": false,
+          "actual_amounts": [
+            "6000"
+          ],
+          "expected_amount": "10000",
+          "party_missing": "Ramesh",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 10,
+          "tx_text": "Paid rent Rs.6000 cash.",
+          "notes": "Receipt by cheque from Ramesh"
+        }
+      ],
+      "execution_time_ms": 88.35005760192871,
+      "deterministic_hash": "fa9f03abf3cbcc4e"
+    },
+    {
+      "problem_id": "ADV05",
+      "category": "settlement_chain",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 8,
+      "expected_transaction_count": 11,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.35000 Bank Rs.15000 Capital Rs.50000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.40000 on credit; Paid Rs.15000 to Raj cash",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Returned goods to Raj Rs.5000; Received discount Rs.2000 from Raj; Paid remainin",
+          "notes": "Payment \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.35000 on credit",
+          "notes": "Return \u2014 may be merged"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.20000 from Amit cash",
+          "notes": "Discount \u2014 may be merged"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Returned goods by customer Rs.3000",
+          "notes": "Settlement \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Discount Allowed"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Amit"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "1500"
+          ],
+          "expected_amount": "35000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Allowed discount Rs.1500 to Amit",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "INFORMATIONAL_EVENT",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Received balance from Amit by cheque.",
+          "notes": "Receipt \u2014 may be merged with sale"
+        }
+      ],
+      "execution_time_ms": 85.07370948791504,
+      "deterministic_hash": "433ebb1f00ded6b8"
+    },
+    {
+      "problem_id": "ADV06",
+      "category": "fractions",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 7,
+      "expected_transaction_count": 9,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.20000 Bank Rs.40000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.30000 on credit; Paid half of the amount to Raj cash",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Suresh Rs.24000 on credit; Paid one-third of the amount to ",
+          "notes": "Half payment \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Suresh",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.45000 on credit",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.15000 from Amit cash",
+          "notes": "One-third payment \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "BLOCKED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Received the remaining amount from Amit by cheque",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid rent Rs.3000 cash.",
+          "notes": "Partial receipt \u2014 may be merged with sale"
+        }
+      ],
+      "execution_time_ms": 107.57946968078613,
+      "deterministic_hash": "6dba69ea0f274619"
+    },
+    {
+      "problem_id": "ADV07",
+      "category": "balanced_but_wrong_attack",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 12,
+      "expected_transaction_count": 12,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.25000 Bank Rs.35000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.12000 on credit",
+          "notes": "Credit purchase \u2014 consecutive purchases may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Mehta Rs.8000 on credit",
+          "notes": "Credit purchase \u2014 may merge with Raj"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Purchased goods from Suresh Rs.15000 on credit",
+          "notes": "Credit purchase \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Paid Rs.10000 to Raj by cheque",
+          "notes": "Payment to Raj \u2014 may merge with purchase"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Paid Rs.5000 to Mehta cash",
+          "notes": "Payment to Mehta"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid Rs.8000 to Suresh by cheque",
+          "notes": "Payment to Suresh \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Amit"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": true,
+          "actual_amounts": [
+            "20000"
+          ],
+          "expected_amount": "20000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Sold goods to Amit Rs.20000 on credit",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Received Rs.10000 from Amit cash",
+          "notes": "Receipt \u2014 may merge with sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Ramesh"
+          ],
+          "expected_dr": "Ramesh",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": true,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "15000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 10,
+          "tx_text": "Sold goods to Ramesh Rs.15000 on credit",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Ramesh"
+          ],
+          "expected_cr": "Ramesh",
+          "amount_match": true,
+          "actual_amounts": [
+            "7000"
+          ],
+          "expected_amount": "7000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 11,
+          "tx_text": "Received Rs.7000 from Ramesh by cheque",
+          "notes": "Receipt by cheque"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "4000"
+          ],
+          "expected_amount": "4000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 12,
+          "tx_text": "Paid rent Rs.4000 cash.",
+          "notes": "Rent paid"
+        }
+      ],
+      "execution_time_ms": 14.189004898071289,
+      "deterministic_hash": "df4366eeaa09b244"
+    },
+    {
+      "problem_id": "ADV08",
+      "category": "indian_phrasing",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 9,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash in hand Rs.15000 Bank Balance Rs.25000 Capital Rs.40000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Goods bought from Raj Rs.10000 on credit",
+          "notes": "Credit purchase \u2014 may merge with payment"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Raj was paid Rs.5000 cash",
+          "notes": "Payment to Raj \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Cash"
+          ],
+          "expected_dr": "Cash",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Amit"
+          ],
+          "expected_cr": "Amit",
+          "amount_match": true,
+          "actual_amounts": [
+            "8000"
+          ],
+          "expected_amount": "8000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 4,
+          "tx_text": "Amount received from Amit Rs.8000 cash",
+          "notes": "Cash receipt"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Suresh"
+          ],
+          "expected_dr": "Suresh",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": true,
+          "actual_amounts": [
+            "20000"
+          ],
+          "expected_amount": "20000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Goods sold to Suresh Rs.20000 on credit",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Paid off Mehta Rs.6000 by cheque",
+          "notes": "Payment to Mehta"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 7,
+          "tx_text": "Goods returned by customer Rs.2000",
+          "notes": "Return by customer \u2014 no party specified"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Settled Ramesh account Rs.9000 by cheque",
+          "notes": "Settlement payment"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "3500"
+          ],
+          "expected_amount": "3500",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Paid rent Rs.3500 cash.",
+          "notes": "Rent paid"
+        }
+      ],
+      "execution_time_ms": 12.252092361450195,
+      "deterministic_hash": "c49b533abf99cc07"
+    },
+    {
+      "problem_id": "ADV09",
+      "category": "ambiguity",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 9,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.30000 Bank Rs.20000 Capital Rs.50000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Received from Amit Rs.10000",
+          "notes": "No instrument specified \u2014 cash/cheque ambiguous"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Paid Raj Rs.8000",
+          "notes": "No instrument specified \u2014 cash/cheque ambiguous"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 4,
+          "tx_text": "Purchased goods for Rs.20000",
+          "notes": "No party, no instrument \u2014 cash/credit ambiguous"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Settled the account for Rs.9500",
+          "notes": "Settlement \u2014 no party specified"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Sold goods Rs.15000",
+          "notes": "No party, no instrument \u2014 cash/credit ambiguous"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 7,
+          "tx_text": "Received Rs.5000",
+          "notes": "No party \u2014 ambiguous"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Paid Rs.3000",
+          "notes": "No party \u2014 ambiguous"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Returned goods Rs.2000.",
+          "notes": "Return \u2014 no party, no direction"
+        }
+      ],
+      "execution_time_ms": 8.767843246459961,
+      "deterministic_hash": "7edaf6f812dd6472"
+    },
+    {
+      "problem_id": "ADV10",
+      "category": "gst_discount_return",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 9,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.50000 Bank Rs.30000 Capital Rs.80000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Purchases",
+            "Input CGST",
+            "Input SGST"
+          ],
+          "expected_dr": "Purchases",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Raj"
+          ],
+          "expected_cr": "Raj",
+          "amount_match": true,
+          "actual_amounts": [
+            "45000.00",
+            "4050.00",
+            "4050.00"
+          ],
+          "expected_amount": "45000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj for Rs.50000 less 10% trade discount plus GST @18%",
+          "notes": "50000 - 10% = 45000 net before GST"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Sold goods to Amit for Rs.40000 less 5% trade discount plus GST @18% on credit",
+          "notes": "Complex GST + discount \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Received Rs.20000 from Amit by cheque",
+          "notes": "Receipt \u2014 may be merged with sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Returned goods to Raj Rs.5000",
+          "notes": "Return \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Allowed discount Rs.2000 to Amit",
+          "notes": "Discount \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid Rs.15000 to Raj by cheque",
+          "notes": "Payment to Raj \u2014 may be merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "4000"
+          ],
+          "expected_amount": "4000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Paid rent Rs.4000 cash",
+          "notes": "Rent paid"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Cash"
+          ],
+          "expected_dr": "Cash",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Suresh"
+          ],
+          "expected_cr": "Suresh",
+          "amount_match": true,
+          "actual_amounts": [
+            "5000"
+          ],
+          "expected_amount": "5000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Received Rs.5000 cash from Suresh.",
+          "notes": "Cash receipt"
+        }
+      ],
+      "execution_time_ms": 11.693716049194336,
+      "deterministic_hash": "5a33c847fb9c5379"
+    },
+    {
+      "problem_id": "ADV11",
+      "category": "compound_entries",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.20000 Bank Rs.40000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.30000 less trade discount 10% on credit",
+          "notes": "Purchase with trade discount"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 3,
+          "tx_text": "Received Rs.12000 from Raj by cheque and Rs.5000 cash",
+          "notes": "Receipt from Raj \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.25000 plus GST @18% on credit",
+          "notes": "Sale with GST"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Allowed trade discount 5% to Amit",
+          "notes": "Discount \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Received Rs.10000 from Amit by cheque",
+          "notes": "Receipt \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid Rs.8000 to Suresh by cheque",
+          "notes": "Payment to Suresh"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "3000"
+          ],
+          "expected_amount": "3000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Paid rent Rs.3000 cash",
+          "notes": "Rent paid"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Purchased goods from Mehta Rs.12000 on credit; Paid Rs.6000 to Mehta cash.",
+          "notes": "Purchase from Mehta"
+        }
+      ],
+      "execution_time_ms": 12.57944107055664,
+      "deterministic_hash": "f995fc847c663462"
+    },
+    {
+      "problem_id": "ADV12",
+      "category": "indian_variants",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 10,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash in hand Rs.18000 Bank Balance Rs.22000 Capital Rs.40000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Goods purchased from Tata on credit Rs.35000",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 3,
+          "tx_text": "Cash received against sales Rs.10000",
+          "notes": "Cash receipt \u2014 no party named"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Goods sold to Sharma on credit Rs.28000",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Amount paid to Tata by cheque Rs.15000",
+          "notes": "Payment to Tata"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sharma"
+          ],
+          "expected_cr": "Sharma",
+          "amount_match": true,
+          "actual_amounts": [
+            "12000"
+          ],
+          "expected_amount": "12000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Cheque received from Sharma Rs.12000",
+          "notes": "Receipt by cheque"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Salaries"
+          ],
+          "expected_dr": "Salaries",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "8000"
+          ],
+          "expected_amount": "8000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 7,
+          "tx_text": "Paid salaries Rs.8000 cash",
+          "notes": "Salaries paid"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Stationery"
+          ],
+          "expected_dr": "Stationery",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "1500"
+          ],
+          "expected_amount": "1500",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Purchased stationery Rs.1500 cash",
+          "notes": "Stationery purchased"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Received Rs.3000 from unknown party cash",
+          "notes": "Cash receipt \u2014 unknown party"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 10,
+          "tx_text": "Paid Rs.5000 to Ram by cheque.",
+          "notes": "Payment to Ram"
+        }
+      ],
+      "execution_time_ms": 10.282754898071289,
+      "deterministic_hash": "18b78c8b295436c4"
+    },
+    {
+      "problem_id": "ADV13",
+      "category": "cross_tx_dependency",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 8,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.30000 Bank Rs.25000 Capital Rs.55000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.25000 on credit; Paid Rs.10000 to Raj cash",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Raj Rs.8000 on credit; Paid remaining balance to Raj by che",
+          "notes": "Payment to Raj \u2014 merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.30000 on credit",
+          "notes": "Second purchase from Raj"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.15000 from Amit cash",
+          "notes": "Settlement \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Amit"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sales"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "10000"
+          ],
+          "expected_amount": "30000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Sold goods to Amit Rs.10000 on credit",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "INFORMATIONAL_EVENT",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 7,
+          "tx_text": "Received balance from Amit by cheque",
+          "notes": "Receipt \u2014 may merge with sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Paid rent Rs.5000 cash.",
+          "notes": "Second sale to Amit"
+        }
+      ],
+      "execution_time_ms": 97.45502471923828,
+      "deterministic_hash": "10c309367809f8e0"
+    },
+    {
+      "problem_id": "ADV14",
+      "category": "gst_schemes",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.40000 Bank Rs.30000 Capital Rs.70000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Tata Rs.23600 inclusive of GST @18%",
+          "notes": "Purchase with GST \u2014 may merge with payment"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Sold goods to Sharma Rs.35400 inclusive of GST @18% on credit",
+          "notes": "Sale with GST"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Paid Rs.10000 to Tata by cheque",
+          "notes": "Payment to Tata \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Bank"
+          ],
+          "expected_dr": "Bank",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Sharma"
+          ],
+          "expected_cr": "Sharma",
+          "amount_match": true,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "15000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.15000 from Sharma by cheque",
+          "notes": "Receipt by cheque"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Purchased goods from Ram Rs.11800 inclusive of GST @18% on credit; Paid Rs.5000 ",
+          "notes": "Purchase from Ram"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Ram",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Sold goods to Amit Rs.29500 inclusive of GST @18% on credit",
+          "notes": "Payment to Ram \u2014 merged"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Received Rs.10000 from Amit cash",
+          "notes": "Sale to Amit"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Paid rent Rs.6000 cash.",
+          "notes": "Receipt \u2014 may merge"
+        }
+      ],
+      "execution_time_ms": 13.26608657836914,
+      "deterministic_hash": "c3d772d6bb8cde5c"
+    },
+    {
+      "problem_id": "ADV15",
+      "category": "returns_settlements",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.25000 Bank Rs.35000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.20000 on credit",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Returned goods to Raj Rs.3000; Paid Rs.12000 to Raj by cheque",
+          "notes": "Return \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.30000 on credit",
+          "notes": "Payment \u2014 may merge"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Returned goods by customer Rs.2000",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Received Rs.20000 from Amit by cheque",
+          "notes": "Return by customer"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Allowed discount Rs.1000 to Amit",
+          "notes": "Receipt \u2014 may merge"
+        },
+        {
+          "actual_status": "INFORMATIONAL_EVENT",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Received balance from Amit cash",
+          "notes": "Discount \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 9,
+          "tx_text": "Paid rent Rs.4000 cash.",
+          "notes": "Balance receipt"
+        }
+      ],
+      "execution_time_ms": 84.47861671447754,
+      "deterministic_hash": "ecb8a93746b4a178"
+    },
+    {
+      "problem_id": "ADV16",
+      "category": "compound_multi_amount",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 8,
+      "expected_transaction_count": 8,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.20000 Bank Rs.30000 Capital Rs.50000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.50000 less 10% trade discount on credit and paid Rs.",
+          "notes": "Compound: purchase + cheque + cash"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Sold goods to Amit Rs.40000 less 5% trade discount on credit",
+          "notes": "Sale with trade discount"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 4,
+          "tx_text": "Received Rs.15000 from Amit by cheque and Rs.5000 cash",
+          "notes": "Compound receipt"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Paid Rs.10000 to Suresh by cheque",
+          "notes": "Payment to Suresh"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": true,
+          "actual_dr": [
+            "Rent"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": true,
+          "actual_amounts": [
+            "3000"
+          ],
+          "expected_amount": "3000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Paid rent Rs.3000 cash",
+          "notes": "Rent paid"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Purchased goods from Mehta Rs.15000 on credit",
+          "notes": "Purchase from Mehta"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 8,
+          "tx_text": "Received Rs.8000 from Ramesh cash.",
+          "notes": "Cash receipt"
+        }
+      ],
+      "execution_time_ms": 72.02506065368652,
+      "deterministic_hash": "c141d8af107e541b"
+    },
+    {
+      "problem_id": "ADV17",
+      "category": "same_party_chain",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 4,
+      "expected_transaction_count": 8,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.10000 Bank Rs.20000 Capital Rs.30000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.25000 on credit; Paid Rs.10000 to Raj cash",
+          "notes": "All same party \u2014 splitter may merge extensively"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Raj Rs.15000 on credit; Paid Rs.5000 to Raj by cheque",
+          "notes": "Merged with purchase"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Returned goods to Raj Rs.2000; Received discount Rs.1000 from Raj; Paid remainin",
+          "notes": "Second purchase"
+        }
+      ],
+      "execution_time_ms": 129.94909286499023,
+      "deterministic_hash": "7db543cf114dd01f"
+    },
+    {
+      "problem_id": "ADV18",
+      "category": "opening_edge",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 9,
+      "expected_transaction_count": 9,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Cash in hand Rs.15000",
+          "notes": "Opening balances without 'Opening:' prefix"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 2,
+          "tx_text": "Bank Balance Rs.25000",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 3,
+          "tx_text": "Capital Rs.40000",
+          "notes": "Payment \u2014 merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Purchases"
+          ],
+          "expected_dr": "Amit",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Cash",
+            "Raj"
+          ],
+          "expected_cr": "Sales",
+          "amount_match": false,
+          "actual_amounts": [
+            "10000"
+          ],
+          "expected_amount": "18000",
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Purchased goods from Raj Rs.10000 on credit; Paid Rs.5000 to Raj cash",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Sold goods to Amit Rs.18000 on credit",
+          "notes": "Receipt \u2014 merged"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Received Rs.8000 from Amit cash",
+          "notes": "Rent paid"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Suresh",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid rent Rs.3000 cash",
+          "notes": "Purchase from Suresh"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Purchased goods from Suresh Rs.12000 on credit; Paid Rs.6000 to Suresh by cheque",
+          "notes": "Payment \u2014 merged"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Received Rs.4000 from Mehta cash.",
+          "notes": "Cash receipt"
+        }
+      ],
+      "execution_time_ms": 80.95049858093262,
+      "deterministic_hash": "a8d07f198d7474fe"
+    },
+    {
+      "problem_id": "ADV19",
+      "category": "historical_refs",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 8,
+      "expected_transaction_count": 10,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash Rs.30000 Bank Rs.20000 Capital Rs.50000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj Rs.20000 on credit; Paid Rs.8000 to Raj cash",
+          "notes": "Credit purchase"
+        },
+        {
+          "actual_status": "NOT_SUPPORTED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 3,
+          "tx_text": "Sold remaining goods from Raj Rs.10000",
+          "notes": "Payment \u2014 merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Raj",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Sold goods to Amit Rs.25000 on credit",
+          "notes": "Historical ref 'remaining goods from Raj'"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 5,
+          "tx_text": "Received Rs.10000 from Amit cash",
+          "notes": "Credit sale"
+        },
+        {
+          "actual_status": "INFORMATIONAL_EVENT",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 6,
+          "tx_text": "Received the balance from Amit by cheque",
+          "notes": "Receipt \u2014 merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Amit",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Paid rent Rs.4000 cash",
+          "notes": "Balance receipt \u2014 merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Purchases"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": false,
+          "actual_cr": [
+            "Bank"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": false,
+          "actual_amounts": [
+            "15000"
+          ],
+          "expected_amount": "4000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Purchased goods from Suresh Rs.15000 on credit; Paid Rs.7000 to Suresh by cheque",
+          "notes": "Rent paid"
+        }
+      ],
+      "execution_time_ms": 69.58389282226562,
+      "deterministic_hash": "73fb36583d23c68c"
+    },
+    {
+      "problem_id": "ADV20",
+      "category": "extreme_mixed",
+      "problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "expected_problem_status": "PROBLEM_REVIEW_REQUIRED",
+      "problem_status_match": true,
+      "transaction_count": 13,
+      "expected_transaction_count": 14,
+      "safety_violations": [],
+      "classifications": [
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 1,
+          "tx_text": "Opening: Cash in hand Rs.35000 Bank Balance Rs.25000 Capital Rs.60000",
+          "notes": ""
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 2,
+          "tx_text": "Purchased goods from Raj for Rs.40000 less 10% trade discount on credit plus GST",
+          "notes": "Complex purchase with discount + GST"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 3,
+          "tx_text": "Purchased goods from Mehta Rs.15000 on credit",
+          "notes": "Purchase from Mehta \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 4,
+          "tx_text": "Paid Rs.10000 to Raj by cheque",
+          "notes": "Payment to Raj \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 5,
+          "tx_text": "Sold goods to Amit for Rs.30000 less 5% trade discount on credit plus GST @18%",
+          "notes": "Complex sale with discount + GST"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 6,
+          "tx_text": "Received Rs.12000 from Amit by cheque",
+          "notes": "Receipt \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 7,
+          "tx_text": "Returned goods to Raj Rs.3000",
+          "notes": "Return \u2014 may merge"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 8,
+          "tx_text": "Allowed discount Rs.1000 to Amit",
+          "notes": "Discount \u2014 may merge"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": true,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 9,
+          "tx_text": "Paid Rs.5000 to Mehta cash",
+          "notes": "Payment to Mehta"
+        },
+        {
+          "actual_status": "REVIEW_REQUIRED",
+          "expected_status": "VERIFIED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": false,
+          "tx_index": 10,
+          "tx_text": "Received Rs.8000 from Suresh cash",
+          "notes": "Cash receipt"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 11,
+          "tx_text": "Purchased goods from Ramesh Rs.20000 on credit; Paid Rs.10000 to Ramesh by chequ",
+          "notes": "Purchase from Ramesh"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "REVIEW_REQUIRED",
+          "status_match": false,
+          "party_missing": "Ramesh",
+          "is_incorrect_verified": false,
+          "potentially_incorrect": true,
+          "is_balanced_but_wrong": true,
+          "tx_index": 12,
+          "tx_text": "Paid rent Rs.5000 cash",
+          "notes": "Payment \u2014 merged"
+        },
+        {
+          "actual_status": "VERIFIED",
+          "expected_status": "VERIFIED",
+          "status_match": true,
+          "dr_account_match": false,
+          "actual_dr": [
+            "Salaries"
+          ],
+          "expected_dr": "Rent",
+          "cr_account_match": true,
+          "actual_cr": [
+            "Cash"
+          ],
+          "expected_cr": "Cash",
+          "amount_match": false,
+          "actual_amounts": [
+            "8000"
+          ],
+          "expected_amount": "5000",
+          "is_incorrect_verified": false,
+          "is_balanced_but_wrong": true,
+          "tx_index": 13,
+          "tx_text": "Paid salaries Rs.8000 cash.",
+          "notes": "Rent paid"
+        }
+      ],
+      "execution_time_ms": 80.02161979675293,
+      "deterministic_hash": "be532444fab5b6a5"
+    }
+  ],
+  "determinism_runs": {
+    "ADV01": [
+      "7bbec3aa67ae6595",
+      "7bbec3aa67ae6595",
+      "7bbec3aa67ae6595"
+    ],
+    "ADV02": [
+      "a99f486372e926ff",
+      "a99f486372e926ff",
+      "a99f486372e926ff"
+    ],
+    "ADV03": [
+      "b3accfa135eb629c",
+      "b3accfa135eb629c",
+      "b3accfa135eb629c"
+    ],
+    "ADV04": [
+      "fa9f03abf3cbcc4e",
+      "fa9f03abf3cbcc4e",
+      "fa9f03abf3cbcc4e"
+    ],
+    "ADV05": [
+      "433ebb1f00ded6b8",
+      "433ebb1f00ded6b8",
+      "433ebb1f00ded6b8"
+    ],
+    "ADV06": [
+      "6dba69ea0f274619",
+      "6dba69ea0f274619",
+      "6dba69ea0f274619"
+    ],
+    "ADV07": [
+      "df4366eeaa09b244",
+      "df4366eeaa09b244",
+      "df4366eeaa09b244"
+    ],
+    "ADV08": [
+      "c49b533abf99cc07",
+      "c49b533abf99cc07",
+      "c49b533abf99cc07"
+    ],
+    "ADV09": [
+      "7edaf6f812dd6472",
+      "7edaf6f812dd6472",
+      "7edaf6f812dd6472"
+    ],
+    "ADV10": [
+      "5a33c847fb9c5379",
+      "5a33c847fb9c5379",
+      "5a33c847fb9c5379"
+    ],
+    "ADV11": [
+      "f995fc847c663462",
+      "f995fc847c663462",
+      "f995fc847c663462"
+    ],
+    "ADV12": [
+      "18b78c8b295436c4",
+      "18b78c8b295436c4",
+      "18b78c8b295436c4"
+    ],
+    "ADV13": [
+      "10c309367809f8e0",
+      "10c309367809f8e0",
+      "10c309367809f8e0"
+    ],
+    "ADV14": [
+      "c3d772d6bb8cde5c",
+      "c3d772d6bb8cde5c",
+      "c3d772d6bb8cde5c"
+    ],
+    "ADV15": [
+      "ecb8a93746b4a178",
+      "ecb8a93746b4a178",
+      "ecb8a93746b4a178"
+    ],
+    "ADV16": [
+      "c141d8af107e541b",
+      "c141d8af107e541b",
+      "c141d8af107e541b"
+    ],
+    "ADV17": [
+      "7db543cf114dd01f",
+      "7db543cf114dd01f",
+      "7db543cf114dd01f"
+    ],
+    "ADV18": [
+      "a8d07f198d7474fe",
+      "a8d07f198d7474fe",
+      "a8d07f198d7474fe"
+    ],
+    "ADV19": [
+      "73fb36583d23c68c",
+      "73fb36583d23c68c",
+      "73fb36583d23c68c"
+    ],
+    "ADV20": [
+      "be532444fab5b6a5",
+      "be532444fab5b6a5",
+      "be532444fab5b6a5"
+    ]
+  },
+  "category_stats": {
+    "basic_cycle": {
+      "problems": 1,
+      "verified": 4,
+      "rr": 2,
+      "ns": 0,
+      "ibw": 4
+    },
+    "gst_settlement": {
+      "problems": 1,
+      "verified": 8,
+      "rr": 1,
+      "ns": 1,
+      "ibw": 4
+    },
+    "multi_party": {
+      "problems": 1,
+      "verified": 7,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 6
+    },
+    "cheque_direction": {
+      "problems": 1,
+      "verified": 9,
+      "rr": 1,
+      "ns": 0,
+      "ibw": 9
+    },
+    "settlement_chain": {
+      "problems": 1,
+      "verified": 4,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 4
+    },
+    "fractions": {
+      "problems": 1,
+      "verified": 3,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 3
+    },
+    "balanced_but_wrong_attack": {
+      "problems": 1,
+      "verified": 9,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 5
+    },
+    "indian_phrasing": {
+      "problems": 1,
+      "verified": 6,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 3
+    },
+    "ambiguity": {
+      "problems": 1,
+      "verified": 2,
+      "rr": 5,
+      "ns": 2,
+      "ibw": 2
+    },
+    "gst_discount_return": {
+      "problems": 1,
+      "verified": 8,
+      "rr": 1,
+      "ns": 0,
+      "ibw": 5
+    },
+    "compound_entries": {
+      "problems": 1,
+      "verified": 6,
+      "rr": 2,
+      "ns": 1,
+      "ibw": 5
+    },
+    "indian_variants": {
+      "problems": 1,
+      "verified": 7,
+      "rr": 2,
+      "ns": 1,
+      "ibw": 4
+    },
+    "cross_tx_dependency": {
+      "problems": 1,
+      "verified": 5,
+      "rr": 2,
+      "ns": 0,
+      "ibw": 5
+    },
+    "gst_schemes": {
+      "problems": 1,
+      "verified": 6,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 5
+    },
+    "returns_settlements": {
+      "problems": 1,
+      "verified": 6,
+      "rr": 2,
+      "ns": 0,
+      "ibw": 6
+    },
+    "compound_multi_amount": {
+      "problems": 1,
+      "verified": 5,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 4
+    },
+    "same_party_chain": {
+      "problems": 1,
+      "verified": 3,
+      "rr": 1,
+      "ns": 0,
+      "ibw": 3
+    },
+    "opening_edge": {
+      "problems": 1,
+      "verified": 4,
+      "rr": 2,
+      "ns": 3,
+      "ibw": 4
+    },
+    "historical_refs": {
+      "problems": 1,
+      "verified": 4,
+      "rr": 2,
+      "ns": 1,
+      "ibw": 4
+    },
+    "extreme_mixed": {
+      "problems": 1,
+      "verified": 10,
+      "rr": 3,
+      "ns": 0,
+      "ibw": 10
+    }
+  }
+}
