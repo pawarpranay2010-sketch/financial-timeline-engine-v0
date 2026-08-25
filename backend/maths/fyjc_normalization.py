@@ -215,8 +215,14 @@ def normalize_fyjc_text(text: str) -> NormalizationResult:
     out = _PA_RE.sub(lambda m: _dotted_sub(m, "BK_NORM_PER_ANNUM",
                                            "per annum"), out)
 
-    # 4) harmless whitespace collapse
-    collapsed = _WS_RE.sub(" ", out).strip()
+    # 4) Convert newlines to sentence boundaries before collapsing
+    #    horizontal whitespace.  The existing splitter uses '.' as a
+    #    sentence separator, so this restores the structural information
+    #    that student line-breaks carry without changing any intra-line
+    #    normalisation.
+    out = out.replace("\n", ". ")
+    # 4b) harmless whitespace collapse (horizontal only after newline handling)
+    collapsed = re.sub(r"[ \t]+", " ", out).strip()
     if collapsed != out:
         provenance.append({
             "original": out,

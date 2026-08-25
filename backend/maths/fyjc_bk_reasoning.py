@@ -1842,7 +1842,8 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     if "cheque" in low and ("received a cheque" in low
                             or "got a cheque" in low
                             or "cheque received" in low
-                            or "cheque was received" in low):
+                            or "cheque was received" in low
+                            or ("received" in low and "by cheque" in low)):
         return {
             "key": "CHEQUE_RECEIVED",
             "label": "Receipt by cheque",
@@ -3196,7 +3197,16 @@ def _split_transactions(question: str) -> List[str]:
         # determine the cash/credit split and outstanding liability
         # deterministically.  The prior_has_pay guard was preventing the
         # second and subsequent payments from merging.
+        # Guard: do NOT merge a payment into a prior purchase when the
+        # payment names a different party.  'Paid Rs.10000 to Ramesh'
+        # following 'Purchased goods from Mehta' is an independent
+        # settlement transaction, not a payment step of Mehta's purchase.
+        _pay_party = _extract_party_from_segment(seg)
+        _prior_party = _extract_party_from_segment(prior) if prior else None
+        _cross_party = bool(_pay_party and _prior_party
+                            and _pay_party.lower() != _prior_party.lower())
         if prior and _is_payment_step(seg) and is_purchase_prior \
+                and not _cross_party \
                 and (" paid " in low_seg or " discount " in low_seg or " payment " in low_seg or " was paid " in low_seg or " was made " in low_seg):
             merged[-1] = merged[-1] + "; " + seg
         else:
@@ -5113,6 +5123,30 @@ _STRONG_TRANSACTION_VERBS = (
     "wages", "insurance", "commission", "interest", "drawings",
     "capital", "expense", "advertisement", "electricity",
 )
+
+
+def _extract_party_from_segment(segment: str) -> Optional[str]:
+    """Extract the named party from a transaction segment.
+
+    Checks 'from X', 'to X', 'X paid', 'paid X' patterns.  Returns the
+    normalised party name or *None* when no named party is found.  Used
+    by the splitter merge guard to prevent cross-party merging.
+    """
+    if not segment:
+        return None
+    low = segment.lower()
+    # 'from <Party>' / 'to <Party>'
+    m = re.search(r"\b(?:from|to)\s+([A-Z][a-z]+)", segment)
+    if m:
+        return _normalise_party_token(m.group(1)) or m.group(1)
+    # '<Party> paid' / 'paid <Party>'
+    m = re.search(r"\b([A-Z][a-z]+)\s+paid\b", segment)
+    if m:
+        return _normalise_party_token(m.group(1)) or m.group(1)
+    m = re.search(r"\bpaid\s+([A-Z][a-z]+)\b", segment)
+    if m:
+        return _normalise_party_token(m.group(1)) or m.group(1)
+    return None
 
 
 def _is_payment_step(segment: str) -> bool:

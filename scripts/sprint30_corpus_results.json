@@ -1,0 +1,546 @@
+[
+  {
+    "id": "S30-A1",
+    "category": "A_adjacent_lines",
+    "description": "Two purchases, one payment \u2014 3 independent transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "993cb65f36f3",
+    "expected_txns": 3,
+    "actual_txns": 3,
+    "verified_txns": 3,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Mehta",
+      "Ramesh"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "12000",
+      "8000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "12000",
+      "8000"
+    ],
+    "expected_instruments": [
+      "cheque"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 54.6
+  },
+  {
+    "id": "S30-A2",
+    "category": "A_adjacent_lines",
+    "description": "Sale then receipt \u2014 2 transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "dd36b124e492",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Amit"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "15000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "15000"
+    ],
+    "expected_instruments": [
+      "cash",
+      "credit"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 66.0
+  },
+  {
+    "id": "S30-A3",
+    "category": "A_adjacent_lines",
+    "description": "Purchase then return \u2014 2 transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "25e0823da038",
+    "expected_txns": 2,
+    "actual_txns": 2,
+    "verified_txns": 2,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Raj"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "20000",
+      "5000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "20000",
+      "5000"
+    ],
+    "expected_instruments": [],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 2.1
+  },
+  {
+    "id": "S30-A4",
+    "category": "A_adjacent_lines",
+    "description": "Sale then discount allowed \u2014 2 transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "289fe9ff72f6",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Sunil"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "1000",
+      "25000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "1000",
+      "25000"
+    ],
+    "expected_instruments": [],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 4.0
+  },
+  {
+    "id": "S30-A5",
+    "category": "A_adjacent_lines",
+    "description": "Purchase then partial payment \u2014 2 transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "8c411635b89b",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Mohan"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "20000",
+      "30000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "20000",
+      "30000"
+    ],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 1,
+    "execution_time_ms": 73.0
+  },
+  {
+    "id": "S30-B1",
+    "category": "B_multiple_parties",
+    "description": "Three different parties \u2014 purchase, purchase, payment to one",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "d1d987ec4f15",
+    "expected_txns": 4,
+    "actual_txns": 4,
+    "verified_txns": 4,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Mohan",
+      "Raj",
+      "Suresh"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "3000",
+      "5000",
+      "8000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "3000",
+      "5000",
+      "8000"
+    ],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 12.4
+  },
+  {
+    "id": "S30-B2",
+    "category": "B_multiple_parties",
+    "description": "Two debtors \u2014 sale then receipt from different debtor",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "d6057d19c27f",
+    "expected_txns": 3,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Anand",
+      "Bipin"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "15000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "15000"
+    ],
+    "expected_instruments": [
+      "cash",
+      "credit"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 62.9
+  },
+  {
+    "id": "S30-C1",
+    "category": "C_multiple_amounts",
+    "description": "Credit purchase then partial payment \u2014 2 transactions",
+    "classification": "BALANCED_BUT_WRONG",
+    "text_hash": "221e1ead650e",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Ravi"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "15000",
+      "25000"
+    ],
+    "amounts_preserved": false,
+    "journal_amounts": [
+      "25000"
+    ],
+    "expected_instruments": [
+      "cheque",
+      "credit"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 66.2
+  },
+  {
+    "id": "S30-C2",
+    "category": "C_multiple_amounts",
+    "description": "Sale with discount and receipt \u2014 3 transactions",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "bdeddbc8314a",
+    "expected_txns": 3,
+    "actual_txns": 2,
+    "verified_txns": 2,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Kiran"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "2000",
+      "38000",
+      "40000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "2000",
+      "38000",
+      "40000"
+    ],
+    "expected_instruments": [
+      "cash",
+      "credit"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 8.2
+  },
+  {
+    "id": "S30-D1",
+    "category": "D_connectors",
+    "description": "Two purchases separated by period, then payment",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "22358583ebf0",
+    "expected_txns": 3,
+    "actual_txns": 3,
+    "verified_txns": 3,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Amit",
+      "Raj"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "5000",
+      "7000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "5000",
+      "7000"
+    ],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 5.0
+  },
+  {
+    "id": "S30-D2",
+    "category": "D_connectors",
+    "description": "Purchase, then payment immediately same day",
+    "classification": "BALANCED_BUT_WRONG",
+    "text_hash": "6bbf6d0e117e",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 0,
+    "rr_txns": 1,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Suresh"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "12000"
+    ],
+    "amounts_preserved": false,
+    "journal_amounts": [],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": false,
+    "balanced": true,
+    "merged_segments": 1,
+    "execution_time_ms": 56.9
+  },
+  {
+    "id": "S30-E1",
+    "category": "E_indian_phrasing",
+    "description": "Paid cash same time \u2014 settlement phrasing",
+    "classification": "BALANCED_BUT_WRONG",
+    "text_hash": "7181e3042f9b",
+    "expected_txns": 2,
+    "actual_txns": 1,
+    "verified_txns": 0,
+    "rr_txns": 1,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Kiran"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "8000"
+    ],
+    "amounts_preserved": false,
+    "journal_amounts": [],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": false,
+    "balanced": true,
+    "merged_segments": 1,
+    "execution_time_ms": 8.3
+  },
+  {
+    "id": "S30-E2",
+    "category": "E_indian_phrasing",
+    "description": "Balance paid \u2014 settlement of creditor",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "eed498619f59",
+    "expected_txns": 3,
+    "actual_txns": 1,
+    "verified_txns": 1,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Raj"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "4000",
+      "6000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "4000",
+      "6000"
+    ],
+    "expected_instruments": [
+      "cash"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 1,
+    "execution_time_ms": 61.8
+  },
+  {
+    "id": "S30-F1",
+    "category": "F_whole_problem",
+    "description": "Full opening + 4 transactions (DWP001-like)",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "c57a35bd588c",
+    "expected_txns": 5,
+    "actual_txns": 3,
+    "verified_txns": 2,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Amit",
+      "Raj"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "15000",
+      "20000",
+      "25000",
+      "50000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "15000",
+      "20000",
+      "25000",
+      "5000",
+      "50000"
+    ],
+    "expected_instruments": [
+      "cash",
+      "credit"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 70.1
+  },
+  {
+    "id": "S30-G1",
+    "category": "G_cross_party",
+    "description": "Purchase from Raj, purchase from Amit, pay Raj",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "b47e6f0bc27a",
+    "expected_txns": 3,
+    "actual_txns": 3,
+    "verified_txns": 3,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Amit",
+      "Raj"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "8000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "8000"
+    ],
+    "expected_instruments": [
+      "cheque"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 5.9
+  },
+  {
+    "id": "S30-H1_DWP003",
+    "category": "H_DWP003_repro",
+    "description": "Exact DWP003 \u2014 the splitter merges Mehta and Ramesh payment",
+    "classification": "VERIFIED_CORRECT",
+    "text_hash": "47b921649941",
+    "expected_txns": 3,
+    "actual_txns": 7,
+    "verified_txns": 3,
+    "rr_txns": 0,
+    "ns_txns": 0,
+    "expected_entities": [
+      "Mehta",
+      "Ramesh"
+    ],
+    "entities_preserved": true,
+    "missing_entities": [],
+    "expected_amounts": [
+      "10000",
+      "12000",
+      "8000"
+    ],
+    "amounts_preserved": true,
+    "journal_amounts": [
+      "10000",
+      "12000",
+      "8000"
+    ],
+    "expected_instruments": [
+      "cheque"
+    ],
+    "instruments_preserved": true,
+    "balanced": true,
+    "merged_segments": 0,
+    "execution_time_ms": 5.5
+  }
+]
