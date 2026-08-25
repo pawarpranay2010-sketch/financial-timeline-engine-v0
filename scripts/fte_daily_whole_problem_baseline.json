@@ -1,0 +1,68 @@
+{
+  "results": [
+    {
+      "digest": "2f7ee7e01c5094e9c1d0514919c80a0bc5e81ccc377afedae3ed801b354e064b",
+      "problem_id": "DWP001_FULL_CYCLE",
+      "summary": {
+        "final_classification": "PROBLEM_VERIFIED",
+        "incorrect_verified": 0,
+        "invalid_math_count": 0,
+        "not_supported_count": 0,
+        "notes": [],
+        "review_required_count": 0,
+        "student_resolvable_count": 0,
+        "transaction_count": 6,
+        "unexpected_review_required_count": 0
+      }
+    },
+    {
+      "digest": "671126197311fc5d3f770c654bc84bbc1ba8597b63cf5453922bc06e297cfe52",
+      "problem_id": "DWP002_GST_CREDIT_CYCLE",
+      "summary": {
+        "final_classification": "PROBLEM_VERIFIED",
+        "incorrect_verified": 2,
+        "invalid_math_count": 0,
+        "not_supported_count": 0,
+        "notes": [
+          "LEDGER GROUND TRUTH MISMATCH: Bank: engine=-23600, correct=23600",
+          "LEDGER GROUND TRUTH MISMATCH: Suresh: engine=47200.00, correct=0"
+        ],
+        "review_required_count": 0,
+        "student_resolvable_count": 0,
+        "transaction_count": 4,
+        "unexpected_review_required_count": 0
+      }
+    },
+    {
+      "digest": "3e3a5fc759fd2c9abf3f6d207c2568792c9bf909dfd2427838817a524dc8e4ad",
+      "problem_id": "DWP003_STUDENT_TYPO_INPUT",
+      "summary": {
+        "final_classification": "PROBLEM_NOT_SUPPORTED",
+        "incorrect_verified": 0,
+        "invalid_math_count": 0,
+        "not_supported_count": 2,
+        "notes": [],
+        "review_required_count": 0,
+        "student_resolvable_count": 0,
+        "transaction_count": 3,
+        "unexpected_review_required_count": 0
+      }
+    },
+    {
+      "digest": "f7cc59c165d4374f1bcb453f4b93822a962429b7069e6e728dbf02e00e159b09",
+      "problem_id": "DWP004_DISCOUNT_SETTLEMENT",
+      "summary": {
+        "final_classification": "PROBLEM_REVIEW_REQUIRED",
+        "incorrect_verified": 0,
+        "invalid_math_count": 0,
+        "not_supported_count": 0,
+        "notes": [],
+        "review_required_count": 2,
+        "student_resolvable_count": 0,
+        "transaction_count": 2,
+        "unexpected_review_required_count": 0
+      }
+    }
+  ],
+  "written_by": "fte_daily_whole_problem_validation.py"
+}
