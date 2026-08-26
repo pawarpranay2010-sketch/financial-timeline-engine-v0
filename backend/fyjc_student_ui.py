@@ -1981,8 +1981,65 @@ def _render_problem_timeline(wf, current_idx):
                 unsafe_allow_html=True)
 
 
+def _relevant_calc_records(calc_records, debit_lines, credit_lines):
+    """Sprint 37: Filter calculation records to only show those relevant
+    to the specific transaction type.
+
+    The engine generates generic calculation records (BK_LIST_PRICE,
+    BK_NET_TRANSACTION_VALUE, BK_PAID_CREDIT_SPLIT) for every transaction.
+    For transactions like drawings, expenses, or opening entries, these
+    generic records are meaningless and misleading. This function
+    suppresses them based on the transaction's journal accounts.
+    """
+    if not calc_records:
+        return calc_records
+
+    accounts = set()
+    for line in (debit_lines or []) + (credit_lines or []):
+        acct = (line.get("account") or "").lower().strip()
+        if acct:
+            accounts.add(acct)
+
+    # Non-goods transactions where BK_LIST_PRICE/BK_NET_TRANSACTION_VALUE
+    # are meaningless
+    _NON_GOODS_ACCOUNTS = {
+        "drawings", "office expenses", "general expenses",
+        "rent", "salaries", "wages", "insurance", "electricity",
+        "advertisement", "postage", "stationery", "repairs",
+        "interest paid", "commission paid", "carriage inward",
+        "carriage outward", "income tax", "fuel", "telephone expenses",
+        "conveyance", "printing", "capital", "loan", "bank loan",
+        "interest on drawings", "interest on capital",
+    }
+    is_non_goods = bool(accounts & _NON_GOODS_ACCOUNTS)
+
+    filtered = []
+    for rec in calc_records:
+        calc_id = rec.get("calculation_id", "")
+
+        # Suppress list price and net value for non-goods transactions
+        if is_non_goods and calc_id in (
+            "BK_LIST_PRICE", "BK_NET_TRANSACTION_VALUE",
+        ):
+            continue
+
+        # Suppress paid/credit split when there is no credit component
+        if calc_id == "BK_PAID_CREDIT_SPLIT":
+            result = rec.get("result") or {}
+            credit_amt = result.get("credit") if isinstance(result, dict) else None
+            if credit_amt is not None and credit_amt == 0:
+                # Full cash payment — the split is trivial and misleading
+                continue
+
+        filtered.append(rec)
+    return filtered
+
+
 def _render_tx_detail(tx, wf):
-    """Sprint 35: Render a comprehensive transaction card.
+    """Sprint 35/37: Render a comprehensive transaction card.
+
+    Design hierarchy:
+
 
     Design hierarchy:
     1. What happened? (original statement)
@@ -2000,7 +2057,8 @@ def _render_tx_detail(tx, wf):
     jnl = tx.get("journal") or {}
     debit_lines = jnl.get("debit_lines", [])
     credit_lines = jnl.get("credit_lines", [])
-    calc_records = jnl.get("calculation_records", [])
+    calc_records = _relevant_calc_records(
+        jnl.get("calculation_records", []), debit_lines, credit_lines)
 
     # --- Transaction Header ---
     st.markdown('<div class="fte-15i-title">Transaction {}</div>'.format(idx),
