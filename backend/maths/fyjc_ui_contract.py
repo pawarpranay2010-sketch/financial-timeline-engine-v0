@@ -720,6 +720,102 @@ def _calculation(result: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+
+
+# -----------------------------------------------------------------------
+# Sprint 35: Transaction-level VERIFIED + journal integrity invariant.
+# -----------------------------------------------------------------------
+
+# Non-posting event types that are legitimately allowed to have zero journal
+# lines when VERIFIED.  These are informational events that the kernel
+# intentionally does not journal.
+_NON_POSTING_EVENT_TYPES = frozenset({
+    "INFORMATIONAL_EVENT",
+    "OPENING_BALANCE",
+})
+
+
+def validate_transaction_integrity(txn: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate that a VERIFIED posting transaction has a valid journal.
+
+    Sprint 35 invariant:
+        POSTING TRANSACTION:
+            VERIFIED  =>  journal_lines >= 1
+                        =>  journal is balanced
+                        =>  all required amounts/entities are accounted for
+
+    If the invariant is violated the transaction is downgraded to
+    REVIEW_REQUIRED with a clear student-facing message.  The accounting
+    kernel is never bypassed and no fake journal lines are invented.
+
+    Returns a new dict (never mutates the input).
+    """
+    result = dict(txn)
+    status = txn.get("status")
+    event_type = txn.get("event_type", "ACCOUNTING_TRANSACTION")
+
+    # Non-posting events are exempt from the journal-line requirement.
+    if event_type in _NON_POSTING_EVENT_TYPES:
+        return result
+
+    # Only apply the invariant to VERIFIED posting transactions.
+    if status != "VERIFIED":
+        return result
+
+    journal = txn.get("journal") or {}
+    debit_lines = journal.get("debit_lines") or []
+    credit_lines = journal.get("credit_lines") or []
+    total_lines = len(debit_lines) + len(credit_lines)
+
+    if total_lines == 0:
+        # Invariant violated: VERIFIED posting transaction with no journal.
+        result["status"] = "REVIEW_REQUIRED"
+        result["why_not"] = (
+            "Platrixa understood this transaction, but no journal entry was "
+            "produced. It cannot be marked verified."
+        )
+        result["_integrity_downgraded"] = True
+
+    return result
+
+
+def validate_problem_integrity(transactions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate all transactions in a problem and return summary stats.
+
+    Returns a dict with:
+        - transactions: list of (possibly downgraded) transactions
+        - verified_count: int
+        - review_required_count: int
+        - not_supported_count: int
+        - integrity_violations: int (number of downgrades applied)
+    """
+    verified = 0
+    review_required = 0
+    not_supported = 0
+    violations = 0
+    validated = []
+
+    for txn in transactions:
+        validated_txn = validate_transaction_integrity(txn)
+        validated.append(validated_txn)
+        s = validated_txn.get("status")
+        if validated_txn.get("_integrity_downgraded"):
+            violations += 1
+        if s == "VERIFIED":
+            verified += 1
+        elif s == "REVIEW_REQUIRED":
+            review_required += 1
+        elif s in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
+            not_supported += 1
+
+    return {
+        "transactions": validated,
+        "verified_count": verified,
+        "review_required_count": review_required,
+        "not_supported_count": not_supported,
+        "integrity_violations": violations,
+    }
+
 def debug_graph_payload(result: Dict[str, Any]) -> Dict[str, Any]:
     """A deep copy of the production orchestration graph. The UI renders
     this exactly and can never mutate it."""

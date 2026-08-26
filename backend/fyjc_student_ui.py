@@ -1455,11 +1455,17 @@ def _compute_projection(question: str) -> Dict[str, Any]:
         if verified:
             # Use the last verified transaction as the primary result
             primary = verified[-1]
+            _jnl = primary.get("journal") or {}
             single_result = {
                 "status": primary["status"],
-                "journal": primary.get("journal"),
+                "journal": _jnl,
                 "why_not": None,
                 "next_action": primary.get("next_action"),
+                # Sprint 35: copy journal lines to top level so the UI
+                # contract (_journal / _calculation) can read them.
+                "debit_lines": _jnl.get("debit_lines", []),
+                "credit_lines": _jnl.get("credit_lines", []),
+                "calculation_records": _jnl.get("calculation_records", []),
             }
         else:
             # No verified transactions - surface first non-informational
@@ -1467,11 +1473,15 @@ def _compute_projection(question: str) -> Dict[str, Any]:
                         if t.get("event_type") not in
                         ("INFORMATIONAL_EVENT", "OPENING_BALANCE")]
             primary = non_info[0] if non_info else result["transactions"][0]
+            _jnl = primary.get("journal") or {}
             single_result = {
                 "status": primary["status"],
-                "journal": primary.get("journal"),
+                "journal": _jnl,
                 "why_not": primary.get("why_not"),
                 "next_action": primary.get("next_action"),
+                "debit_lines": _jnl.get("debit_lines", []),
+                "credit_lines": _jnl.get("credit_lines", []),
+                "calculation_records": _jnl.get("calculation_records", []),
             }
         # Attach problem-level metadata for the UI to render
         single_result["problem_engine"] = {
@@ -1852,7 +1862,11 @@ def _is_multi_tx_problem(projection):
 
 
 def _init_problem_workflow(question, projection):
-    """Initialize or refresh the problem workflow state from projection."""
+    """Initialize or refresh the problem workflow state from projection.
+
+    Sprint 35: applies transaction-level VERIFIED+journal integrity
+    validation so no posting transaction can claim VERIFIED with zero
+    journal lines."""
     pe = projection.get("problem_engine")
     if not pe:
         return
@@ -1860,7 +1874,14 @@ def _init_problem_workflow(question, projection):
     current_fp = st.session_state.get(K_PROBLEM_WORKFLOW_FP)
     if current_fp == fp and K_PROBLEM_WORKFLOW in st.session_state:
         return  # already initialized for this question
-    st.session_state[K_PROBLEM_WORKFLOW] = pe
+    # Sprint 35: validate transaction integrity before storing
+    integrity = validate_problem_integrity(pe.get("transactions", []))
+    pe_validated = dict(pe)
+    pe_validated["transactions"] = integrity["transactions"]
+    pe_validated["_integrity_violations"] = integrity["integrity_violations"]
+    pe_validated["_verified_count"] = integrity["verified_count"]
+    pe_validated["_review_required_count"] = integrity["review_required_count"]
+    st.session_state[K_PROBLEM_WORKFLOW] = pe_validated
     st.session_state[K_PROBLEM_WORKFLOW_FP] = fp
     st.session_state[K_PROBLEM_CURRENT_TX] = 0
     st.session_state[K_PROBLEM_DECISIONS] = {}
@@ -1892,83 +1913,206 @@ def _tx_status_icon(status):
 
 
 def _render_problem_timeline(wf, current_idx):
-    """Render the transaction timeline/progress component."""
+    """Sprint 35: Render a comprehensive whole-problem transaction timeline.
+
+    Shows every transaction with its status, a summary of what was understood,
+    and the current viewing position. The student sees the complete accounting
+    story at a glance."""
     txns = wf.get("transactions", [])
     total = len(txns)
     if total == 0:
         return
 
-    # Count completed
-    completed = sum(1 for t in txns if t["status"] in ("VERIFIED", "INFORMATIONAL_EVENT", "OPENING_BALANCE"))
-    st.markdown("**Accounting Problem**  \u2014  Progress: {} / {} transactions".format(completed, total))
+    verified = wf.get("_verified_count", 0)
+    review = wf.get("_review_required_count", 0)
+    not_supp = sum(1 for t in txns if t.get("status") in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"))
+
+    st.markdown('<div class="fte-15i-title">Accounting Problem</div>',
+                unsafe_allow_html=True)
+
+    # Summary line
+    summary_parts = []
+    if verified:
+        summary_parts.append("\u2705 {} verified".format(verified))
+    if review:
+        summary_parts.append("\u26a0\ufe0f {} needs review".format(review))
+    if not_supp:
+        summary_parts.append("\u274c {} unsupported".format(not_supp))
+    st.markdown("  ".join(summary_parts))
 
     for i, tx in enumerate(txns):
         idx = tx["index"]
         status = tx["status"]
         text = tx["text"]
         icon = _tx_status_icon(status)
+        ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
 
-        if i < current_idx:
-            detail = text[:55] + ("..." if len(text) > 55 else "")
-            st.markdown("  {} T{}  {}".format(icon, idx, detail))
-        elif i == current_idx:
-            st.markdown("**\u25b6 T{}**  {}".format(idx, text[:60]))
+        # Status label
+        if status == "VERIFIED":
+            status_label = "Verified"
+        elif status == "REVIEW_REQUIRED":
+            status_label = "Needs review"
+        elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
+            status_label = status.replace("_", " ").title()
+        elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
+            status_label = ev.replace("_", " ").title()
         else:
-            detail = text[:55] + ("..." if len(text) > 55 else "")
-            st.markdown("  \u25cb T{}  {}".format(idx, detail))
+            status_label = status
+
+        # Transaction text preview
+        preview = text[:65] + ("..." if len(text) > 65 else "")
+
+        if i == current_idx:
+            st.markdown(
+                '<div style="background:#f0f7ff; border-left:3px solid #1a73e8; '
+                'padding:6px 10px; margin:3px 0; border-radius:4px;">'
+                '<b>\u25b6 T{idx}</b> {preview}<br/>'
+                '<span style="color:#666; font-size:0.85em;">{icon} {status_label}</span>'
+                '</div>'.format(idx=idx, preview=preview, icon=icon,
+                                status_label=status_label),
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="padding:3px 10px; margin:2px 0;">'
+                '{icon} <b>T{idx}</b> {preview} '
+                '<span style="color:#888; font-size:0.85em;">\u2014 {status_label}</span>'
+                '</div>'.format(icon=icon, idx=idx, preview=preview,
+                                status_label=status_label),
+                unsafe_allow_html=True)
 
 
 def _render_tx_detail(tx, wf):
-    """Render the detailed view of a single transaction."""
+    """Sprint 35: Render a comprehensive transaction card.
+
+    Design hierarchy:
+    1. What happened? (original statement)
+    2. What did Platrixa understand? (normalized interpretation)
+    3. Is it verified? (status)
+    4. What journal did it create? (aligned table)
+    5. What calculation produced the amounts? (transaction-specific)
+    6. Why did it choose this treatment? (optional expanders)
+    7. What changed in the ledger? (state delta)
+    """
     idx = tx["index"]
     status = tx["status"]
     text = tx["text"]
     ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
+    jnl = tx.get("journal") or {}
+    debit_lines = jnl.get("debit_lines", [])
+    credit_lines = jnl.get("credit_lines", [])
+    calc_records = jnl.get("calculation_records", [])
 
-    st.markdown("### Transaction {}".format(idx))
+    # --- Transaction Header ---
+    st.markdown('<div class="fte-15i-title">Transaction {}</div>'.format(idx),
+                unsafe_allow_html=True)
 
+    # --- Status Badge ---
     if status == "VERIFIED":
         st.success("\u2705 Verified")
     elif status == "REVIEW_REQUIRED":
-        st.warning("\u26a0\ufe0f Clarification required")
+        st.warning("\u26a0\ufe0f Review required")
     elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
         st.error("\u274c {}".format(status.replace("_", " ").title()))
     elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
-        st.info("\u2139\ufe0f {} \u2014 no accounting entry".format(ev.replace("_", " ").title()))
+        st.info("\u2139\ufe0f {} \u2014 no accounting entry".format(
+            ev.replace("_", " ").title()))
+    elif status == "BLOCKED":
+        st.error("\u274c Blocked")
 
-    st.markdown("**Input:** {}".format(text))
+    # --- Original Statement ---
+    st.markdown('<div style="background:#f8f9fa; padding:8px 12px; '
+                'border-radius:4px; margin:4px 0; font-style:italic;">'
+                '"{}"</div>'.format(text), unsafe_allow_html=True)
 
+    # --- Historical References ---
     if tx.get("historical_references"):
-        st.markdown("**Historical dependency detected:**")
-        for ref in tx["historical_references"]:
-            st.markdown(
-                "  - Referenced T{} ({}): Rs.{}".format(
-                    ref["transaction_index"], ref["event_type"], ref["amount"]
+        with st.expander("\U0001f50d Historical dependencies", expanded=False):
+            for ref in tx["historical_references"]:
+                st.markdown(
+                    "\u2192 Referenced T{} ({}): Rs.{}".format(
+                        ref["transaction_index"], ref["event_type"], ref["amount"]
+                    )
                 )
-            )
 
-    if tx.get("journal"):
-        j = tx["journal"]
-        dr = j.get("debit_lines", [])
-        cr = j.get("credit_lines", [])
-        if dr or cr:
-            st.markdown("**Journal:**")
-            for line in dr:
-                st.markdown("  DR {} Rs.{}".format(line["account"], line["amount"]))
-            for line in cr:
-                st.markdown("  CR {} Rs.{}".format(line["account"], line["amount"]))
+    # --- Journal Entry (aligned table) ---
+    if debit_lines or credit_lines:
+        st.markdown("**Journal Entry**")
+        # Header row
+        cols = st.columns([4, 2, 2], gap="small")
+        cols[0].markdown("**Account**")
+        cols[1].markdown("**Debit**")
+        cols[2].markdown("**Credit**")
+        # Debit lines
+        for line in debit_lines:
+            cols = st.columns([4, 2, 2], gap="small")
+            cols[0].markdown(line.get("account", ""))
+            cols[1].markdown("\u20b9{:,}".format(
+                int(float(line.get("amount", 0))) if line.get("amount") else 0))
+            cols[2].markdown("\u2014")
+        # Credit lines
+        for line in credit_lines:
+            cols = st.columns([4, 2, 2], gap="small")
+            cols[0].markdown(line.get("account", ""))
+            cols[1].markdown("\u2014")
+            cols[2].markdown("\u20b9{:,}".format(
+                int(float(line.get("amount", 0))) if line.get("amount") else 0))
+        # Totals
+        total_d = jnl.get("total_debit", 0)
+        total_c = jnl.get("total_credit", 0)
+        cols = st.columns([4, 2, 2], gap="small")
+        cols[0].markdown("**Total**")
+        cols[1].markdown("**\u20b9{:,}**".format(
+            int(float(total_d)) if total_d else 0))
+        cols[2].markdown("**\u20b9{:,}**".format(
+            int(float(total_c)) if total_c else 0))
+        if jnl.get("balanced"):
+            st.caption("\u2705 Balanced")
+    elif status == "VERIFIED" and ev == "ACCOUNTING_TRANSACTION":
+        # Sprint 35 invariant: VERIFIED posting with no journal should not
+        # reach here (validate_transaction_integrity downgrades it), but
+        # display a safety message just in case.
+        st.error("This transaction claims Verified but has no journal entry. "
+                 "This should not happen.")
 
+    # --- State Delta (accounting effect) ---
     if tx.get("state_delta"):
         sd = tx["state_delta"]
-        st.markdown("**State change:**")
-        for d in sd["deltas"]:
-            arrow = "\u2191" if d["direction"] == "debit" else "\u2193"
-            st.markdown("  {} {}: Rs.{}".format(arrow, d["account"], d["amount"]))
+        with st.expander("\U0001f4ca Accounting effect", expanded=False):
+            for d in sd.get("deltas", []):
+                arrow = "\u2191" if d["direction"] == "debit" else "\u2193"
+                st.markdown("{} **{}**: \u20b9{}".format(
+                    arrow, d["account"],
+                    "\u20b9{:,}".format(
+                        int(float(d["amount"])) if d.get("amount") else 0)))
 
-    if tx.get("why_not"):
-        st.markdown("**Why:** {}".format(tx["why_not"]))
+    # --- Optional: Why? ---
+    if status == "VERIFIED" and (tx.get("why_not") or jnl.get("narration")):
+        with st.expander("\U0001f4a1 Why this treatment?", expanded=False):
+            if jnl.get("narration"):
+                st.markdown(jnl["narration"])
+            if jnl.get("why_not"):
+                st.markdown(jnl["why_not"])
+
+    # --- Optional: Calculation (transaction-specific) ---
+    if calc_records:
+        with st.expander("\U0001f4d0 Calculation", expanded=False):
+            for rec in calc_records:
+                label = rec.get("label", "")
+                result_val = rec.get("result", "")
+                formula = rec.get("formula", "")
+                inputs = rec.get("inputs", {})
+                input_text = " \u00b7 ".join(
+                    "{} = {}".format(k, v) for k, v in inputs.items())
+                line = "**{}**: {}".format(label, result_val)
+                if formula:
+                    line += " *({})*".format(formula)
+                st.markdown(line)
+                if input_text:
+                    st.caption(input_text)
+
+    # --- Next action ---
     if tx.get("next_action"):
-        st.markdown("**Next step:** {}".format(tx["next_action"]))
+        st.info("\U0001f446 **Next:** {}".format(tx["next_action"]))
 
 
 def _render_problem_result(wf):
