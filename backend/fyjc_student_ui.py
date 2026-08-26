@@ -1962,7 +1962,7 @@ def _render_problem_timeline(wf, current_idx):
         # Transaction text preview
         preview = text[:65] + ("..." if len(text) > 65 else "")
 
-        if i == current_idx:
+        if current_idx >= 0 and i == current_idx:
             st.markdown(
                 '<div style="background:#f0f7ff; border-left:3px solid #1a73e8; '
                 'padding:6px 10px; margin:3px 0; border-radius:4px;">'
@@ -2159,49 +2159,68 @@ def _render_problem_result(wf):
 
 
 def _render_problem_workflow(question, projection):
-    """Main Sprint 17 workflow renderer for multi-transaction problems."""
+    """Sprint 35/36: Render the whole-problem workflow with ALL transactions
+    visible simultaneously.
+
+    The student sees the complete accounting story at once:
+    - Timeline overview at the top
+    - Every transaction as an expandable card with its own journal,
+      calculation, explanation, and details
+    - Final problem result and ledger at the bottom
+
+    This is NOT a step-by-step wizard. Every transaction is visible and
+    individually explorable.
+    """
     pe = projection.get("problem_engine")
     if not pe:
         return
 
     _init_problem_workflow(question, projection)
     wf = _get_workflow_state()
-    current_idx = _get_current_tx_index()
     txns = wf.get("transactions", [])
 
     if not txns:
         st.info("No transactions detected in this problem.")
         return
 
-    _render_problem_timeline(wf, current_idx)
+    # --- Timeline overview (always visible) ---
+    _render_problem_timeline(wf, -1)  # -1 = no highlight (all visible)
     st.markdown("---")
 
-    if current_idx < len(txns):
-        tx = txns[current_idx]
-        _render_tx_detail(tx, wf)
+    # --- All transaction cards (each in its own expander) ---
+    for i, tx in enumerate(txns):
+        status = tx["status"]
+        ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
+        icon = _tx_status_icon(status)
+        text = tx["text"]
+        preview = text[:60] + ("..." if len(text) > 60 else "")
 
-        col1, col2, col3 = st.columns([1, 2, 1])
+        # Status label for the expander title
+        if status == "VERIFIED":
+            status_label = "\u2705 Verified"
+        elif status == "REVIEW_REQUIRED":
+            status_label = "\u26a0\ufe0f Needs review"
+        elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
+            status_label = "\u274c " + status.replace("_", " ").title()
+        elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
+            status_label = "\u2139\ufe0f " + ev.replace("_", " ").title()
+        elif status == "BLOCKED":
+            status_label = "\u274c Blocked"
+        else:
+            status_label = status
 
-        with col1:
-            if current_idx > 0:
-                if st.button("\u25c0 Previous"):
-                    st.session_state[K_PROBLEM_CURRENT_TX] = current_idx - 1
-                    st.rerun()
+        # Auto-expand REVIEW_REQUIRED so the student sees what needs attention
+        is_attention = status in ("REVIEW_REQUIRED", "BLOCKED",
+                                  "NOT_SUPPORTED", "INVALID_INPUT_MATH")
 
-        with col3:
-            status = tx["status"]
-            is_completed = status in ("VERIFIED", "INFORMATIONAL_EVENT", "OPENING_BALANCE")
+        with st.expander(
+            "T{} {} \u2014 {}".format(tx["index"], icon, preview),
+            expanded=is_attention,
+        ):
+            _render_tx_detail(tx, wf)
 
-            if status == "REVIEW_REQUIRED":
-                st.info("This transaction needs clarification before proceeding.")
-            elif is_completed and current_idx < len(txns) - 1:
-                if st.button("Next \u25b6"):
-                    _advance_to_next_tx()
-                    st.rerun()
-            elif is_completed and current_idx == len(txns) - 1:
-                st.success("All transactions processed!")
-    else:
-        _render_problem_result(wf)
+    # --- Final problem result ---
+    _render_problem_result(wf)
 
 
 def _render_debug_graph(projection: Dict[str, Any]) -> None:
