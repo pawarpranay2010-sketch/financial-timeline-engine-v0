@@ -134,7 +134,7 @@
           "notes": "Rent paid cash"
         }
       ],
-      "execution_time_ms": 100.91495513916016,
+      "execution_time_ms": 119.80199813842773,
       "deterministic_hash": "7bbec3aa67ae6595"
     },
     {
@@ -377,7 +377,7 @@
           "notes": "Rent paid"
         }
       ],
-      "execution_time_ms": 14.800071716308594,
+      "execution_time_ms": 16.45636558532715,
       "deterministic_hash": "a99f486372e926ff"
     },
     {
@@ -527,7 +527,7 @@
           "notes": "Receipt by cheque from Ramesh"
         }
       ],
-      "execution_time_ms": 11.774301528930664,
+      "execution_time_ms": 13.504981994628906,
       "deterministic_hash": "b3accfa135eb629c"
     },
     {
@@ -713,7 +713,7 @@
           "notes": "Receipt by cheque from Ramesh"
         }
       ],
-      "execution_time_ms": 67.3820972442627,
+      "execution_time_ms": 78.60827445983887,
       "deterministic_hash": "fa9f03abf3cbcc4e"
     },
     {
@@ -826,7 +826,7 @@
           "notes": "Receipt \u2014 may be merged with sale"
         }
       ],
-      "execution_time_ms": 67.1224594116211,
+      "execution_time_ms": 79.54740524291992,
       "deterministic_hash": "433ebb1f00ded6b8"
     },
     {
@@ -916,7 +916,7 @@
           "notes": "Partial receipt \u2014 may be merged with sale"
         }
       ],
-      "execution_time_ms": 81.05874061584473,
+      "execution_time_ms": 96.2972640991211,
       "deterministic_hash": "6dba69ea0f274619"
     },
     {
@@ -1115,7 +1115,7 @@
           "notes": "Rent paid"
         }
       ],
-      "execution_time_ms": 10.85352897644043,
+      "execution_time_ms": 12.884855270385742,
       "deterministic_hash": "df4366eeaa09b244"
     },
     {
@@ -1267,7 +1267,7 @@
           "notes": "Rent paid"
         }
       ],
-      "execution_time_ms": 9.081602096557617,
+      "execution_time_ms": 10.611534118652344,
       "deterministic_hash": "c49b533abf99cc07"
     },
     {
@@ -1373,7 +1373,7 @@
           "notes": "Return \u2014 no party, no direction"
         }
       ],
-      "execution_time_ms": 6.745338439941406,
+      "execution_time_ms": 7.9135894775390625,
       "deterministic_hash": "7edaf6f812dd6472"
     },
     {
@@ -1531,7 +1531,7 @@
           "notes": "Cash receipt"
         }
       ],
-      "execution_time_ms": 13.104438781738281,
+      "execution_time_ms": 11.913776397705078,
       "deterministic_hash": "5a33c847fb9c5379"
     },
     {
@@ -1655,7 +1655,7 @@
           "notes": "Purchase from Mehta"
         }
       ],
-      "execution_time_ms": 11.319398880004883,
+      "execution_time_ms": 13.284921646118164,
       "deterministic_hash": "f995fc847c663462"
     },
     {
@@ -1818,7 +1818,7 @@
           "notes": "Payment to Ram"
         }
       ],
-      "execution_time_ms": 9.048700332641602,
+      "execution_time_ms": 10.67805290222168,
       "deterministic_hash": "18b78c8b295436c4"
     },
     {
@@ -1933,7 +1933,7 @@
           "notes": "Second sale to Amit"
         }
       ],
-      "execution_time_ms": 81.79521560668945,
+      "execution_time_ms": 98.09327125549316,
       "deterministic_hash": "10c309367809f8e0"
     },
     {
@@ -2059,7 +2059,7 @@
           "notes": "Receipt \u2014 may merge"
         }
       ],
-      "execution_time_ms": 13.92221450805664,
+      "execution_time_ms": 14.442205429077148,
       "deterministic_hash": "c3d772d6bb8cde5c"
     },
     {
@@ -2171,7 +2171,7 @@
           "notes": "Balance receipt"
         }
       ],
-      "execution_time_ms": 64.02254104614258,
+      "execution_time_ms": 75.54841041564941,
       "deterministic_hash": "ecb8a93746b4a178"
     },
     {
@@ -2284,7 +2284,7 @@
           "notes": "Cash receipt"
         }
       ],
-      "execution_time_ms": 71.03323936462402,
+      "execution_time_ms": 77.52704620361328,
       "deterministic_hash": "c141d8af107e541b"
     },
     {
@@ -2341,7 +2341,7 @@
           "notes": "Second purchase"
         }
       ],
-      "execution_time_ms": 117.44189262390137,
+      "execution_time_ms": 135.7104778289795,
       "deterministic_hash": "7db543cf114dd01f"
     },
     {
@@ -2466,7 +2466,7 @@
           "notes": "Cash receipt"
         }
       ],
-      "execution_time_ms": 73.8074779510498,
+      "execution_time_ms": 86.84921264648438,
       "deterministic_hash": "a8d07f198d7474fe"
     },
     {
@@ -2580,7 +2580,7 @@
           "notes": "Rent paid"
         }
       ],
-      "execution_time_ms": 63.72547149658203,
+      "execution_time_ms": 89.49041366577148,
       "deterministic_hash": "73fb36583d23c68c"
     },
     {
@@ -2749,7 +2749,7 @@
           "notes": "Rent paid"
         }
       ],
-      "execution_time_ms": 72.6923942565918,
+      "execution_time_ms": 86.60602569580078,
       "deterministic_hash": "be532444fab5b6a5"
     }
   ],

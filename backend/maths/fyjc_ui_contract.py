@@ -839,7 +839,7 @@ def project_student_result(result: Dict[str, Any],
     gate = None
     if status == REVIEW_REQUIRED:
         gate = build_confidence_gate(result, question)
-    return {
+    projection = {
         "status": status,
         "status_label": result.get("status_label") or status,
         "headline": presentation["headline"],
@@ -856,6 +856,11 @@ def project_student_result(result: Dict[str, Any],
         "next_action": result.get("next_action"),
         "result": result,
     }
+    # Sprint 39: pass through problem_engine so the whole-problem
+    # renderer (_render_problem_workflow) is reachable.
+    if "problem_engine" in result:
+        projection["problem_engine"] = result["problem_engine"]
+    return projection
 
 
 def gate_is_pending(projection: Dict[str, Any]) -> bool:
