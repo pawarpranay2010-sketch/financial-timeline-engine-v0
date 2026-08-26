@@ -75,6 +75,7 @@ from backend.maths.fyjc_ui_contract import (
     gate_is_pending,
     project_student_result,
     resolve_confidence_gate,
+    validate_problem_integrity,
 )
 from backend.maths.fyjc_orchestration import orchestrate as fte_orchestrate
 from backend.maths.fyjc_student_flow import (
