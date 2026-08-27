@@ -1914,11 +1914,10 @@ def _tx_status_icon(status):
 
 
 def _render_problem_timeline(wf, current_idx):
-    """Sprint 35: Render a comprehensive whole-problem transaction timeline.
+    """Sprint 42: Compact problem summary at the top.
 
-    Shows every transaction with its status, a summary of what was understood,
-    and the current viewing position. The student sees the complete accounting
-    story at a glance."""
+    Shows total transactions, verified count, review-required count,
+    and blocked count in a clean student-friendly summary."""
     txns = wf.get("transactions", [])
     total = len(txns)
     if total == 0:
@@ -1926,60 +1925,23 @@ def _render_problem_timeline(wf, current_idx):
 
     verified = wf.get("_verified_count", 0)
     review = wf.get("_review_required_count", 0)
+    blocked = sum(1 for t in txns if t.get("status") == "BLOCKED")
     not_supp = sum(1 for t in txns if t.get("status") in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"))
 
-    st.markdown('<div class="fte-15i-title">Accounting Problem</div>',
+    st.markdown('<div class="fte-15i-title">Problem Summary</div>',
                 unsafe_allow_html=True)
 
-    # Summary line
-    summary_parts = []
+    # Compact summary line
+    summary_parts = ["{} transactions detected".format(total)]
     if verified:
         summary_parts.append("\u2705 {} verified".format(verified))
     if review:
-        summary_parts.append("\u26a0\ufe0f {} needs review".format(review))
+        summary_parts.append("\u26a0\ufe0f {} need clarification".format(review))
+    if blocked:
+        summary_parts.append("\u274c {} blocked".format(blocked))
     if not_supp:
         summary_parts.append("\u274c {} unsupported".format(not_supp))
-    st.markdown("  ".join(summary_parts))
-
-    for i, tx in enumerate(txns):
-        idx = tx["index"]
-        status = tx["status"]
-        text = tx["text"]
-        icon = _tx_status_icon(status)
-        ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
-
-        # Status label
-        if status == "VERIFIED":
-            status_label = "Verified"
-        elif status == "REVIEW_REQUIRED":
-            status_label = "Needs review"
-        elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
-            status_label = status.replace("_", " ").title()
-        elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
-            status_label = ev.replace("_", " ").title()
-        else:
-            status_label = status
-
-        # Transaction text preview
-        preview = text[:65] + ("..." if len(text) > 65 else "")
-
-        if current_idx >= 0 and i == current_idx:
-            st.markdown(
-                '<div style="background:#f0f7ff; border-left:3px solid #1a73e8; '
-                'padding:6px 10px; margin:3px 0; border-radius:4px;">'
-                '<b>\u25b6 T{idx}</b> {preview}<br/>'
-                '<span style="color:#666; font-size:0.85em;">{icon} {status_label}</span>'
-                '</div>'.format(idx=idx, preview=preview, icon=icon,
-                                status_label=status_label),
-                unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="padding:3px 10px; margin:2px 0;">'
-                '{icon} <b>T{idx}</b> {preview} '
-                '<span style="color:#888; font-size:0.85em;">\u2014 {status_label}</span>'
-                '</div>'.format(icon=icon, idx=idx, preview=preview,
-                                status_label=status_label),
-                unsafe_allow_html=True)
+    st.markdown(" \u00b7 ".join(summary_parts))
 
 
 def _relevant_calc_records(calc_records, debit_lines, credit_lines):
@@ -2037,19 +1999,15 @@ def _relevant_calc_records(calc_records, debit_lines, credit_lines):
 
 
 def _render_tx_detail(tx, wf):
-    """Sprint 35/37: Render a comprehensive transaction card.
+    """Sprint 42: Student-first transaction card.
 
     Design hierarchy:
-
-
-    Design hierarchy:
-    1. What happened? (original statement)
-    2. What did Platrixa understand? (normalized interpretation)
-    3. Is it verified? (status)
-    4. What journal did it create? (aligned table)
-    5. What calculation produced the amounts? (transaction-specific)
-    6. Why did it choose this treatment? (optional expanders)
-    7. What changed in the ledger? (state delta)
+    1. What happened? (transaction description)
+    2. Is it verified? (status badge)
+    3. What journal did it create? (row-based table)
+    4. Why? (optional expander)
+    5. Calculation (optional, transaction-scoped)
+    6. Accounting details (optional)
     """
     idx = tx["index"]
     status = tx["status"]
@@ -2061,100 +2019,75 @@ def _render_tx_detail(tx, wf):
     calc_records = _relevant_calc_records(
         jnl.get("calculation_records", []), debit_lines, credit_lines)
 
-    # --- Transaction Header ---
+    # --- Transaction Description (above journal) ---
     st.markdown('<div class="fte-15i-title">Transaction {}</div>'.format(idx),
                 unsafe_allow_html=True)
 
-    # --- Status Badge ---
+    # Transaction description
+    st.markdown('<div style="padding:4px 0; font-size:0.95em;">{}</div>'.format(text),
+                unsafe_allow_html=True)
+
+    # --- Status Badge (compact) ---
     if status == "VERIFIED":
-        st.success("\u2705 Verified")
+        st.markdown("\u2705 **Verified**")
     elif status == "REVIEW_REQUIRED":
-        st.warning("\u26a0\ufe0f Review required")
+        st.warning("Needs clarification \u2014 Platrixa understood this transaction, "
+                   "but some information is missing.")
     elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
         st.error("\u274c {}".format(status.replace("_", " ").title()))
     elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
-        st.info("\u2139\ufe0f {} \u2014 no accounting entry".format(
+        st.info("\u2139\ufe0f {} \u2014 informational, no accounting entry required".format(
             ev.replace("_", " ").title()))
     elif status == "BLOCKED":
-        st.error("\u274c Blocked")
+        st.error("Cannot verify this transaction yet \u2014 missing information needed.")
 
-    # --- Original Statement ---
-    st.markdown('<div style="background:#f8f9fa; padding:8px 12px; '
-                'border-radius:4px; margin:4px 0; font-style:italic;">'
-                '"{}"</div>'.format(text), unsafe_allow_html=True)
-
-    # --- Historical References ---
-    if tx.get("historical_references"):
-        with st.expander("\U0001f50d Historical dependencies", expanded=False):
-            for ref in tx["historical_references"]:
-                st.markdown(
-                    "\u2192 Referenced T{} ({}): Rs.{}".format(
-                        ref["transaction_index"], ref["event_type"], ref["amount"]
-                    )
-                )
-
-    # --- Journal Entry (aligned table) ---
+    # --- Journal Entry (row-based table) ---
     if debit_lines or credit_lines:
         st.markdown("**Journal Entry**")
         # Header row
-        cols = st.columns([4, 2, 2], gap="small")
-        cols[0].markdown("**Account**")
-        cols[1].markdown("**Debit**")
-        cols[2].markdown("**Credit**")
+        hdr = st.columns([4, 2, 2], gap="small")
+        hdr[0].markdown("**Account**")
+        hdr[1].markdown("**Debit**")
+        hdr[2].markdown("**Credit**")
         # Debit lines
         for line in debit_lines:
-            cols = st.columns([4, 2, 2], gap="small")
-            cols[0].markdown(line.get("account", ""))
-            cols[1].markdown("\u20b9{:,}".format(
+            row = st.columns([4, 2, 2], gap="small")
+            row[0].markdown(line.get("account", ""))
+            row[1].markdown("\u20b9{:,}".format(
                 int(float(line.get("amount", 0))) if line.get("amount") else 0))
-            cols[2].markdown("\u2014")
+            row[2].markdown("\u2014")
         # Credit lines
         for line in credit_lines:
-            cols = st.columns([4, 2, 2], gap="small")
-            cols[0].markdown(line.get("account", ""))
-            cols[1].markdown("\u2014")
-            cols[2].markdown("\u20b9{:,}".format(
+            row = st.columns([4, 2, 2], gap="small")
+            row[0].markdown(line.get("account", ""))
+            row[1].markdown("\u2014")
+            row[2].markdown("\u20b9{:,}".format(
                 int(float(line.get("amount", 0))) if line.get("amount") else 0))
         # Totals
         total_d = jnl.get("total_debit", 0)
         total_c = jnl.get("total_credit", 0)
-        cols = st.columns([4, 2, 2], gap="small")
-        cols[0].markdown("**Total**")
-        cols[1].markdown("**\u20b9{:,}**".format(
+        tot = st.columns([4, 2, 2], gap="small")
+        tot[0].markdown("**Total**")
+        tot[1].markdown("**\u20b9{:,}**".format(
             int(float(total_d)) if total_d else 0))
-        cols[2].markdown("**\u20b9{:,}**".format(
+        tot[2].markdown("**\u20b9{:,}**".format(
             int(float(total_c)) if total_c else 0))
         if jnl.get("balanced"):
             st.caption("\u2705 Balanced")
     elif status == "VERIFIED" and ev == "ACCOUNTING_TRANSACTION":
-        # Sprint 35 invariant: VERIFIED posting with no journal should not
-        # reach here (validate_transaction_integrity downgrades it), but
-        # display a safety message just in case.
-        st.error("This transaction claims Verified but has no journal entry. "
-                 "This should not happen.")
+        st.error("This transaction is marked Verified but has no journal entry.")
 
-    # --- State Delta (accounting effect) ---
-    if tx.get("state_delta"):
-        sd = tx["state_delta"]
-        with st.expander("\U0001f4ca Accounting effect", expanded=False):
-            for d in sd.get("deltas", []):
-                arrow = "\u2191" if d["direction"] == "debit" else "\u2193"
-                st.markdown("{} **{}**: \u20b9{}".format(
-                    arrow, d["account"],
-                    "\u20b9{:,}".format(
-                        int(float(d["amount"])) if d.get("amount") else 0)))
-
-    # --- Optional: Why? ---
+    # --- Optional: Why? (transaction-specific) ---
     if status == "VERIFIED" and (tx.get("why_not") or jnl.get("narration")):
-        with st.expander("\U0001f4a1 Why this treatment?", expanded=False):
+        with st.expander("Why this treatment? \u25b8", expanded=False):
             if jnl.get("narration"):
                 st.markdown(jnl["narration"])
             if jnl.get("why_not"):
                 st.markdown(jnl["why_not"])
 
-    # --- Optional: Calculation (transaction-specific) ---
+    # --- Optional: Calculation (transaction-scoped) ---
     if calc_records:
-        with st.expander("\U0001f4d0 Calculation", expanded=False):
+        with st.expander("Show calculation \u25b8", expanded=False):
             for rec in calc_records:
                 label = rec.get("label", "")
                 result_val = rec.get("result", "")
@@ -2162,59 +2095,59 @@ def _render_tx_detail(tx, wf):
                 inputs = rec.get("inputs", {})
                 input_text = " \u00b7 ".join(
                     "{} = {}".format(k, v) for k, v in inputs.items())
-                line = "**{}**: {}".format(label, result_val)
+                calc_line = "**{}**: {}".format(label, result_val)
                 if formula:
-                    line += " *({})*".format(formula)
-                st.markdown(line)
+                    calc_line += " *({})*".format(formula)
+                st.markdown(calc_line)
                 if input_text:
                     st.caption(input_text)
 
-    # --- Next action ---
-    if tx.get("next_action"):
-        st.info("\U0001f446 **Next:** {}".format(tx["next_action"]))
+    # --- Optional: Accounting Details (transaction-scoped) ---
+    if tx.get("state_delta"):
+        sd = tx["state_delta"]
+        with st.expander("Accounting details \u25b8", expanded=False):
+            for d in sd.get("deltas", []):
+                arrow = "\u2191" if d["direction"] == "debit" else "\u2193"
+                st.markdown("{} **{}**: \u20b9{}".format(
+                    arrow, d["account"],
+                    "\u20b9{:,}".format(
+                        int(float(d["amount"])) if d.get("amount") else 0)))
 
 
 def _render_problem_result(wf):
-    """Render the final cumulative problem result."""
-    problem_status = wf.get("problem_status", "UNKNOWN")
+    """Sprint 42: Render clean final problem result and ledger."""
     txns = wf.get("transactions", [])
     ledger = wf.get("ledger_snapshot", {})
 
-    st.markdown("---")
-    st.markdown("## \U0001f389 Problem Complete")
+    st.markdown("### Whole-Problem Final Ledger")
 
-    if problem_status == "PROBLEM_VERIFIED":
-        st.success("**All transactions verified successfully.**")
-    elif problem_status == "PROBLEM_REVIEW_REQUIRED":
-        st.warning("**A transaction requires clarification.**")
-    elif problem_status == "PROBLEM_INVALID_INPUT_MATH":
-        st.error("**The problem contains a mathematical contradiction.**")
-    elif problem_status == "PROBLEM_NOT_SUPPORTED":
-        st.error("**The problem exceeds the supported accounting boundary.**")
+    # Transaction counts
+    verified = wf.get("_verified_count", 0)
+    review = wf.get("_review_required_count", 0)
+    blocked = sum(1 for t in txns if t.get("status") == "BLOCKED")
+    total = len(txns)
 
-    st.markdown("### Transaction Summary")
-    for tx in txns:
-        icon = _tx_status_icon(tx["status"])
-        text = tx["text"][:50] + ("..." if len(tx["text"]) > 50 else "")
-        note = ""
-        if tx["status"] == "REVIEW_REQUIRED":
-            note = " (needs clarification)"
-        elif tx.get("event_type") in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
-            note = " (informational)"
-        st.markdown("  {} T{} {}{}".format(icon, tx["index"], text, note))
+    summary_parts = ["{} total".format(total)]
+    if verified:
+        summary_parts.append("\u2705 {} verified".format(verified))
+    if review:
+        summary_parts.append("\u26a0\ufe0f {} need clarification".format(review))
+    if blocked:
+        summary_parts.append("\u274c {} blocked".format(blocked))
+    st.markdown(" \u00b7 ".join(summary_parts))
 
+    # Final ledger as table
     balances = ledger.get("balances", {})
     if balances:
-        st.markdown("### Final Ledger")
+        st.markdown("**Account** | **Balance**")
+        st.markdown("--- | ---")
         for acc, bal in sorted(balances.items()):
             sign = "+" if not bal.startswith("-") else ""
-            st.markdown("  **{}** Rs.{}{}".format(acc, sign, bal))
+            st.markdown("**{}** | Rs.{}{}".format(acc, sign, bal))
 
     violations = wf.get("safety_violations", [])
     if violations:
         st.error("Safety violations: {}".format(violations))
-    else:
-        st.caption("Safety invariants: all zero")
 
 
 def _render_problem_workflow(question, projection):
@@ -2242,11 +2175,10 @@ def _render_problem_workflow(question, projection):
         st.info("No transactions detected in this problem.")
         return
 
-    # --- Timeline overview (always visible) ---
-    _render_problem_timeline(wf, -1)  # -1 = no highlight (all visible)
-    st.markdown("---")
+    # --- Problem summary (compact, at top) ---
+    _render_problem_timeline(wf, -1)
 
-    # --- All transaction cards (each in its own expander) ---
+    # --- All transaction cards ---
     for i, tx in enumerate(txns):
         status = tx["status"]
         ev = tx.get("event_type", "ACCOUNTING_TRANSACTION")
@@ -2258,7 +2190,7 @@ def _render_problem_workflow(question, projection):
         if status == "VERIFIED":
             status_label = "\u2705 Verified"
         elif status == "REVIEW_REQUIRED":
-            status_label = "\u26a0\ufe0f Needs review"
+            status_label = "\u26a0\ufe0f Needs clarification"
         elif status in ("NOT_SUPPORTED", "INVALID_INPUT_MATH"):
             status_label = "\u274c " + status.replace("_", " ").title()
         elif ev in ("INFORMATIONAL_EVENT", "OPENING_BALANCE"):
@@ -2268,17 +2200,18 @@ def _render_problem_workflow(question, projection):
         else:
             status_label = status
 
-        # Auto-expand REVIEW_REQUIRED so the student sees what needs attention
+        # Auto-expand REVIEW_REQUIRED/BLOCKED so student sees what needs attention
         is_attention = status in ("REVIEW_REQUIRED", "BLOCKED",
                                   "NOT_SUPPORTED", "INVALID_INPUT_MATH")
 
         with st.expander(
-            "T{} {} \u2014 {}".format(tx["index"], icon, preview),
+            "Transaction {} \u2014 {}".format(tx["index"], preview),
             expanded=is_attention,
         ):
             _render_tx_detail(tx, wf)
 
-    # --- Final problem result ---
+    # --- Final ledger and summary ---
+    st.markdown("---")
     _render_problem_result(wf)
 
 
