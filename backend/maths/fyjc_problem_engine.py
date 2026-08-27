@@ -729,6 +729,7 @@ def process_problem(
             - deterministic: Always True
             - metadata: Problem-level metadata
             - structured_memory: Sprint 43 structured working memory snapshot
+            - knowledge_suggestions: Sprint P2 shadow-mode knowledge suggestions
     """
     from backend.maths.fyjc_bk_reasoning import _split_transactions
     from backend.maths.fyjc_orchestration import orchestrate
@@ -755,6 +756,11 @@ def process_problem(
     if opening_balances:
         for account, amount in opening_balances.items():
             session.ledger.balances[account] = amount
+
+    # Sprint P2: Knowledge store for shadow-mode learning
+    from backend.maths.fyjc_validated_knowledge import ValidatedKnowledgeStore
+    _p2_knowledge_store = ValidatedKnowledgeStore()
+    _p2_shadow_suggestions: List[Dict[str, Any]] = []
 
     # Sprint 43: Build structured working memory for ambiguity detection
     from backend.maths.fyjc_structured_memory import (
@@ -838,6 +844,15 @@ def process_problem(
         why_not = orch_result.get("why_not")
         next_action = orch_result.get("next_action")
 
+        # Sprint P2: Shadow-mode knowledge lookup
+        # Does NOT modify production results — only collects suggestions
+        knowledge_suggestions = _p2_knowledge_store.suggest_for_transaction(tx_text)
+        if knowledge_suggestions:
+            _p2_shadow_suggestions.append({
+                "transaction_index": tx_index,
+                "suggestions": knowledge_suggestions,
+            })
+
         # Sprint 43: If REVIEW_REQUIRED with no confidence gate, check for
         # cash/credit or settlement ambiguity via structured memory
         if status == REVIEW_REQUIRED:
@@ -896,6 +911,14 @@ def process_problem(
 
     # Sprint 43: Update structured memory with final state
     structured_memory.account_balances = dict(session.ledger.balances)
+
+    # Sprint P2: Attach shadow-mode knowledge metrics to output
+    p2_metrics = {
+        "knowledge_store_version": _p2_knowledge_store._version,
+        "shadow_suggestions_count": len(_p2_shadow_suggestions),
+        "shadow_suggestions": _p2_shadow_suggestions,
+        "metrics": _p2_knowledge_store.metrics(),
+    }
     for mem in structured_memory.transactions:
         for r in session.results:
             if r.index == mem.identity.index:
@@ -973,6 +996,8 @@ def process_problem(
         },
         # Sprint 43: deterministic structured working memory
         "structured_memory": structured_memory.snapshot(),
+        # Sprint P2: shadow-mode validated learning
+        "knowledge_suggestions": p2_metrics,
     }
 
 
