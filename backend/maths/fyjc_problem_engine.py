@@ -160,13 +160,13 @@ class ProblemSession:
 
 # Patterns that indicate non-accounting events (orders, promises, intentions)
 _INFORMATIONAL_PATTERNS = [
-    re.compile(r"\b(?:placed?\s+an?\s+order|ordered?)\b", re.IGNORECASE),
+    re.compile(r"\b(?:placed?\s+an?|ordered?)\b", re.IGNORECASE),
     re.compile(r"\b(?:will\s+(?:purchase|buy|pay|sell|receive|deliver))\b", re.IGNORECASE),
-    re.compile(r"\b(?:intend(?:s|ed)?\s+to|proposed?\s+to|plan(?:s|ned)?\s+to)\s+"
+    re.compile(r"\b(?:intend(?:s|ed)?\s+to|proposed?|plan(?:s|ned)?)\s+"
                r"(?:purchase|buy|sell|pay|receive)", re.IGNORECASE),
-    re.compile(r"\b(?:decided?\s+to|agreed?\s+to)\s+(?:purchase|buy|sell|pay|receive)", re.IGNORECASE),
+    re.compile(r"\b(?:decided?|agreed?)\s+to\s+(?:purchase|buy|sell|pay|receive)", re.IGNORECASE),
     re.compile(r"\b(?:has\s+been\s+(?:ordered|placed|requested))\b", re.IGNORECASE),
-    re.compile(r"\b(?:expect(?:s|ed)?\s+to)\s+(?:receive|pay|sell|buy)", re.IGNORECASE),
+    re.compile(r"\b(?:expect(?:s|ed)?)\s+to\s+(?:receive|pay|sell|buy)", re.IGNORECASE),
     re.compile(r"\b(?:quotation|estimate|proposal|tender)\s+(?:for|of|received|submitted)\b",
                re.IGNORECASE),
 ]
@@ -337,15 +337,10 @@ _FRAC_WORDS = {
 
 
 def _extract_opening_balances(text: str) -> Dict[str, Decimal]:
-    """Extract account balances from opening balance text.
-
-    Example: "Balances as on 1st April: Cash Rs.50000, Bank Rs.100000"
-    Returns: {"Cash": Decimal("50000"), "Bank": Decimal("100000")}
-    """
+    """Extract account balances from opening balance text."""
     balances = {}
-    # Pattern: AccountName Rs.Amount or AccountName amount
     pat = re.compile(
-        r"([A-Z][A-Za-z]+)\s+(?:Rs\.?|\u20b9|INR)?\s*([\d,]+(?:\.\d+)?)",
+        r"([A-Z][A-Za-z]+)\s+(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d+)?)",
         re.IGNORECASE
     )
     for m in pat.finditer(text):
@@ -389,7 +384,6 @@ def _extract_fraction_word(text: str) -> Optional[Decimal]:
 # 16-E: Historical Text Preprocessing
 # ---------------------------------------------------------------------------
 
-# Patterns that indicate historical fraction references needing resolution
 _HIST_FRACTION_AMOUNT_RE = re.compile(
     r"\b(half|one-half|one-third|one-fourth|one-quarter|two-thirds|"
     r"three-fourths|three-quarters)\b"
@@ -399,13 +393,10 @@ _HIST_FRACTION_AMOUNT_RE = re.compile(
     re.IGNORECASE
 )
 
-
-
-# Sprint 20: "remaining" resolution helper
 _REMAINING_RE = re.compile(
     r"\b(?:remaining|balance|the\s+rest|what\s+remains)\b",
-    re.IGNORECASE)
-
+    re.IGNORECASE
+)
 
 def _resolve_remaining_text(
     text: str,
@@ -413,14 +404,7 @@ def _resolve_remaining_text(
     current_tx_index: int,
 ) -> Tuple[str, List[HistoricalReference], bool]:
     """Resolve 'remaining goods from <entity>' by computing:
-    remaining = verified_purchase_amount - sum(verified_prior_sales)
-
-    Only resolves when:
-    - exactly one purchase from the entity exists in the historical index
-    - the prior sales amount is deterministically known
-
-    Returns (rewritten_text, references_used, is_ambiguous).
-    """
+    remaining = verified_purchase_amount - sum(verified_prior_sales)"""
     if not historical_index:
         return text, [], False
 
@@ -454,17 +438,14 @@ def _resolve_remaining_text(
         return text, [], False
 
     for entity in entities:
-        # Query all historical references for this entity
         all_refs = _query_historical_index(
             prior_index, HistoricalQuery(entity=entity))
         if len(all_refs) < 2:
             continue
 
-        # Identify base purchase = reference with the largest amount
         purchase_ref = max(all_refs, key=lambda r: r.amount)
         base_amount = purchase_ref.amount
 
-        # Compute remaining = purchase - sum(all other entity amounts)
         total_prior_reductions = Decimal(0)
         for ref in all_refs:
             if ref.transaction_index == purchase_ref.transaction_index:
@@ -477,7 +458,6 @@ def _resolve_remaining_text(
 
         remaining = remaining.quantize(Decimal("1"))
 
-        # Rewrite: replace "remaining/balance ... from <entity>" with amount
         rewrite_pat = re.compile(
             r"\b(?:remaining|balance|the\s+rest|what\s+remains)\b"
             r"[^.]*?\b(?:of|from)\b"
@@ -493,33 +473,21 @@ def _resolve_remaining_text(
 
     return text, [], False
 
+
 def _resolve_historical_text(
     text: str,
     historical_index: List[HistoricalReference],
     current_tx_index: int = 0,
 ) -> Tuple[str, List[HistoricalReference], bool]:
-    """Preprocess transaction text to resolve historical references.
-
-    Detects fraction+entity patterns like "half of the goods purchased
-    from Mark" and rewrites them with resolved amounts when the
-    historical index provides a deterministic answer.
-
-    Enforces chronological integrity: only references prior transactions.
-
-    Returns (rewritten_text, references_used, is_ambiguous).
-    is_ambiguous is True when the text contains a historical reference
-    but the index has multiple candidates (uncertain resolution).
-    """
+    """Preprocess transaction text to resolve historical references."""
     if not historical_index:
         return text, [], False
 
     low = text.lower()
     refs_used = []
 
-    # Check for fraction-word patterns
     frac_match = _HIST_FRACTION_AMOUNT_RE.search(low)
     if not frac_match:
-        # Sprint 20: check for "remaining"/"balance" patterns
         remaining_match = _REMAINING_RE.search(low)
         if remaining_match:
             return _resolve_remaining_text(
@@ -531,10 +499,8 @@ def _resolve_historical_text(
     if fraction_value is None:
         return text, [], False
 
-    # Extract entity from text
     entities = _extract_entities_from_text(text)
     if not entities:
-        # Try broader entity extraction
         entity_pat = re.compile(
             r"(?:from|of|to|purchased\s+from|bought\s+from|sold\s+to)\s+"
             r"([A-Z][A-Za-z.' ]+?)(?:\s|,|\.|;|$)", re.IGNORECASE
@@ -551,31 +517,25 @@ def _resolve_historical_text(
     if not entities:
         return text, [], False
 
-    # Determine event type from text
     event_type = _classify_transaction_event(text)
 
-    # Filter to only prior transactions (chronological integrity)
     prior_index = [ref for ref in historical_index
                    if ref.transaction_index < current_tx_index]
     if not prior_index:
         return text, [], False
 
-    # Query historical index
     for entity in entities:
         query = HistoricalQuery(entity=entity, event_type=event_type)
         matches = _query_historical_index(prior_index, query)
         if not matches:
-            # Try without event type filter
             query2 = HistoricalQuery(entity=entity)
             matches = _query_historical_index(prior_index, query2)
 
         if len(matches) == 1:
             ref = matches[0]
             resolved_amount = ref.amount * fraction_value
-            # Round to nearest integer for Indian accounting
             resolved_amount = resolved_amount.quantize(Decimal("1"))
 
-            # Rewrite: replace fraction text with resolved amount
             rewrite_pat = re.compile(
                 r"\b" + re.escape(fraction_word) + r"\b"
                 r"[^.]*?\b(?:of|from)\b"
@@ -590,7 +550,6 @@ def _resolve_historical_text(
                 refs_used.append(ref)
                 return new_text, refs_used, False
         elif len(matches) > 1:
-            # Ambiguous: multiple candidates, cannot deterministically resolve
             return text, [], True
 
     return text, [], False
@@ -605,8 +564,7 @@ def _extract_state_delta(
     tx_text: str,
     result: Dict[str, Any],
 ) -> Optional[StateDelta]:
-    """Extract a state delta from a verified transaction result.
-    Only called for VERIFIED results."""
+    """Extract a state delta from a verified transaction result."""
     status = result.get("status")
     if status != VERIFIED:
         return None
@@ -614,7 +572,6 @@ def _extract_state_delta(
     journal = result.get("journal") or {}
     deltas = []
 
-    # Extract from debit lines
     for line in journal.get("debit_lines") or []:
         account = line.get("account", "")
         try:
@@ -622,12 +579,10 @@ def _extract_state_delta(
         except (InvalidOperation, TypeError):
             continue
         if account and amount > 0:
-            # Try to extract entity from the account name
             entity = None
             low_acc = account.lower()
             for word in ["creditor", "debtor", "payable", "receivable"]:
                 if word in low_acc:
-                    # Extract party name from account
                     parts = re.split(r"\s+(?:a/c|account|payable|receivable|cr|dr)\b",
                                      account, flags=re.IGNORECASE)
                     if parts and parts[0].strip():
@@ -636,7 +591,6 @@ def _extract_state_delta(
             deltas.append(AccountDelta(account=account, direction="debit",
                                        amount=amount, entity=entity))
 
-    # Extract from credit lines
     for line in journal.get("credit_lines") or []:
         account = line.get("account", "")
         try:
@@ -693,7 +647,6 @@ def _compute_problem_status(results: List[TransactionResult]) -> str:
             has_informational = True
             continue
         if r.event_type == "OPENING_BALANCE":
-            # Opening balances are informational, not transactions
             has_informational = True
             continue
         if r.status == VERIFIED:
@@ -705,14 +658,12 @@ def _compute_problem_status(results: List[TransactionResult]) -> str:
         elif r.status == NOT_SUPPORTED:
             has_not_supported = True
 
-    # If all are informational, problem is verified (nothing to journal)
     if not has_verified and not has_review_required and \
        not has_invalid_math and not has_not_supported:
         if has_informational:
             return PROBLEM_VERIFIED
         return PROBLEM_NOT_SUPPORTED
 
-    # Priority: INVALID > REVIEW > NOT_SUPPORTED > VERIFIED
     if has_invalid_math:
         return PROBLEM_INVALID_INPUT_MATH
     if has_review_required:
@@ -733,14 +684,12 @@ def _assert_state_integrity(
     """Run state-integrity safety checks. Returns list of violations (empty = pass)."""
     violations = []
 
-    # 1. No state mutation from unsafe results
     for r in results:
         if r.state_delta and r.status != VERIFIED:
             violations.append(
                 f"State mutation from unsafe result: T{r.index} status={r.status}"
             )
 
-    # 2. No duplicate mutations
     applied_indices = set()
     for r in results:
         if r.state_delta:
@@ -748,11 +697,6 @@ def _assert_state_integrity(
                 violations.append(f"Duplicate mutation: T{r.index}")
             applied_indices.add(r.index)
 
-    # 3. No state leaks (deterministic: results processed in order)
-    # State is built incrementally, so leaks would require out-of-order access
-    # which our sequential loop prevents by construction.
-
-    # 4. Chronological integrity
     for i, r in enumerate(results):
         if r.index != i + 1:
             violations.append(
@@ -784,6 +728,7 @@ def process_problem(
             - safety_violations: List of safety violations (empty = pass)
             - deterministic: Always True
             - metadata: Problem-level metadata
+            - structured_memory: Sprint 43 structured working memory snapshot
     """
     from backend.maths.fyjc_bk_reasoning import _split_transactions
     from backend.maths.fyjc_orchestration import orchestrate
@@ -800,6 +745,7 @@ def process_problem(
             "safety_violations": [],
             "deterministic": True,
             "metadata": {"reason": "No transactions detected"},
+            "structured_memory": None,
         }
 
     # Create session
@@ -809,6 +755,19 @@ def process_problem(
     if opening_balances:
         for account, amount in opening_balances.items():
             session.ledger.balances[account] = amount
+
+    # Sprint 43: Build structured working memory for ambiguity detection
+    from backend.maths.fyjc_structured_memory import (
+        build_problem_memory,
+        detect_cash_credit_ambiguity,
+        detect_settlement_ambiguity,
+    )
+    structured_memory = build_problem_memory(
+        problem_text=problem_text,
+        transactions=transactions,
+        historical_index=[],
+        ledger_balances=dict(session.ledger.balances),
+    )
 
     # 16-C: Sequential execution
     orch_result_by_index: Dict[int, Dict[str, Any]] = {}
@@ -830,7 +789,6 @@ def process_problem(
 
         # Detect opening balances
         if event_type == "OPENING_BALANCE":
-            # Extract account balances from text and seed the ledger
             ob = _extract_opening_balances(tx_text)
             for acc, amt in ob.items():
                 session.ledger.balances[acc] = amt
@@ -880,6 +838,29 @@ def process_problem(
         why_not = orch_result.get("why_not")
         next_action = orch_result.get("next_action")
 
+        # Sprint 43: If REVIEW_REQUIRED with no confidence gate, check for
+        # cash/credit or settlement ambiguity via structured memory
+        if status == REVIEW_REQUIRED:
+            gate = build_confidence_gate(orch_result, tx_text)
+            if gate is None:
+                # No gate from engine — check structured memory detection
+                cc_amb = detect_cash_credit_ambiguity(tx_text)
+                if cc_amb is not None:
+                    why_not = cc_amb["clarification"]
+                    next_action = cc_amb["question"]
+
+                # Check settlement ambiguity
+                party_outstanding = None
+                for party in structured_memory.transactions[-1].parties if structured_memory.transactions else []:
+                    if party in session.ledger.entity_outstanding:
+                        party_outstanding = session.ledger.entity_outstanding[party]
+                settle_amb = detect_settlement_ambiguity(
+                    tx_text, session.ledger.historical_index, party_outstanding,
+                )
+                if settle_amb is not None:
+                    why_not = settle_amb["clarification"]
+                    next_action = settle_amb["question"]
+
         # 16-D: State mutation only from VERIFIED results
         state_delta = None
         if status == VERIFIED:
@@ -899,7 +880,7 @@ def process_problem(
             status=status,
             journal=journal,
             state_delta=state_delta,
-            historical_references=[],  # refs are in ledger.historical_index for future txns only
+            historical_references=[],
             why_not=why_not,
             next_action=next_action,
             event_type="ACCOUNTING_TRANSACTION",
@@ -912,6 +893,17 @@ def process_problem(
 
     # 16-H: Safety gates
     safety_violations = _assert_state_integrity(session.ledger, session.results)
+
+    # Sprint 43: Update structured memory with final state
+    structured_memory.account_balances = dict(session.ledger.balances)
+    for mem in structured_memory.transactions:
+        for r in session.results:
+            if r.index == mem.identity.index:
+                mem.status = r.status
+                mem.journal = r.journal
+                if r.why_not:
+                    mem.clarification_question = r.why_not
+                break
 
     # Build output
     tx_outputs = []
@@ -979,6 +971,8 @@ def process_problem(
                 if r.event_type in ("INFORMATIONAL_EVENT", "OPENING_BALANCE")
             ),
         },
+        # Sprint 43: deterministic structured working memory
+        "structured_memory": structured_memory.snapshot(),
     }
 
 
@@ -993,21 +987,7 @@ def resolve_problem_transaction(
     decision_id: str,
 ) -> Dict[str, Any]:
     """Resolve a single REVIEW_REQUIRED transaction in a multi-transaction
-    problem using the student's confidence-gate decision.
-
-    This re-runs process_problem() from scratch but injects the student's
-    resolved question for the target transaction. Subsequent transactions
-    see the updated ledger state.
-
-    Args:
-        problem_text: The original full problem text.
-        transaction_index: 1-based index of the transaction to resolve.
-        gate_id: The confidence gate type (e.g. "CASH_CREDIT", "GST_SCHEME").
-        decision_id: The student's selected alternative.
-
-    Returns:
-        Same dict as process_problem() with updated results.
-    """
+    problem using the student's confidence-gate decision."""
     from backend.maths.fyjc_bk_reasoning import _split_transactions
     from backend.maths.fyjc_ui_contract import resolve_confidence_gate
 
@@ -1022,7 +1002,6 @@ def resolve_problem_transaction(
             break
 
     if target_tx is None:
-        # Transaction not found or not REVIEW_REQUIRED
         return result
 
     # Resolve through the confidence gate
@@ -1030,10 +1009,7 @@ def resolve_problem_transaction(
         target_tx["text"], gate_id, decision_id
     )
 
-    # If the resolved result is still not VERIFIED, return with the
-    # honest verdict
     if resolved.get("status") != VERIFIED:
-        # Update just this transaction's status in the result
         for tx in result["transactions"]:
             if tx.get("index") == transaction_index:
                 tx["status"] = resolved.get("status", REVIEW_REQUIRED)
@@ -1048,9 +1024,6 @@ def resolve_problem_transaction(
         )
         return result
 
-    # The resolved transaction is VERIFIED - re-run the full problem
-    # with the resolved question injected. We do this by replacing
-    # the transaction text in the problem and re-processing.
     transactions = _split_transactions(problem_text)
     if transaction_index < 1 or transaction_index > len(transactions):
         return result
@@ -1058,11 +1031,9 @@ def resolve_problem_transaction(
     resolved_question = resolved.get("gate_resolution", {}).get(
         "resolved_question", target_tx["text"]
     )
-    # Replace the target transaction text
     transactions[transaction_index - 1] = resolved_question
     new_problem = ". ".join(transactions)
 
-    # Re-process with the resolved text
     result = process_problem(new_problem)
     return result
 
