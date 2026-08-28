@@ -910,15 +910,14 @@ def process_problem(
     safety_violations = _assert_state_integrity(session.ledger, session.results)
 
     # Sprint 43: Update structured memory with final state
-    structured_memory.account_balances = dict(session.ledger.balances)
-
-    # Sprint P2: Attach shadow-mode knowledge metrics to output
+    structured_memory.account_balances = dict(session.ledger.balances)        # Sprint P2: Attach shadow-mode knowledge metrics to output
     p2_metrics = {
         "knowledge_store_version": _p2_knowledge_store._version,
         "shadow_suggestions_count": len(_p2_shadow_suggestions),
         "shadow_suggestions": _p2_shadow_suggestions,
         "metrics": _p2_knowledge_store.metrics(),
     }
+
     for mem in structured_memory.transactions:
         for r in session.results:
             if r.index == mem.identity.index:
@@ -1060,6 +1059,7 @@ def resolve_problem_transaction(
     new_problem = ". ".join(transactions)
 
     result = process_problem(new_problem)
+
     return result
 
 
