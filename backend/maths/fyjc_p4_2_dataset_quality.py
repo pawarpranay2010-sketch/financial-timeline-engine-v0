@@ -119,6 +119,8 @@ def _extract_parties(text: str) -> List[str]:
             name = m.group(1).strip()
             # Clean up: remove trailing prepositions
             name = re.sub(r"\s+(for|Rs|on|worth|by|and)\s*$", "", name, flags=re.IGNORECASE).strip()
+            # Clean up: remove locality/state phrases that are NOT part of the party name
+            name = re.sub(r"\s+(within state|outside state|intra.state|inter.state|local|imported)\s*$", "", name, flags=re.IGNORECASE).strip()
             if len(name) > 1 and name.lower() not in {"goods", "cash", "bank", "the", "some", "all"}:
                 parties.append(name)
 
