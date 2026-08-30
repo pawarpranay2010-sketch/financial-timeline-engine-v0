@@ -766,15 +766,63 @@ def run_p5a_evaluation(use_kernel: bool = True) -> Dict[str, Any]:
     if model_artifact.get("lora_adapter_available"):
         print(f"  LoRA adapter found at: {model_artifact['lora_adapter_path']}")
         print(f"  Attempting to load...")
-        # TODO: actual model loading when artifact is available
-        # from transformers import AutoModelForCausalLM, AutoTokenizer
-        # from peft import PeftModel
-        # base = AutoModelForCausalLM.from_pretrained(_QWEN_BASE)
-        # model = PeftModel.from_pretrained(base, model_artifact['lora_adapter_path'])
-        # tokenizer = AutoTokenizer.from_pretrained(_QWEN_BASE)
-        model_info["eval_adapter"] = "trained-qwen-lora"
-        model_info["note"] = "Trained LoRA adapter loaded successfully."
-        model_info["adapter_loaded"] = True
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from peft import PeftModel
+
+            print(f"  Loading base model: {_QWEN_BASE}")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                _QWEN_BASE,
+                torch_dtype="auto",
+                device_map="auto",
+                load_in_4bit=False,
+            )
+            tokenizer_load = AutoTokenizer.from_pretrained(_QWEN_BASE)
+
+            print(f"  Loading LoRA adapter: {model_artifact['lora_adapter_path']}")
+            lora_model = PeftModel.from_pretrained(base_model, model_artifact["lora_adapter_path"])
+            lora_model.eval()
+
+            # Create adapter wrapper for evaluation
+            class _TrainedModelAdapter:
+                def __init__(self, model, tok):
+                    self._model = model
+                    self._tok = tok
+                    self._name = "trained-qwen-lora"
+                    self._version = "p5a"
+
+                @property
+                def model_name(self):
+                    return self._name
+
+                @property
+                def model_version(self):
+                    return self._version
+
+                def understand_transaction(self, text):
+                    prompt = f"Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\nParse the student's accounting language into a grounded structured interpretation. Do not invent missing information.\n\n### Input:\n{text}\n\n### Response:\n"
+                    inputs = self._tok(prompt, return_tensors="pt").to(self._model.device)
+                    with __import__("torch").no_grad():
+                        outputs = self._model.generate(**inputs, max_new_tokens=256, use_cache=True)
+                    response = self._tok.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+                    # Try to parse JSON from response
+                    import re
+                    json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group())
+                    # Try parsing the full response
+                    return json.loads(response)
+
+            adapter = _TrainedModelAdapter(lora_model, tokenizer_load)
+            model_info["eval_adapter"] = "trained-qwen-lora"
+            model_info["note"] = "Trained LoRA adapter loaded successfully."
+            model_info["adapter_loaded"] = True
+            print(f"  ✅ Trained model loaded and ready for evaluation.")
+        except Exception as e:
+            print(f"  ⚠️  Failed to load trained model: {e}")
+            print(f"  Falling back to deterministic-fallback baseline.")
+            adapter = _DeterministicFallbackAdapter()
+            model_info["note"] = f"LoRA adapter found but failed to load: {e}. Using fallback."
     else:
         print(f"  No LoRA adapter found.")
         print(f"  Searched: {model_artifact.get('searched_paths', [])}")
@@ -782,8 +830,9 @@ def run_p5a_evaluation(use_kernel: bool = True) -> Dict[str, Any]:
         print(f"  PEFT installed: {model_artifact.get('peft_installed', False)}")
         print(f"  Using deterministic-fallback baseline for evaluation.")
 
-    # Create adapter
-    adapter = _DeterministicFallbackAdapter()
+    # adapter was set above if model loaded successfully; default to fallback
+    if not model_info["adapter_loaded"]:
+        adapter = _DeterministicFallbackAdapter()
 
     # Step 2: Load evaluation tiers
     print("\n[2/5] Loading evaluation tiers...")
