@@ -110,10 +110,10 @@ def _case_to_candidate(case: Dict[str, Any]) -> Dict[str, Any]:
     """Map candidate case JSONL fields → fyjc_training_candidates row."""
     return {
         "problem_id": case.get("case_id", ""),
-        "content_hash": None,  # Not pre-computed in candidate JSONL
+        "content_hash": case.get("content_hash", None),  # May be None in candidate JSONL
         "category": case.get("category"),
         "subcategory": case.get("subcategory"),
-        "status": _map_status(case.get("status", "")),
+        "status": _map_status(case.get("status", ""), case.get("case_id", "")),
         "evidence_count": 1,  # Each JSONL record is 1 evidence instance
         "validation_count": 1 if case.get("status") == "VERIFIED" else 0,
         "rejection_count": 1 if case.get("status") in ("BLOCKED", "NOT_SUPPORTED") else 0,
@@ -130,8 +130,18 @@ def _case_to_candidate(case: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _map_status(raw_status: str) -> str:
-    """Map candidate case status → FYJC lifecycle status."""
+# Cases retired in P4.3.6 (duplicates with content_hash collision)
+_RETIREMENT_CASES = {"C0079"}
+
+
+def _map_status(raw_status: str, case_id: str = "") -> str:
+    """Map candidate case status → FYJC lifecycle status.
+
+    C0079 is retired because it has identical content_hash with C0038
+    (removed in P4.3.6 reconciliation).
+    """
+    if case_id in _RETIREMENT_CASES:
+        return "RETIRED"
     mapping = {
         "VERIFIED": "VALIDATED",
         "REVIEW_REQUIRED": "CANDIDATE",
