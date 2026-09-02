@@ -61,6 +61,10 @@ from backend.maths.schema_verifier import (
     validate_structured_interpretation,
     ValidationStatus,
 )
+from backend.maths.fyjc_grounding_gate import (
+    ExpandedGroundingGate,
+    GroundingResult,
+)
 from backend.maths.fyjc_local_model_runner import (
     LocalModelRunner,
     MockModelRunner,
@@ -370,10 +374,22 @@ class FYJCLLMSpecialist:
                 raw_model_output=parsed,
             )
 
-        # Step 7: Inject metadata
+        # Step 7: Grounding gate — verify interpretation against source text
+        gate = ExpandedGroundingGate()
+        grounding = gate.ground(enriched, text)
+
+        if not grounding.safe_for_kernel:
+            enriched["suggested_status"] = "REVIEW_REQUIRED"
+            enriched["_grounding_issues"] = grounding.issues
+            enriched["_grounded"] = False
+            return enriched
+
+        # Step 8: Inject metadata
         enriched["interpretation_model"] = self.model_name
         enriched["raw_input"] = text
-        enriched["suggested_status"] = "REVIEW_REQUIRED"
+        enriched["suggested_status"] = "REVIEW_REQUIRED"  # AI never claims VERIFIED
+        enriched["_grounded"] = True
+        enriched["_grounding_summary"] = grounding.summary
 
         return enriched
 
