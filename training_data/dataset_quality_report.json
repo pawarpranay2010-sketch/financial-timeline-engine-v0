@@ -1,0 +1,112 @@
+{
+  "total_records": 147,
+  "after_dedup": 147,
+  "splits": {
+    "train": {
+      "count": 87,
+      "percentage": 59.2,
+      "categories": {
+        "cash_credit": 29,
+        "edge": 10,
+        "partial_payment": 9,
+        "unusual_wording": 8,
+        "settlement": 4,
+        "cross_reference": 4,
+        "returns": 4,
+        "expense": 4,
+        "multi_amount": 3,
+        "compound": 3,
+        "contradiction": 2,
+        "unsupported": 2,
+        "regional": 2,
+        "gst": 1,
+        "capital": 1,
+        "long_problem": 1
+      },
+      "statuses": {
+        "unknown": 35,
+        "VERIFIED": 23,
+        "REVIEW_REQUIRED": 16,
+        "NOT_SUPPORTED": 11,
+        "BLOCKED": 1,
+        "EXCEPTION": 1
+      },
+      "sources": {
+        "generated_template": 35,
+        "existing_candidate_cases": 29,
+        "unknown": 23
+      }
+    },
+    "validation": {
+      "count": 26,
+      "percentage": 17.7,
+      "categories": {
+        "cash_credit": 4,
+        "settlement": 3,
+        "returns": 2,
+        "incomplete": 2,
+        "edge": 2,
+        "partial_payment": 2,
+        "unusual_wording": 1,
+        "multi_amount": 1,
+        "missing_amount": 1,
+        "long_problem": 1,
+        "contradiction": 1,
+        "cross_reference": 1,
+        "gst": 1,
+        "multi_party": 1,
+        "expense": 1,
+        "unsupported": 1,
+        "compound": 1
+      },
+      "statuses": {
+        "VERIFIED": 10,
+        "unknown": 7,
+        "REVIEW_REQUIRED": 4,
+        "NOT_SUPPORTED": 4,
+        "BLOCKED": 1
+      },
+      "sources": {
+        "unknown": 10,
+        "existing_candidate_cases": 9,
+        "generated_template": 7
+      }
+    },
+    "test": {
+      "count": 34,
+      "percentage": 23.1,
+      "categories": {
+        "cash_credit": 7,
+        "partial_payment": 5,
+        "unsupported": 4,
+        "multi_party": 3,
+        "missing_amount": 3,
+        "incomplete": 2,
+        "gst": 2,
+        "edge": 2,
+        "cross_reference": 2,
+        "capital": 1,
+        "long_problem": 1,
+        "unusual_wording": 1,
+        "expense": 1
+      },
+      "statuses": {
+        "VERIFIED": 13,
+        "NOT_SUPPORTED": 9,
+        "unknown": 8,
+        "BLOCKED": 4
+      },
+      "sources": {
+        "existing_candidate_cases": 13,
+        "unknown": 13,
+        "generated_template": 8
+      }
+    }
+  },
+  "leakage": {
+    "train_val_overlap": 0,
+    "train_test_overlap": 0,
+    "val_test_overlap": 0,
+    "total_leaked": 0
+  }
+}

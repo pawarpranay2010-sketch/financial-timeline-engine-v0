@@ -1,0 +1,127 @@
+# ==============================================================================
+# Platrixa FYJC Accounting AI — Training Pipeline Configuration
+# ==============================================================================
+# Provider-independent. No Colab, Kaggle, or GPU-specific paths.
+# Works on: local GPU, rented GPU VM, or any compatible GPU server.
+# CPU mode: Dataset generation, validation, splitting, and formatting all run
+#           on CPU. Training requires a CUDA GPU.
+# ==============================================================================
+
+# --- Model Configuration ---
+model:
+  name: "unsloth/Qwen2.5-1.5B-Instruct"
+  max_seq_length: 2048
+  dtype: null               # null = auto-detect (float16 for T4, bfloat16 for Ampere+)
+  load_in_4bit: false       # false = full precision for small model; set true for 7B+
+
+# --- LoRA Configuration ---
+lora:
+  r: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"
+  use_rslora: false
+
+# --- Dataset Paths (relative to project root) ---
+data:
+  source_jsonl: "platrixa_ai_candidate_cases.jsonl"
+  existing_training: "training_data/specialist_clean_training.jsonl"
+  eval_ambiguity: "training_data/specialist_ambiguity_eval.jsonl"
+  eval_unsupported: "training_data/specialist_unsupported_eval.jsonl"
+  eval_robustness: "training_data/specialist_robustness_eval.jsonl"
+  output_dir: "training_data"
+  splits:
+    train: "specialist_train.jsonl"
+    validation: "specialist_val.jsonl"
+    test: "specialist_test.jsonl"
+  quality_report: "training_data/dataset_quality_report.json"
+
+# --- Generation Configuration ---
+generation:
+  # Maximum new cases to generate (CPU will be the bottleneck)
+  max_new_cases: 500
+  # Random seed for reproducibility
+  seed: 42
+  # Whether to include existing candidate cases from JSONL
+  include_existing: true
+  # Categories to generate (null = all categories)
+  categories: null
+  # Minimum unique characters in input text (filters trivial variations)
+  min_input_length: 15
+
+# --- Quality Validation ---
+validation:
+  # Reject records with invalid JSON in output field
+  reject_invalid_json: true
+  # Reject records with missing required fields
+  reject_missing_fields: true
+  # Maximum near-duplicate similarity (0.0-1.0, higher = stricter)
+  near_duplicate_threshold: 0.92
+  # Minimum output JSON key count (prevents empty/stub outputs)
+  min_output_keys: 3
+  # Required output JSON keys
+  required_output_keys:
+    - "transaction_type"
+    - "parties"
+    - "amounts"
+    - "payment_method"
+
+# --- Splitting Configuration ---
+splitting:
+  # Deterministic seed
+  seed: 42
+  # Split ratios
+  train_ratio: 0.80
+  validation_ratio: 0.10
+  test_ratio: 0.10
+  # Stratify by category and kernel_status when possible
+  stratify: true
+
+# --- Training Configuration ---
+training:
+  output_dir: "training_output"
+  # Training hyperparameters
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4
+  warmup_steps: 5
+  num_train_epochs: 3
+  learning_rate: 2.0e-4
+  weight_decay: 0.001
+  lr_scheduler_type: "linear"
+  logging_steps: 1
+  save_steps: 50
+  save_total_limit: 3
+  optim: "adamw_8bit"
+  seed: 3407
+  report_to: "none"
+  # Resume from checkpoint (null = start fresh)
+  resume_from_checkpoint: null
+
+# --- Evaluation Configuration ---
+evaluation:
+  # Base model (before fine-tuning)
+  base_model_name: "unsloth/Qwen2.5-1.5B-Instruct"
+  # Fine-tuned model (LoRA adapter path)
+  finetuned_model_path: "training_output"
+  # Evaluation datasets
+  eval_datasets:
+    - name: "validation"
+      path: "training_data/specialist_val.jsonl"
+    - name: "ambiguity"
+      path: "training_data/specialist_ambiguity_eval.jsonl"
+    - name: "unsupported"
+      path: "training_data/specialist_unsupported_eval.jsonl"
+    - name: "robustness"
+      path: "training_data/specialist_robustness_eval.jsonl"
+  # Maximum tokens for inference
+  max_new_tokens: 256
+  # Number of evaluation samples per dataset (null = all)
+  max_samples: null

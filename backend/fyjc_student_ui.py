@@ -78,6 +78,7 @@ from backend.maths.fyjc_ui_contract import (
     validate_problem_integrity,
 )
 from backend.maths.fyjc_orchestration import orchestrate as fte_orchestrate
+from backend.fyjc_db_persistence import persist_fyjc_result
 from backend.maths.fyjc_student_flow import (
     INVALID_INPUT_MATH,
     build_understanding,
@@ -1508,6 +1509,12 @@ def _store_projection(projection: Dict[str, Any],
     else:
         st.session_state.pop(K_GATE_PENDING, None)
         st.session_state.pop(K_GATE_PENDING_FP, None)
+    # FYJC PostgreSQL persistence — non-blocking, never breaks the UI.
+    try:
+        persist_fyjc_result(projection, question, fp)
+    except Exception:
+        pass  # defensive: persistence failure must never block the student
+
 
 
 def _legacy_flow(question: str) -> Dict[str, Any]:
