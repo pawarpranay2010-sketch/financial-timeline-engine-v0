@@ -9,8 +9,8 @@ input into the 18-field `ExpandedInterpretation` JSON.
 
 | State | Meaning | Where |
 |---|---|---|
-| **6A — audit + preparation** | Repo audit, AutoTrain audit, dataset suitability, config + converter + eval tooling, preflight tests | ✅ COMPLETE (this tree, no commit) |
-| **6B — actual LoRA training** | Run `autotrain --config ...` on a CUDA host | ⏳ BLOCKED in this workspace (no GPU) |
+| **6A — audit + preparation** | Repo audit, dataset suitability, config + converter + eval tooling, preflight tests | ✅ COMPLETE (committed) |
+| **6B — actual LoRA training** | TRL `SFTTrainer` + LoRA job on a CUDA host (Modal free-T4 route ready) | ⏳ NOT YET RUN — needs user Modal login/authorization |
 | **6C — adapter evaluation + integration** | `training/evaluate_finetuned.py` on the untouched 100 test examples + LocalModelRunner check | ⏳ Requires 6B adapter |
 
 ## Architecture (non-negotiable, unchanged)
@@ -66,10 +66,16 @@ deterministic kernel.
 
 | File | Purpose |
 |---|---|
-| `training/autotrain_config.yaml` | Verified AutoTrain llm-sft LoRA config (no secrets) |
-| `training/prepare_autotrain.py` | Converts Phase 5 splits → AutoTrain `messages` JSONL + writes `training/phase6_manifest.json` |
+| `training/autotrain_config.yaml` | Reference AutoTrain llm-sft LoRA config (superseded for 6B — see below) |
+| `training/prepare_autotrain.py` | Converts Phase 5 splits → `messages` JSONL + writes `training/phase6_manifest.json` |
+| `training/trl_sft_job.py` | **Active 6B job**: self-contained TRL `SFTTrainer` + PEFT LoRA (dataset/model pinned, adapter pushed to Hub, smoke test) |
+| `training/run_modal.py` | Launches `trl_sft_job.py` on Modal (free T4 credits) — client pinned in `training/requirements_modal.txt` |
+| `training/run_sft_free_gpu.py` | Alternate launcher for free notebook hosts (Colab/Kaggle) — same job, zero code changes |
+| `training/phase6_manifest.json` | Phase 6A reproducibility manifest (dataset prep) |
+| `training/phase6b_manifest.json` | Phase 6B provenance manifest (pre-run config record; updated by the job with adapter revision) |
 | `training/evaluate_finetuned.py` | Base vs LoRA evaluation on the untouched test set; production-path gate check |
 | `training/PHASE6_README.md` | This document |
+| `training/requirements_modal.txt` | Pinned Modal client dependency for the launcher |
 | `scripts/fte_fyjc_49_autotrain_preflight_test.py` | Phase 6A preflight tests (CPU-only) |
 
 Created/generated: `training_data/autotrain_fyjc/{train,valid}.jsonl` and
@@ -87,30 +93,44 @@ python3 scripts/fte_fyjc_49_autotrain_preflight_test.py
 
 Regeneration is byte-identical (deterministic).
 
-### 6B — train (CUDA host with ~12 GB+ VRAM, Python ≥ 3.10)
+### 6B — train
+
+**Active implementation:** TRL `SFTTrainer` + PEFT LoRA in
+`training/trl_sft_job.py` (see the Modal route below). The AutoTrain config
+above is retained only as a reference — the AutoTrain Advanced approach was
+dropped (officially unmaintained) in favour of HF Jobs / Modal + TRL.
+
+#### Modal free-T4 route (current; no credit card, ~$30/mo free credits)
 
 ```bash
-# one-time host setup
-pip install -U "autotrain-advanced"     # v0.8.24 latest stable
-pip install torch --index-url https://download.pytorch.org/whl/cu121   # GPU build
-huggingface-cli login                    # or export HF_TOKEN=<read token>
-# accept the Qwen2.5 license on https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct
+# one-time workspace/host setup
+pip install -r training/requirements_modal.txt   # modal==1.5.5 (pinned)
+python3 -m modal setup                           # INTERACTIVE browser flow — run it yourself
+modal secret create hf-token HF_TOKEN=<hf_... token>   # one-time; never commit the token
 
-# train
-python3 training/prepare_autotrain.py    # regenerate data on the GPU host (or copy it)
-autotrain --config training/autotrain_config.yaml
+# launch the single baseline run (expects HF_TOKEN secret + Qwen access on the account)
+modal run training/run_modal.py
 ```
 
-Output adapter appears under `platrixa-fyjc-specialist/` (project_name).
-Point `PLATRIXA_FYJC_ADAPTER` at the checkpoint directory that contains
-`adapter_config.json` (keep `merge_adapter: false` so the adapter stays in
-PEFT format). Record the real run in `training/phase6_manifest.json` fields
-(hardware, versions, loss, wall time) — never credentials.
+Expected: ~30–50 min on a T4, cost ≈ $0.30–0.50 of the free monthly
+credits (hard-capped by the container timeout). The job downloads only
+train (800) + valid (100) at dataset revision `75f05fd…`, pushes the LoRA
+adapter to `Pranay-20/platrixa-fyjc-specialist-v0.1` before exit, and writes
+the adapter revision into `training/phase6b_manifest.json`.
 
-Hardware-dependent knobs already flagged in the config: `mixed_precision`
-(fp16 universal / bf16 on Ampere+), `batch_size` (2; drop to 1 + raise
-`gradient_accumulation` to 8 on < 12 GB), `quantization` (int4 default;
-`null` only with ≥ 24 GB), `auto_find_batch_size: true` if OOM.
+#### Alternative: any CUDA host (≥ 16 GB VRAM, Python ≥ 3.10)
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121  # GPU build
+# then install the job's pinned deps (see the PEP-723 header of trl_sft_job.py,
+# or use training/run_sft_free_gpu.py which resolves them automatically)
+export HF_TOKEN=<hf_... token>            # never put the token in source/git
+python3 training/trl_sft_job.py
+```
+
+Run parameters are pinned in the job script + `training/phase6b_manifest.json`
+(base model & dataset revisions, LoRA r/alpha/dropout, epochs, LR, batch,
+seed, adapter repository). Never put credentials in the manifest.
 
 ### 6C — evaluate + integrate
 

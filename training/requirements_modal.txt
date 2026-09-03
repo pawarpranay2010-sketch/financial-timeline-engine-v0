@@ -1,0 +1,10 @@
+# Platrixa FYJC — Phase 6B Modal client dependency (training launcher only)
+#
+# The heavy training stack (torch, transformers, trl, peft, datasets,
+# accelerate, huggingface_hub) is installed INSIDE the Modal container by
+# training/trl_sft_job.py itself — only the Modal client is needed in the
+# local/workspace environment to launch the run.
+#
+# Pinned to the version whose >=1.0 API training/run_modal.py is written
+# against and which was verified against the installed client.
+modal==1.5.5
