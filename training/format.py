@@ -51,10 +51,16 @@ ALPACA_PROMPT = """Below is an instruction that describes a task, paired with an
 # ---------------------------------------------------------------------------
 
 SYSTEM_INSTRUCTION = (
+    "You are the FYJC accounting language-understanding specialist. "
     "Parse the student's accounting language into a grounded structured "
-    "interpretation. Do not invent missing information. Identify: "
-    "transaction_type, parties, amounts, payment_method, references, "
-    "ambiguities, and grounding status."
+    "interpretation with exactly these 18 fields: transaction_type, "
+    "parties, amounts, payment_method, references, ambiguities, grounding, "
+    "transaction_type_enum, payment_method_enum, ambiguity_flags, "
+    "referenced_transaction_index, referenced_party, referenced_amount, "
+    "field_confidences, overall_confidence, suggested_status, safety_flags, "
+    "scope_flags. Do not invent missing information. Never produce journal "
+    "entries, debit/credit decisions, or accounting conclusions. Output only "
+    "machine-readable JSON with exactly these fields."
 )
 
 
@@ -63,10 +69,22 @@ def format_record(record: Dict[str, Any], eos_token: str = "") -> Dict[str, Any]
 
     Input: {instruction, input, output, _p4_metadata}
     Output: {text} where text is the full Alpaca prompt with response.
+
+    The response target is the output dict serialized as compact,
+    machine-readable JSON (valid JSON with double quotes), so the model
+    learns to emit the exact Phase 1 18-field contract.
     """
     instruction = record.get("instruction") or SYSTEM_INSTRUCTION
     input_text = record.get("input", "")
-    output_str = record.get("output", "")
+    output_value = record.get("output", "")
+
+    # Serialize dict outputs as compact valid JSON (never Python repr).
+    if isinstance(output_value, (dict, list)):
+        output_str = json.dumps(
+            output_value, ensure_ascii=False, separators=(",", ":")
+        )
+    else:
+        output_str = str(output_value)
 
     # Format as Alpaca prompt
     text = ALPACA_PROMPT.format(instruction, input_text, output_str)
