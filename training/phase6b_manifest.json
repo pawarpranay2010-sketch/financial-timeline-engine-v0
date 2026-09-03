@@ -1,0 +1,94 @@
+{
+  "phase": "6B",
+  "stage": "PRE-LAUNCH HARDENED — Modal T4 free route ready; NOT yet executed (no GPU minutes consumed)",
+  "purpose": "Platrixa FYJC specialist language-understanding LoRA — single controlled baseline run",
+  "architecture": "TRL SFTTrainer + PEFT LoRA (NOT AutoTrain Advanced) on a Modal T4 container",
+  "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "base_model_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "revision_pinning": {
+    "base_model_revision": "pinned constant in training/trl_sft_job.py; live-verified 2026-09-03 via HF API",
+    "dataset_revision": "pinned constant; live-verified 2026-09-03 (private, 4 files, no test.jsonl)",
+    "adapter_revision": "recorded by the job after the Hub push (commit 1 .oid) and persisted into the uploaded phase6b_manifest.json (commit 2)"
+  },
+  "dataset": {
+    "repo": "Pranay-20/platrixa-fyjc-specialist-1000",
+    "revision": "75f05fd287622c4dd7ae8f53cc9c575ef8f35672",
+    "train_count": 800,
+    "valid_count": 100,
+    "test_count": 100,
+    "test_used": false,
+    "test_uploaded": false,
+    "job_downloads": "train.jsonl + valid.jsonl only, at the pinned revision"
+  },
+  "training": {
+    "method": "SFT (TRL SFTTrainer) + PEFT LoRA",
+    "assistant_only_loss": true,
+    "epochs": 3,
+    "learning_rate": 0.0002,
+    "per_device_batch_size": 2,
+    "gradient_accumulation_steps": 4,
+    "effective_batch_size": 8,
+    "max_length": 2048,
+    "packing": false,
+    "warmup_ratio": 0.1,
+    "weight_decay": 0.001,
+    "lr_scheduler": "linear",
+    "optimizer": "adamw_torch",
+    "precision": "fp16",
+    "quantization": null,
+    "gradient_checkpointing": true,
+    "seed": 3407,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05,
+    "lora_target_modules": "all-linear (verified against peft 0.20.0: all linear layers except lm_head)",
+    "save": "adapter-only via PeftModel.save_pretrained (isinstance PeftModel check), pushed to HF Hub before the ephemeral container exits"
+  },
+  "hardware": {
+    "provider": "Modal — free Starter plan",
+    "gpu": "1x Nvidia T4 (16 GB)",
+    "t4_hourly_usd": 0.59,
+    "expected_duration_min": 30,
+    "expected_cost_usd_of_free_credit": 0.35,
+    "free_monthly_credit_usd": 30,
+    "payment_method_required": false,
+    "function_timeout_s": 7200,
+    "ephemeral_disk_gb": 20
+  },
+  "versions_pinned": {
+    "torch": "2.6.0",
+    "transformers": "5.16.1",
+    "trl": "1.12.0",
+    "peft": "0.20.0",
+    "datasets": "5.0.1",
+    "accelerate": "1.14.0",
+    "huggingface_hub": "1.30.0"
+  },
+  "hardening": {
+    "modal_sdk": "run_modal.py rewritten for Modal >= 1.0 (verified against modal client 1.5.5: Mount API removed; Image.add_local_file used)",
+    "transformers_v5_smoke_load": "AutoPeftModelForCausalLM removed in transformers 5.x; smoke test now loads pinned AutoModelForCausalLM + PeftModel.from_pretrained (mirrors backend/maths/fyjc_local_model_runner.py)",
+    "memory_release_before_smoke": "del trainer/model + gc.collect() + torch.cuda.empty_cache() before the smoke load",
+    "base_model_revision_pinned": true,
+    "dataset_forbidden_key_scan": "job fails if any assistant target has keys outside the 18-field contract or forbidden accounting-output keys",
+    "fail_closed_wrapper": "uncaught exceptions exit(1) with FATAL UNCAUGHT",
+    "trl_api": "SFTConfig fields verified against trl 1.12.0 wheel source (max_length, assistant_only_loss, processing_class, peft wrap via get_peft_model)"
+  },
+  "artifact": {
+    "repo": "Pranay-20/platrixa-fyjc-specialist-v0.1",
+    "private": true,
+    "merge_adapter": false,
+    "adapter_revision": null,
+    "adapter_revision_source": "upload_folder(...).oid (huggingface_hub 1.30 CommitInfo); recorded post-run"
+  },
+  "status_field": "Phase 5 targets: 815 VERIFIED / 185 REVIEW_REQUIRED. Production currently clamps suggested_status to REVIEW_REQUIRED downstream. Recommendation recorded separately; production contract NOT changed during training.",
+  "run_command": "modal run training/run_modal.py   (after: modal secret create hf-token HF_TOKEN=<token>)",
+  "history": [
+    {
+      "attempt": "HF Jobs launch (t4-small)",
+      "result": "402 Payment Required — pre-paid credit balance insufficient on Pranay-20; no job created, no charge",
+      "cost_usd": 0.0
+    }
+  ],
+  "credentials": "HF_TOKEN passed via Modal Secret only (modal secret create hf-token); never written to source, argv, logs, or git",
+  "git": "no commit, no push (Phase 6 rule)"
+}

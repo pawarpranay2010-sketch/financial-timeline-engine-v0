@@ -1,0 +1,93 @@
+{
+  "phase": "6A",
+  "created_utc": "2026-09-03T11:13:17+00:00",
+  "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "training_method": "LoRA (PEFT) via AutoTrain Advanced llm-sft",
+  "dataset": {
+    "canonical_root": "training_data/fyjc_specialist_{train,validation,test}.jsonl",
+    "phase5_commit": "e315b56",
+    "train_count": 800,
+    "valid_count": 100,
+    "test_count": 100,
+    "train_sha256": "b3d1bbc17a7da75d79dc2924b348a1670ff8f61f5a8aa65cb34256c0e6b0d412",
+    "valid_sha256": "593d37ef24a748dec0cc2207d3360a31ff66e2892a632322b18cfb422888abb4",
+    "test_sha256": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "seed": 3407,
+    "train_target_format": "messages[{system,user,assistant}] JSONL for AutoTrain chat_template=tokenizer",
+    "assistant_content": "compact 18-field ExpandedInterpretation JSON (byte-identical to Phase 5 formatted targets)",
+    "forbidden_content": [
+      "journal entries",
+      "debit/credit decisions",
+      "ledger postings",
+      "balances",
+      "accounting conclusions"
+    ]
+  },
+  "output": {
+    "data_dir": "training_data/autotrain_fyjc",
+    "train_file": "/home/daytona/codebase/training_data/autotrain_fyjc/train.jsonl",
+    "valid_file": "/home/daytona/codebase/training_data/autotrain_fyjc/valid.jsonl"
+  },
+  "hyperparameters": {
+    "task": "llm-sft",
+    "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "project_name": "platrixa-fyjc-specialist",
+    "backend": "local",
+    "data": {
+      "path": "training_data/autotrain_fyjc",
+      "train_split": "train",
+      "valid_split": "valid",
+      "chat_template": "tokenizer",
+      "column_mapping": {
+        "text_column": "messages"
+      }
+    },
+    "params": {
+      "block_size": 2048,
+      "model_max_length": 2048,
+      "padding": "right",
+      "optimizer": "paged_adamw_8bit",
+      "scheduler": "linear",
+      "lr": 0.0002,
+      "warmup_ratio": 0.1,
+      "weight_decay": 0.001,
+      "max_grad_norm": 1.0,
+      "gradient_accumulation": 4,
+      "epochs": 3,
+      "batch_size": 2,
+      "seed": 3407,
+      "mixed_precision": "fp16",
+      "disable_gradient_checkpointing": false,
+      "use_flash_attention_2": false,
+      "peft": true,
+      "quantization": "int4",
+      "target_modules": "all-linear",
+      "lora_r": 16,
+      "lora_alpha": 32,
+      "lora_dropout": 0.05,
+      "merge_adapter": false,
+      "eval_strategy": "epoch",
+      "save_total_limit": 1,
+      "auto_find_batch_size": false
+    }
+  },
+  "environment": {
+    "python_version": "3.10.12",
+    "platform": "Linux-6.18.15-x86_64-with-glibc2.35",
+    "gpu_available": false,
+    "gpu_name": null,
+    "gpu_vram_gb": null,
+    "packages": {
+      "torch": "NOT INSTALLED",
+      "transformers": "NOT INSTALLED",
+      "peft": "NOT INSTALLED",
+      "datasets": "NOT INSTALLED",
+      "accelerate": "NOT INSTALLED",
+      "bitsandbytes": "NOT INSTALLED",
+      "trl": "NOT INSTALLED",
+      "autotrain": "NOT INSTALLED",
+      "huggingface_hub": "NOT INSTALLED"
+    }
+  },
+  "credentials": "none stored in this manifest or any Phase 6 file"
+}

@@ -1,0 +1,110 @@
+# =============================================================================
+# Platrixa FYJC — AutoTrain (llm-sft) LoRA Configuration — Phase 6A
+# =============================================================================
+# Target base model : Qwen/Qwen2.5-1.5B-Instruct
+# Method            : LoRA (PEFT) via Hugging Face AutoTrain Advanced (llm-sft)
+# Dataset           : Phase 5 canonical split, converted by training/prepare_autotrain.py
+#                     into training_data/autotrain_fyjc/{train,valid}.jsonl
+#
+# Every parameter name below is verified against the CURRENT AutoTrain
+# documentation (hf.co/docs/autotrain, LLMTrainingParams / example llm-sft
+# configs). Version audited: stable pip release v0.8.24
+# (https://github.com/huggingface/autotrain-advanced — officially no longer
+#  maintained; HF recommends TRL/Axolotl as alternatives, see PHASE6_README.md).
+#
+# Run:
+#   export HF_TOKEN=<your hugging face read token>   # needed to download the
+#                                                    # (access-controlled) base
+#                                                    # model; NEVER put it here
+#   autotrain --config training/autotrain_config.yaml
+#
+# The prepared data directory is produced by:
+#   python3 training/prepare_autotrain.py
+# =============================================================================
+
+task: llm-sft
+base_model: Qwen/Qwen2.5-1.5B-Instruct
+project_name: platrixa-fyjc-specialist
+log: none                      # "none" (default) — set "tensorboard" only if
+                               # tensorboard is installed on the training host
+backend: local                 # local GPU machine / rented GPU VM
+
+data:
+  # Local folder prepared by training/prepare_autotrain.py. It must contain
+  # train.jsonl and valid.jsonl (file names == the split names below).
+  path: training_data/autotrain_fyjc
+  train_split: train
+  valid_split: valid
+  # "tokenizer" = apply the Qwen2.5 chat template (from tokenizer_config.json)
+  # to the message cells at load time. Verified supported value.
+  chat_template: tokenizer
+  column_mapping:
+    # Each row: {"messages": [{"role": "system"|"user"|"assistant",
+    #                          "content": "..."}, ...]}
+    text_column: messages
+
+params:
+  # --- Sequence handling ---
+  block_size: 2048             # max_seq_length given to the SFT trainer
+                               # (packing=True is applied by AutoTrain llm-sft)
+  model_max_length: 2048       # must be >= block_size (constraint is enforced)
+  padding: right               # verified option: "right" | "left"
+
+  # --- Optimizer / schedule ---
+  optimizer: paged_adamw_8bit  # verified option; 8-bit paged optimizer for
+                               # int4 QLoRA (needs bitsandbytes). Alternative:
+                               # adamw_torch (AutoTrain default).
+  scheduler: linear            # verified option (AutoTrain default)
+  lr: 2.0e-4                   # LoRA instruction-tuning rate; matches the repo's
+                               # existing training/train.py value (QLoRA-paper
+                               # convention). AutoTrain default is 3e-5 — both
+                               # are safe; lower it if loss diverges.
+  warmup_ratio: 0.1            # verified param (AutoTrain default)
+  weight_decay: 0.001          # matches repo training/train.py
+  max_grad_norm: 1.0           # verified param (AutoTrain default)
+  gradient_accumulation: 4     # matches repo training/train.py; effective batch
+                               # = batch_size * gradient_accumulation = 8
+  epochs: 3                    # matches repo training/train.py
+  batch_size: 2                # per-device batch (AutoTrain default). If OOM on
+                               # <12GB VRAM set to 1 and raise
+                               # gradient_accumulation to 8.
+  seed: 3407                   # repo training/train.py seed (reproducibility)
+
+  # --- Precision (HARDWARE-DEPENDENT — see note) ---
+  mixed_precision: fp16        # works on T4 / L4 / A10G / A100 / 4090.
+                               # Ampere+ hosts may switch to bf16 (faster, more
+                               # stable); T4/V100 MUST stay fp16.
+  disable_gradient_checkpointing: false   # false = gradient checkpointing ON
+                                          # (saves VRAM; AutoTrain default)
+  use_flash_attention_2: false # requires flash-attn installed; keep false for a
+                               # conservative first run
+
+  # --- PEFT / LoRA ---
+  peft: true                   # PEFT on = LoRA adapter training
+  quantization: int4           # 4-bit base model via bitsandbytes (QLoRA).
+                               # Verified option: "int4" | "int8" | null.
+                               # On >=24GB VRAM you can set null (full bf16
+                               # base) but int4 is the conservative choice.
+  target_modules: all-linear   # verified option; peft resolves all linear
+                               # modules (q/k/v/o/gate/up/down_proj on Qwen2.5)
+  lora_r: 16                   # verified param (AutoTrain default)
+  lora_alpha: 32               # verified param (AutoTrain default)
+  lora_dropout: 0.05           # verified param (AutoTrain default)
+  merge_adapter: false         # false keeps the unmerged PeftModel adapter dir,
+                               # which backend/maths/fyjc_local_model_runner.py
+                               # loads via PeftModel.from_pretrained(). Set true
+                               # only for a merged deployment artifact later.
+
+  # --- Eval / checkpointing ---
+  eval_strategy: epoch         # verified param (AutoTrain default): run
+                               # validation loss every epoch
+  save_total_limit: 1          # verified param (AutoTrain default)
+  auto_find_batch_size: false  # verified param; set true if you want AutoTrain
+                               # to search batch size on OOM
+
+hub:
+  # Credentials are NEVER stored in this file. The huggingface_hub library
+  # picks up HF_TOKEN from the environment for the base-model download.
+  push_to_hub: false
+  # username: ${HF_USERNAME}   # uncomment only on a host where HF_USERNAME and
+  # token: ${HF_TOKEN}         # HF_TOKEN are exported; keeps secrets out of git
