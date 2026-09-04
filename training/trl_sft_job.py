@@ -250,7 +250,7 @@ def main() -> None:
         per_device_train_batch_size=PER_DEVICE_BATCH,
         gradient_accumulation_steps=GRAD_ACCUM,
         learning_rate=LR,
-        warmup_ratio=WARMUP_RATIO,
+        warmup_steps=5,
         weight_decay=WEIGHT_DECAY,
         lr_scheduler_type=LR_SCHEDULER,
         optim="adamw_torch",

@@ -77,7 +77,7 @@ image = (
     image=image,
     gpu="T4",                 # 16 GB VRAM — fp16 LoRA needs ~5-6 GB
     timeout=7200,             # 2h cap; Modal allows up to 24h
-    ephemeral_disk=20,        # GiB — model weights + HF cache + outputs
+    ephemeral_disk=524288,        # MiB — model weights + HF cache + outputs
     secrets=[modal.Secret.from_name("hf-token")],
 )
 def run_job() -> None:
