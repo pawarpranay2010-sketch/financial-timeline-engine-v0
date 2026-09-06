@@ -138,6 +138,17 @@ class ProviderStatus:
     def model_unavailable(self) -> bool:
         return not self.available
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "available": self.available,
+            "model_id": self.model_id,
+            "base_model_revision": self.base_model_revision,
+            "adapter_repo_id": self.adapter_repo_id,
+            "adapter_revision": self.adapter_revision,
+            "reason": self.reason,
+            "error": self.error,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Structured candidate output

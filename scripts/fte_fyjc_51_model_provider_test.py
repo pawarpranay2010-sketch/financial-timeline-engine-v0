@@ -29,27 +29,16 @@ from typing import Any, Dict, Optional, Tuple
 # ---------------------------------------------------------------------------
 # Runtime setup
 # ---------------------------------------------------------------------------
-# This test suite imports from `backend.model_provider`, which requires
-# `backend/` to be importable as a package. In this repository `backend/` is
-# used as a package namespace in many call sites (e.g. `from backend.maths`
-# and `from backend.gateway`), so `backend/__init__.py` must exist for the
-# test runner to resolve those imports.
-#
-# We require that marker here rather than creating it implicitly inside the
-# test file. If it is missing, the suite fails fast with a clear message
-# instead of producing confusing ModuleNotFoundError traces.
+# This test suite imports from `backend.model_provider`. Python 3 namespace
+# packages make `import backend.model_provider` work with the repository root
+# on sys.path even without a `backend/__init__.py` marker, which matches the
+# repository convention (backend/ has no package marker and every existing
+# test imports `backend.*` this way). We therefore do not require — and do
+# not create — a package marker file here.
 
 _script_dir = pathlib.Path(__file__).resolve().parent
 _repo_root = _script_dir.parent
-_backend_init = _repo_root / "backend" / "__init__.py"
 _ROOT = _repo_root
-
-if not _backend_init.exists():
-    print("FAIL: backend/__init__.py is required to run this test suite")
-    print(f"  expected at: {_backend_init}")
-    print("  resolve by creating the empty marker file:")
-    print(f"    touch {_backend_init}")
-    sys.exit(2)
 
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
