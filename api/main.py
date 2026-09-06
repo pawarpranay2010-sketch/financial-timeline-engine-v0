@@ -63,11 +63,13 @@ def create_app() -> FastAPI:
         )
 
     # API routes first, so /api/v1/* is never shadowed by the static mount.
-    from api.routes import health, intelligence, market
+    from api.routes import health, intelligence, kernel, market
 
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(market.router, prefix="/api/v1")
     app.include_router(intelligence.router, prefix="/api/v1")
+    # Phase 7F: authoritative Kernel boundary (lazy heavy imports inside).
+    app.include_router(kernel.router, prefix="/api/v1")
 
     # Standalone frontend: served at / (landing + app UI)
     if _FRONTEND_DIR.is_dir():

@@ -74,3 +74,53 @@ class AnalysisResponse(BaseModel):
     resolved_count: int
     resolved_facts: List[Dict[str, Any]] = Field(default_factory=list)
     summary_text: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Kernel boundary (Phase 7F)
+# ---------------------------------------------------------------------------
+
+
+class KernelProcessRequest(BaseModel):
+    """
+    Request for the authoritative Kernel workflow.
+
+    Contains only what the Kernel actually needs: the student's raw input.
+    The API performs request-shape validation only — no accounting,
+    grounding, or schema-interpretation logic lives here.
+    """
+
+    raw_input: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Raw student transaction text, sent to the Kernel verbatim.",
+    )
+
+
+class KernelProcessResponse(BaseModel):
+    """
+    Safe projection of a KernelResult.
+
+    The Kernel terminal status taxonomy is preserved verbatim:
+        VERIFIED, REVIEW_REQUIRED, VALIDATION_FAILED, GROUNDING_FAILED,
+        FORBIDDEN_OUTPUT, MODEL_UNAVAILABLE, UNSUPPORTED_TRANSACTION
+
+    Failures are never collapsed into a generic error, and no ML/provider
+    internals (transformers, peft, Hugging Face, raw model output) are
+    exposed. Hidden chain-of-thought is never included.
+    """
+
+    request_id: Optional[str] = None
+    status: str
+    status_label: str = ""
+    success: bool = False
+    next_action: Optional[str] = None
+    issues: List[str] = Field(default_factory=list)
+    grounding_issues: List[str] = Field(default_factory=list)
+    verification_status: Optional[str] = None
+    interpretation: Optional[Dict[str, Any]] = None
+    accounting: Optional[Dict[str, Any]] = None
+    # Phase 7E persistence outcome — explicit, never silently discarded:
+    persisted: bool = False
+    persistence_error: Optional[Dict[str, str]] = None
