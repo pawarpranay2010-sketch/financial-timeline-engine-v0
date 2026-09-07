@@ -261,6 +261,14 @@ def process_transaction(payload: KernelProcessRequest, request: Request):
 
 
 def _json_response(response: KernelProcessResponse, status_code: int):
+    from fastapi.encoders import jsonable_encoder
     from fastapi.responses import JSONResponse
 
-    return JSONResponse(status_code=status_code, content=response.model_dump())
+    # jsonable_encoder converts Decimal amounts emitted by the deterministic
+    # accounting kernel into JSON-safe values (exactly the conversion FastAPI
+    # itself applies to response_model payloads). The KernelResult and the
+    # accounting shape are untouched — this is HTTP-edge serialization only.
+    return JSONResponse(
+        status_code=status_code,
+        content=jsonable_encoder(response.model_dump()),
+    )

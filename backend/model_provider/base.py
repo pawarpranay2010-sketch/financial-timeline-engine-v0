@@ -124,6 +124,21 @@ class ProviderStatus:
       - model available
       - model not available (MODEL_NOT_AVAILABLE)
       - why it is not available (without leaking secrets)
+
+    Tri-state availability semantics (Phase 7H cold-start seam):
+
+      available=True                    → model is currently loaded and usable
+      available=False, loadable=True    → NOT LOADED YET, but a load attempt on
+                                          the request path is possible and safe
+                                          to attempt; the Kernel may proceed to
+                                          interpret(), which calls
+                                          ensure_loaded() → _load_model()
+      available=False, loadable=False   → HARD FAILURE (missing dependencies,
+                                          invalid configuration, or a previously
+                                          failed load) — fail closed as
+                                          MODEL_UNAVAILABLE
+
+    status() itself NEVER loads the model in either state.
     """
 
     available: bool
@@ -133,6 +148,9 @@ class ProviderStatus:
     adapter_revision: str
     reason: str = ""
     error: str = ""
+    # Default False preserves the historical fail-closed behavior for any
+    # status constructed without this field (stubs, alternative providers).
+    loadable: bool = False
 
     @property
     def model_unavailable(self) -> bool:
@@ -147,6 +165,7 @@ class ProviderStatus:
             "adapter_revision": self.adapter_revision,
             "reason": self.reason,
             "error": self.error,
+            "loadable": self.loadable,
         }
 
 

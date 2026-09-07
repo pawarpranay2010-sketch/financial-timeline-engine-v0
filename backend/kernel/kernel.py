@@ -290,8 +290,19 @@ class Kernel:
         provider = self.model_provider()
 
         # 1. Model availability without loading if possible.
+        #
+        # Fail closed ONLY on a hard provider failure: missing dependencies,
+        # invalid configuration, or a previously failed load attempt. A
+        # provider that is merely "not currently loaded" but loadable is NOT
+        # rejected here — the request path below reaches provider.interpret(),
+        # which attempts ensure_loaded() → _load_model(), and every genuine
+        # load failure still maps to MODEL_UNAVAILABLE (fail-closed).
+        #
+        # loadable is an optional ProviderStatus field; getattr with a False
+        # default preserves fail-closed behavior for stubs/providers that do
+        # not report it (existing Phase 7C stub contract is unchanged).
         status = provider.status()
-        if status.model_unavailable:
+        if status.model_unavailable and not getattr(status, "loadable", False):
             return self._failed(
                 status=MODEL_UNAVAILABLE,
                 request_id=request_id,

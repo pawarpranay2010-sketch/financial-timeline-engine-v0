@@ -155,14 +155,36 @@ class LocalHFModelProvider:
         st = runner.status()
         available = runner.is_available()
 
+        # Distinguish "not loaded yet" from "hard failure" WITHOUT loading.
+        # status() itself never loads the model.
+        #
+        # Hard failure (available=False, loadable=False → fail closed):
+        #   - a previous load attempt already failed (st["error"])
+        #   - transformers is not installed
+        #   - peft is not installed while an adapter is configured
+        # Not loaded yet (available=False, loadable=True):
+        #   - cold runner with everything a load attempt needs in place;
+        #     the request path (interpret → ensure_loaded) may attempt the
+        #     load, and any genuine failure still maps to MODEL_UNAVAILABLE.
+        load_error = st.get("error", "") or ""
+        transformers_ok = bool(st.get("transformers_installed"))
+        adapter_configured = bool(st.get("adapter", ""))
+        peft_ok = bool(st.get("peft_installed"))
+        loadable = (
+            transformers_ok
+            and not load_error
+            and (peft_ok or not adapter_configured)
+        )
+
         return ProviderStatus(
             available=available,
             model_id=self._config.model_id,
             base_model_revision=self._config.base_model_revision,
             adapter_repo_id=self._config.adapter_repo_id,
             adapter_revision=self._config.adapter_revision,
-            reason=st.get("error", "") or ("model loaded" if available else "model not loaded"),
-            error=st.get("error", "") or "",
+            reason=load_error or ("model loaded" if available else "model not loaded"),
+            error=load_error or "",
+            loadable=loadable,
         )
 
     def interpret(self, raw_input: str) -> InterpretationResult:
@@ -171,7 +193,23 @@ class LocalHFModelProvider:
 
         runner = self._get_runner()
 
-        if not runner.is_available():
+        # Cold-start handling: attempt to load the model before declaring it
+        # unavailable. is_available() remains a non-loading status check and
+        # is still what status() (and therefore the Kernel pre-flight) uses;
+        # the REQUEST path is allowed to transition the provider from
+        # "not currently loaded" to "loaded" instead of terminating early.
+        #
+        # ensure_loaded() is resolved via duck typing so the provider contract
+        # keeps working with runner implementations that predate the Phase 7H
+        # cold-start addition (e.g. test stubs and the MockModelRunner). For
+        # those runners, is_available() False still fails closed with
+        # ModelUnavailableError exactly as before Phase 7H.
+        ensure = getattr(runner, "ensure_loaded", None)
+        if callable(ensure):
+            ensure_ok, ensure_err = ensure()
+            if not ensure_ok:
+                raise ModelUnavailableError(ensure_err or "model not available")
+        elif not runner.is_available():
             raise ModelUnavailableError(
                 runner.status().get("error") or "model not available"
             )

@@ -13,6 +13,7 @@ Supports:
 
 Environment variables:
   PLATRIXA_FYJC_MODEL_ID   — Hugging Face model ID or local path
+  PLATRIXA_FYJC_BASE_REVISION — pinned base model revision (enforced at load)
   PLATRIXA_FYJC_ADAPTER    — optional LoRA adapter path
   PLATRIXA_FYJC_DEVICE     — "auto", "cpu", "cuda", "mps"
   PLATRIXA_FYJC_DTYPE      — "auto", "float16", "bfloat16", "float32"
@@ -49,6 +50,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+
+# Pinned base model revision (Phase 6C evidence).
+#
+# Enforced at ACTUAL LOAD TIME: AutoTokenizer.from_pretrained() and
+# AutoModelForCausalLM.from_pretrained() pass revision= so the base weights,
+# config, and tokenizer can NEVER silently drift to "latest". This mirrors
+# the pin declared at the ModelProvider boundary
+# (backend/model_provider/base.py BASE_MODEL_REVISION).
+#
+# PLATRIXA_FYJC_BASE_REVISION may override it for controlled testing;
+# production uses this default so the base model is NEVER loaded unpinned.
+DEFAULT_BASE_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+
+# Pinned Platrixa FYJC LoRA adapter revision (Phase 6B/6C artifact).
+#
+# This mirrors the pin declared at the ModelProvider boundary
+# (backend/model_provider/base.py ADAPTER_REVISION). It is duplicated here
+# rather than imported so backend/maths stays free of model_provider imports
+# (model_provider depends on backend/maths, not the other way around).
+#
+# PLATRIXA_FYJC_ADAPTER_REVISION may override it for controlled testing;
+# production uses this default so the adapter is NEVER loaded unpinned.
+DEFAULT_ADAPTER_REVISION = "b5c0a37cebc00e93144150dbbcaa7b28cadb259e"
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_TOP_P = 0.95
@@ -62,6 +86,7 @@ def get_model_config() -> Dict[str, Any]:
     """Read model configuration from environment variables."""
     return {
         "model_id": _env("PLATRIXA_FYJC_MODEL_ID", DEFAULT_MODEL_ID),
+        "base_revision": _env("PLATRIXA_FYJC_BASE_REVISION", DEFAULT_BASE_REVISION),
         "adapter_path": _env("PLATRIXA_FYJC_ADAPTER", ""),
         "device": _env("PLATRIXA_FYJC_DEVICE", "auto"),
         "dtype": _env("PLATRIXA_FYJC_DTYPE", "auto"),
@@ -78,6 +103,25 @@ def check_transformers_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _classify_adapter(adapter_path: str) -> Tuple[bool, bool]:
+    """Classify a configured adapter reference.
+
+    Returns (is_local_dir, is_hf_repo):
+      - local PEFT directory (exists on disk)  → (True, False)
+      - Hugging Face repo id ("org/name" form) → (False, True)
+      - neither                                → (False, False)
+
+    The Phase 6B/6C adapter (Pranay-20/platrixa-fyjc-specialist-v0.1) is an
+    HF repository, not a local directory. The previous isdir()-only gate
+    silently skipped it, producing base-only inference — fixed here.
+    """
+    if not adapter_path:
+        return False, False
+    is_local = os.path.isdir(adapter_path)
+    is_repo = ("/" in adapter_path) and not is_local
+    return is_local, is_repo
 
 
 def check_peft_available() -> bool:
@@ -148,6 +192,30 @@ class LocalModelRunner:
         """Check if model is loaded and ready. Does NOT trigger loading."""
         return self._loaded and self._model is not None
 
+    def ensure_loaded(self) -> Tuple[bool, str]:
+        """Attempt to make the model usable, loading it if necessary.
+
+        Contract (distinct from is_available()):
+          is_available()  = "model is CURRENTLY loaded and usable" (never loads)
+          ensure_loaded() = "ATTEMPT to make the model usable" (may load)
+
+        Returns (available, error):
+          (True, "")            — model is loaded and usable
+          (False, _load_error)  — loading was attempted and failed; the
+                                  existing _load_error state is preserved
+                                  so status() keeps reporting the reason.
+
+        This delegates to the existing _load_model() implementation and does
+        not duplicate any loading logic. It exists so a cold request path can
+        attempt loading before the provider declares MODEL_UNAVAILABLE.
+        """
+        if self.is_available():
+            return True, ""
+        self._load_model()
+        if self.is_available():
+            return True, ""
+        return False, self._load_error or "Model not loaded"
+
     def status(self) -> Dict[str, Any]:
         """Return model status without triggering loading."""
         return {
@@ -196,6 +264,7 @@ class LocalModelRunner:
             return
 
         model_id = self._config["model_id"]
+        base_revision = self._config.get("base_revision", "")
         adapter_path = self._config.get("adapter_path", "")
         device_str = self._config["device"]
         dtype_str = self._config["dtype"]
@@ -216,16 +285,26 @@ class LocalModelRunner:
             device = self._resolve_device(device_str)
             dtype = self._resolve_dtype(dtype_str)
 
-            logger.info(f"Loading tokenizer from {model_id}...")
+            logger.info(
+                f"Loading tokenizer from {model_id} "
+                f"(revision={base_revision or 'latest'})..."
+            )
+            tokenizer_kwargs: Dict[str, Any] = {
+                "trust_remote_code": True,
+            }
+            if base_revision:
+                tokenizer_kwargs["revision"] = base_revision
             self._tokenizer = AutoTokenizer.from_pretrained(
                 model_id,
-                trust_remote_code=True,
+                **tokenizer_kwargs,
             )
 
             logger.info(f"Loading model from {model_id} (device={device}, dtype={dtype})...")
             load_kwargs: Dict[str, Any] = {
                 "trust_remote_code": True,
             }
+            if base_revision:
+                load_kwargs["revision"] = base_revision
             if dtype is not None:
                 load_kwargs["torch_dtype"] = dtype
             if device == "cpu":
@@ -238,23 +317,79 @@ class LocalModelRunner:
                 **load_kwargs,
             )
 
-            # Load LoRA adapter if configured
-            if adapter_path and os.path.isdir(adapter_path):
-                if not check_peft_available():
+            # Load LoRA adapter if configured.
+            #
+            # Two adapter configuration forms are supported:
+            #   A. local filesystem path  (os.path.isdir → PEFT from local dir)
+            #   B. Hugging Face repo ID   (e.g. "Pranay-20/platrixa-fyjc-specialist-v0.1",
+            #                              pinned via PLATRIXA_FYJC_ADAPTER_REVISION)
+            #
+            # Fail-closed rule: if an adapter is configured but cannot be
+            # loaded, model loading FAILS. We never silently continue with
+            # the base model when a Platrixa adapter is expected — a base-only
+            # model would produce silently wrong FYJC interpretations.
+            if adapter_path:
+                adapter_is_local, adapter_is_repo = _classify_adapter(adapter_path)
+
+                if not adapter_is_local and not adapter_is_repo:
+                    self._load_error = (
+                        f"Configured adapter not found (not a local directory or "
+                        f"valid HF repo id): {adapter_path}"
+                    )
+                    logger.error(self._load_error)
+                    # Fail closed: drop the loaded base weights so no
+                    # half-configured base-only model can linger in memory.
+                    self._model = None
+                    self._tokenizer = None
+                    return
+
+                if adapter_is_local and not check_peft_available():
                     self._load_error = (
                         f"PEFT not installed but adapter path configured: {adapter_path}. "
                         "Install with: pip install peft"
                     )
                     logger.error(self._load_error)
+                    # Fail closed: drop the loaded base weights so no
+                    # half-configured base-only model can linger in memory.
+                    self._model = None
+                    self._tokenizer = None
                     return
 
-                from peft import PeftModel
-                logger.info(f"Loading LoRA adapter from {adapter_path}...")
-                self._model = PeftModel.from_pretrained(
-                    self._model,
-                    adapter_path,
-                )
-                logger.info("LoRA adapter loaded successfully.")
+                try:
+                    from peft import PeftModel
+
+                    if adapter_is_local:
+                        logger.info(f"Loading LoRA adapter from local path {adapter_path}...")
+                        self._model = PeftModel.from_pretrained(
+                            self._model,
+                            adapter_path,
+                        )
+                    else:
+                        adapter_revision = _env(
+                            "PLATRIXA_FYJC_ADAPTER_REVISION", DEFAULT_ADAPTER_REVISION
+                        ).strip()
+                        logger.info(
+                            f"Loading LoRA adapter from HF repo {adapter_path} "
+                            f"(revision={adapter_revision or 'pinned default'})..."
+                        )
+                        self._model = PeftModel.from_pretrained(
+                            self._model,
+                            adapter_path,
+                            revision=adapter_revision or None,
+                        )
+                    logger.info("LoRA adapter loaded successfully.")
+
+                except Exception as e:
+                    # Fail closed: an expected adapter that fails to load must
+                    # NOT degrade to base-only inference.
+                    self._load_error = (
+                        f"LoRA adapter loading failed for configured adapter "
+                        f"'{adapter_path}': {e}"
+                    )
+                    logger.error(self._load_error)
+                    self._model = None
+                    self._tokenizer = None
+                    return
 
             # Move to device if needed
             if device == "cpu" and hasattr(self._model, "to"):
