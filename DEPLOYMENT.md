@@ -46,6 +46,30 @@ are git-ignored.
 Already configured: `api/main.py` mounts `frontend/` as static files at `/`.
 No build step, no Node toolchain required.
 
+## Cloudflare Pages frontend → FastAPI backend (Phase 7I)
+
+The production frontend is served from Cloudflare Pages while FastAPI runs
+as a separate long-running service (Render/Railway, see below). Two supported
+ways to wire them:
+
+1. **Pages proxy (recommended)** — `functions/api/[[path]].js` (in this repo)
+   proxies every `/api/*` request to the FastAPI host. Set the Pages
+   environment variable:
+
+       API_BACKEND_URL=https://<your-fastapi-host>
+
+   The frontend keeps its same-origin API base (`/api/v1/kernel/process`).
+   Without `API_BACKEND_URL` the proxy returns an explicit 502
+   `backend_not_configured` instead of Cloudflare's generic 405.
+
+2. **Direct base override** — inject before `app.js` loads (e.g. in
+   `frontend/index.html` or at deploy time):
+
+       <script>window.PLATRIXA_API_BASE="https://<your-fastapi-host>";</script>
+
+Never hardcode a backend URL in committed frontend code; the FastAPI host
+is deployment configuration owned by the environment.
+
 ## Deploy on Render (recommended)
 
 1. Push this repo to GitHub (done).

@@ -342,10 +342,45 @@ function renderResult(r) {
   show($("#result-card"));
 }
 
-function renderTransportError(message) {
+/* ------------------------------------------------------------------
+   Transport-error classification — distinguishes real causes instead of
+   labeling every failure an internet problem. Only the HTTP status is
+   interpreted; no accounting conclusions are ever invented here.
+   ------------------------------------------------------------------ */
+function transportMessage(httpStatus) {
+  if (httpStatus === 405) {
+    return (
+      "API routing or method misconfiguration (HTTP 405): the request reached " +
+      "a host that does not accept POST at /api/v1/kernel/process. The Platrixa " +
+      "backend is not serving this address — check the API base configuration."
+    );
+  }
+  if (httpStatus === 404) {
+    return "API endpoint not found at this address (HTTP 404). Check the API base configuration.";
+  }
+  if (httpStatus === 502) {
+    return "The Platrixa backend is not configured or unreachable (HTTP 502).";
+  }
+  if (httpStatus === 503) {
+    return "The Platrixa backend is temporarily unavailable (HTTP 503). Try again shortly.";
+  }
+  if (httpStatus === 422) {
+    return "The request was rejected as invalid (HTTP 422). Review the transaction text.";
+  }
+  if (httpStatus >= 500) {
+    return `The Platrixa backend returned an error (HTTP ${httpStatus}).`;
+  }
+  return null; // network-level failure → generic connection message
+}
+
+function renderTransportError(message, httpStatus) {
   hide($("#empty-card"));
   hide($("#result-card"));
-  safeText($("#error-message"), message || "Could not reach the Platrixa service.");
+  const specific = transportMessage(httpStatus);
+  safeText(
+    $("#error-message"),
+    specific || message || "Could not reach the Platrixa service."
+  );
   show($("#error-card"));
 }
 
@@ -377,7 +412,8 @@ async function onSubmit(event) {
     renderTransportError(
       err && err.message
         ? `Could not reach the Platrixa service. (${err.message})`
-        : "Could not reach the Platrixa service."
+        : "Could not reach the Platrixa service.",
+      err && err.httpStatus
     );
   } finally {
     setBusy(false);
