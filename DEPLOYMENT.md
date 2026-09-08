@@ -52,8 +52,10 @@ The production frontend is served from Cloudflare Pages while FastAPI runs
 as a separate long-running service (Render/Railway, see below). Two supported
 ways to wire them:
 
-1. **Pages proxy (recommended)** — `functions/api/[[path]].js` (in this repo)
-   proxies every `/api/*` request to the FastAPI host. Set the Pages
+1. **Pages proxy (recommended)** — `frontend/functions/api/[[path]].js`
+   (in this repo) proxies every `/api/*` request to the FastAPI host. It
+   must live inside the Pages **build output directory** (`frontend/`),
+   because Cloudflare only discovers Functions there. Set the Pages
    environment variable:
 
        API_BACKEND_URL=https://<your-fastapi-host>
