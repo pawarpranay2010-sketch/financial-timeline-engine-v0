@@ -1,0 +1,26 @@
+# Platrixa — Render Blueprint for the FastAPI backend (api.main:app).
+#
+# Mirrors the existing deployment recipe exactly:
+#   - start command  = Procfile:  uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-5000}
+#   - python pin     = runtime.txt: python-3.10.12
+#   - dependencies   = requirements.txt
+#   - health check   = GET /api/v1/health (api/routes/health.py — deliberately
+#                      non-blocking: no DB writes, no external calls)
+#
+# No secrets are stored in this file. DATABASE_URL is referenced with
+# sync: false so its value is managed in the Render dashboard; all provider
+# API keys (FMP_API_KEY, GOOGLE_API_KEY, GROQ_API_KEY, ...) are optional and
+# degrade gracefully when absent — add them in the dashboard as needed.
+# See DEPLOYMENT.md for the full environment-variable table.
+services:
+  - type: web
+    name: platrixa-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12      # matches runtime.txt
+      - key: DATABASE_URL
+        sync: false         # value set in Render dashboard (managed Postgres)
