@@ -28,6 +28,9 @@ uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-5000}
 | `ALPHA_VANTAGE_API_KEY` | for live data | Alpha Vantage key |
 | `REDIS_URL` | optional | Redis cache (app degrades gracefully when absent) |
 | `GOOGLE_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, `RAPIDAPI_KEY`, `SAMBANOVA_API_KEY`, `GITHUB_TOKEN`, `CEREBRAS_API_KEY`, `COHERE_API_KEY` | optional | AI gateway keys (only those you configure) |
+| `PLATRIXA_MODEL_ENDPOINT_URL` | for model path | HTTPS base URL of the Modal inference service (no trailing slash). When set, the Kernel uses `RemoteHFModelProvider` (Modal GPU); when unset, the in-process `LocalHFModelProvider` is used (Render Free cannot load the model — see Phase 7R section) |
+| `PLATRIXA_MODEL_ENDPOINT_TOKEN` | optional | Bearer token if the Modal endpoint uses proxy auth |
+| `PLATRIXA_MODEL_TIMEOUT` | optional | HTTP timeout in seconds for Modal calls (default 60) |
 
 Set these in the hosting platform's dashboard (e.g. Render → Environment, or
 Railway → Variables). They must NOT live in the repository. `.env` / `.env.local`
@@ -71,6 +74,40 @@ ways to wire them:
 
 Never hardcode a backend URL in committed frontend code; the FastAPI host
 is deployment configuration owned by the environment.
+
+## Model inference on Modal (Phase 7R — required for the FYJC model path)
+
+Render Free (512 MB) cannot load Qwen2.5-1.5B-Instruct: every load attempt is
+killed by the platform after ~75–96 s. The model therefore runs as a Modal
+serverless GPU service and the FastAPI Kernel calls it over HTTPS.
+
+- Service code: `training/modal_inference.py` (self-contained; owns the pinned
+  base `Qwen/Qwen2.5-1.5B-Instruct` @ `989aa79…`, the pinned LoRA adapter
+  `Pranay-20/platrixa-fyjc-specialist-v0.1` @ `b5c0a37…`, exact Phase 6B/6C
+  runtime pins, a persistent HF cache volume, and fail-closed adapter loading).
+- Deploy (once, from a machine with Modal auth):
+
+  ```
+  pip install modal==1.5.5
+  modal token set          # or: modal token new
+  modal deploy training/modal_inference.py
+  ```
+
+- `modal deploy` prints the public URL (e.g.
+  `https://platrixa-model-inference.modal.run`). Verify before wiring:
+
+  ```
+  curl https://platrixa-model-inference.modal.run/health
+  # expect 200 {"status":"healthy", ..., "model_loaded":true, "adapter_loaded":true}
+  curl -X POST https://platrixa-model-inference.modal.run/interpret \
+       -H 'Content-Type: application/json' -d '{"text":"Purchased furniture for cash Rs.15,000"}'
+  ```
+
+- Then set on the FastAPI service (Render dashboard → Environment):
+  `PLATRIXA_MODEL_ENDPOINT_URL=https://platrixa-model-inference.modal.run`
+- The first cold start downloads ~3 GB into the `platrixa-hf-cache` Modal
+  volume; subsequent containers reuse it. The adapter is hard-pinned and
+  fail-closed — the service never serves base-only inference.
 
 ## Deploy on Render (recommended)
 

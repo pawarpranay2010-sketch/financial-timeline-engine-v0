@@ -19,18 +19,15 @@ The provider remains a candidate-output-only boundary:
 
 Downstream (Kernel / verification / grounding) decides what becomes trusted data.
 
-Concrete implementation today:
+Concrete implementations today:
 
-    LocalHFModelProvider
-        ↓
-    LocalModelRunner (backend.maths.fyjc_local_model_runner)
-        ↓
-    Qwen2.5-1.5B-Instruct + Platrixa LoRA adapter
+    LocalHFModelProvider   (in-process HF runner; default when no endpoint is set)
+    RemoteHFModelProvider  (Modal inference endpoint; selected when the env var
+                            PLATRIXA_MODEL_ENDPOINT_URL is set)
 
-Model revisions are pinned. "Latest" is never the production behavior.
-
-Importing this package does NOT download or load the model.
-Model loading happens only on the first real inference call.
+Selection lives in remote_hf.get_model_provider() — the single factory that
+both the Kernel and API wiring consult. Importing this package does NOT
+download or load any model and makes no network calls.
 """
 
 from __future__ import annotations
@@ -45,6 +42,7 @@ from backend.model_provider.base import (
     ProviderStatus,
 )
 from backend.model_provider.local_hf import LocalHFModelProvider
+from backend.model_provider.remote_hf import RemoteHFModelProvider, get_model_provider
 
 __all__ = [
     "ModelProvider",
@@ -55,4 +53,6 @@ __all__ = [
     "ProviderConfig",
     "ProviderStatus",
     "LocalHFModelProvider",
+    "RemoteHFModelProvider",
+    "get_model_provider",
 ]

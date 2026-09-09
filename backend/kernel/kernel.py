@@ -216,9 +216,13 @@ class Kernel:
     def model_provider(self) -> ModelProvider:
         if self._model_provider is not None:
             return self._model_provider
-        from backend.model_provider.local_hf import LocalHFModelProvider
+        # Single selection point (Phase 7R): PLATRIXA_MODEL_ENDPOINT_URL set
+        # → RemoteHFModelProvider (Modal endpoint); otherwise the existing
+        # LocalHFModelProvider. The factory keeps this decision in ONE place
+        # and leaves Kernel.process() unchanged.
+        from backend.model_provider.remote_hf import get_model_provider
 
-        self._model_provider = LocalHFModelProvider(config=self._provider_config)
+        self._model_provider = get_model_provider(config=self._provider_config)
         return self._model_provider
 
     def set_model_provider(self, provider: ModelProvider) -> None:
