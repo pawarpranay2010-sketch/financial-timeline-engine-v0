@@ -21,9 +21,12 @@ Downstream (Kernel / verification / grounding) decides what becomes trusted data
 
 Concrete implementations today:
 
-    LocalHFModelProvider   (in-process HF runner; default when no endpoint is set)
-    RemoteHFModelProvider  (Modal inference endpoint; selected when the env var
-                            PLATRIXA_MODEL_ENDPOINT_URL is set)
+    LocalHFModelProvider     (in-process HF runner; default when no endpoint is set)
+    RemoteHFModelProvider    (Modal HTTP endpoint; selected when the env var
+                              PLATRIXA_MODEL_ENDPOINT_URL is set)
+    HFGradioModelProvider    (HF ZeroGPU Gradio Space named API; selected when
+                              PLATRIXA_MODEL_ENDPOINT_URL is set AND
+                              PLATRIXA_MODEL_TRANSPORT=gradio)
 
 Selection lives in remote_hf.get_model_provider() — the single factory that
 both the Kernel and API wiring consult. Importing this package does NOT
@@ -43,6 +46,7 @@ from backend.model_provider.base import (
 )
 from backend.model_provider.local_hf import LocalHFModelProvider
 from backend.model_provider.remote_hf import RemoteHFModelProvider, get_model_provider
+from backend.model_provider.hf_gradio import HFGradioModelProvider
 
 __all__ = [
     "ModelProvider",
@@ -54,5 +58,6 @@ __all__ = [
     "ProviderStatus",
     "LocalHFModelProvider",
     "RemoteHFModelProvider",
+    "HFGradioModelProvider",
     "get_model_provider",
 ]

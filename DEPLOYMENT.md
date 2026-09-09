@@ -28,9 +28,11 @@ uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-5000}
 | `ALPHA_VANTAGE_API_KEY` | for live data | Alpha Vantage key |
 | `REDIS_URL` | optional | Redis cache (app degrades gracefully when absent) |
 | `GOOGLE_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, `RAPIDAPI_KEY`, `SAMBANOVA_API_KEY`, `GITHUB_TOKEN`, `CEREBRAS_API_KEY`, `COHERE_API_KEY` | optional | AI gateway keys (only those you configure) |
-| `PLATRIXA_MODEL_ENDPOINT_URL` | for model path | HTTPS base URL of the Modal inference service (no trailing slash). When set, the Kernel uses `RemoteHFModelProvider` (Modal GPU); when unset, the in-process `LocalHFModelProvider` is used (Render Free cannot load the model — see Phase 7R section) |
+| `PLATRIXA_MODEL_ENDPOINT_URL` | for model path | HTTPS base URL of the remote inference service (no trailing slash): the Modal service OR the HF Space (`https://pranay-20-platrixa.hf.space`). When set, the Kernel uses a remote provider; when unset, the in-process `LocalHFModelProvider` is used (Render Free cannot load the model — see Phase 7R section) |
+| `PLATRIXA_MODEL_TRANSPORT` | optional | Remote transport selection: `http` (default — Modal `POST <url>/interpret`) or `gradio` (HF ZeroGPU Space named API `/interpret_core` via `gradio_client`) |
 | `PLATRIXA_MODEL_ENDPOINT_TOKEN` | optional | Bearer token if the Modal endpoint uses proxy auth |
-| `PLATRIXA_MODEL_TIMEOUT` | optional | HTTP timeout in seconds for Modal calls (default 60) |
+| `PLATRIXA_MODEL_TIMEOUT` | optional | HTTP timeout in seconds for remote calls (default 60 http / 120 gradio — ZeroGPU cold start observed up to ~90 s) |
+| `HF_TOKEN` | optional | Hugging Face token for token-gated Spaces (read from the environment by the gradio transport; never printed or logged) |
 
 Set these in the hosting platform's dashboard (e.g. Render → Environment, or
 Railway → Variables). They must NOT live in the repository. `.env` / `.env.local`
@@ -108,6 +110,29 @@ serverless GPU service and the FastAPI Kernel calls it over HTTPS.
 - The first cold start downloads ~3 GB into the `platrixa-hf-cache` Modal
   volume; subsequent containers reuse it. The adapter is hard-pinned and
   fail-closed — the service never serves base-only inference.
+
+## HF ZeroGPU Space as the inference runtime (Phase 7S)
+
+The HF Space `Pranay-20/Platrixa` serves the EXACT Phase 6C artifact on
+Hugging Face ZeroGPU (no payment path). ZeroGPU requires the `@spaces.GPU`
+Gradio execution model, so the Space exposes the named Gradio API
+`/interpret_core` (gradio_client compatible) instead of a raw HTTP route.
+The backend consumes it through the Phase 7S transport adapter:
+
+- Code: `backend/model_provider/hf_gradio.py` (`HFGradioModelProvider` —
+  subclass of `RemoteHFModelProvider`; only the transport is swapped).
+- Selection: `PLATRIXA_MODEL_ENDPOINT_URL` set **and**
+  `PLATRIXA_MODEL_TRANSPORT=gradio`.
+- The adapter enforces the locked model identity on every response (base ID/
+  revision + adapter ID/revision + `adapter_loaded`); any mismatch fails
+  closed before the candidate reaches the Kernel.
+- Timeouts: default 120 s for the gradio transport (ZeroGPU cold start:
+  GPU queue + lazy 3 GB load has been observed up to ~90 s). Override with
+  `PLATRIXA_MODEL_TIMEOUT` if needed.
+- If the Space is private, set `HF_TOKEN` on the Render service (Space
+  secrets dashboard); it is read from the environment only, never logged.
+- Modal (`http` transport) remains the default remote path; both share the
+  same provider boundary, envelope contract, and error taxonomy.
 
 ## Deploy on Render (recommended)
 

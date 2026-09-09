@@ -56,14 +56,19 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Endpoint URL of the Modal inference service (no trailing slash).
+# Endpoint URL of the remote inference service (Modal HTTP service, or the
+# Hugging Face Gradio Space when PLATRIXA_MODEL_TRANSPORT=gradio).
 # Empty/absent → the local provider is selected (unchanged local behavior).
 ENDPOINT_URL_ENV = "PLATRIXA_MODEL_ENDPOINT_URL"
-# Optional bearer token for Modal proxy-auth-protected endpoints.
+# Optional bearer token for proxy-auth-protected endpoints (Modal / HF Space).
 TOKEN_ENV = "PLATRIXA_MODEL_ENDPOINT_TOKEN"
 # HTTP timeout for interpret calls (seconds).
 TIMEOUT_ENV = "PLATRIXA_MODEL_TIMEOUT"
 DEFAULT_TIMEOUT = 60.0
+# Transport selection: "http" (default — POST <url>/interpret, Modal service)
+# or "gradio" (gradio_client → HF ZeroGPU Space named API /interpret_core).
+TRANSPORT_ENV = "PLATRIXA_MODEL_TRANSPORT"
+VALID_TRANSPORTS = ("http", "gradio")
 
 # The 18-field interpretation contract (names only — semantics are enforced
 # downstream by schema validation, grounding, and the deterministic kernel).
@@ -111,6 +116,12 @@ def endpoint_timeout() -> float:
         return float(env) if env else DEFAULT_TIMEOUT
     except ValueError:
         return DEFAULT_TIMEOUT
+
+
+def transport_mode() -> str:
+    """Configured remote transport ('http' | 'gradio'; anything else → 'http')."""
+    mode = _env(TRANSPORT_ENV).lower()
+    return mode if mode in VALID_TRANSPORTS else "http"
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +186,52 @@ class RemoteHFModelProvider:
             # Fail closed: without an endpoint there is no model path.
             raise ModelUnavailableError(f"{ENDPOINT_URL_ENV} is not set")
 
+        body = self._call_remote(raw_input)
+
+        candidate = body.get("interpretation") if isinstance(body, dict) else None
+        model_info = body.get("model", {}) if isinstance(body, dict) else {}
+        if not isinstance(candidate, dict):
+            raise MalformedOutputError(
+                "remote response missing interpretation object"
+            )
+        if not isinstance(model_info, dict):
+            model_info = {}
+
+        _require_18_fields(candidate)
+
+        forbidden = contains_forbidden_accounting_fields(candidate)
+        if forbidden:
+            raise ForbiddenAccountingFieldError(
+                "forbidden accounting fields present: " + ", ".join(forbidden)
+            )
+
+        self._last_call_ok = True
+
+        return InterpretationResult(
+            raw_input=raw_input,
+            candidate=candidate,
+            model_id=self._config.model_id,
+            provider_revision=self._config.adapter_revision,
+            generated_profile={
+                "endpoint_url": self._url,
+                "remote_base_revision": model_info.get("base_revision", ""),
+                "remote_adapter_revision": model_info.get("adapter_revision", ""),
+                "remote_adapter_loaded": model_info.get("adapter_loaded", None),
+                "timeout_s": self._timeout,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Transport seam (Phase 7S)
+    # ------------------------------------------------------------------
+
+    def _call_remote(self, raw_input: str) -> Dict[str, Any]:
+        """
+        Perform the remote call and return the {"interpretation", "model"}
+        envelope body. The only moving part between the Modal HTTP service
+        and the HF Gradio Space transport — everything else in this class
+        (selection, status, validation, error mapping) is transport-agnostic.
+        """
         headers = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
@@ -210,39 +267,9 @@ class RemoteHFModelProvider:
             body = resp.json()
         except ValueError as exc:
             raise MalformedOutputError("remote response is not valid JSON") from exc
-
-        candidate = body.get("interpretation") if isinstance(body, dict) else None
-        model_info = body.get("model", {}) if isinstance(body, dict) else {}
-        if not isinstance(candidate, dict):
-            raise MalformedOutputError(
-                "remote response missing interpretation object"
-            )
-        if not isinstance(model_info, dict):
-            model_info = {}
-
-        _require_18_fields(candidate)
-
-        forbidden = contains_forbidden_accounting_fields(candidate)
-        if forbidden:
-            raise ForbiddenAccountingFieldError(
-                "forbidden accounting fields present: " + ", ".join(forbidden)
-            )
-
-        self._last_call_ok = True
-
-        return InterpretationResult(
-            raw_input=raw_input,
-            candidate=candidate,
-            model_id=self._config.model_id,
-            provider_revision=self._config.adapter_revision,
-            generated_profile={
-                "endpoint_url": self._url,
-                "remote_base_revision": model_info.get("base_revision", ""),
-                "remote_adapter_revision": model_info.get("adapter_revision", ""),
-                "remote_adapter_loaded": model_info.get("adapter_loaded", None),
-                "timeout_s": self._timeout,
-            },
-        )
+        if not isinstance(body, dict):
+            raise MalformedOutputError("remote response is not a JSON object")
+        return body
 
     # ------------------------------------------------------------------
     # Internal
@@ -301,9 +328,10 @@ def get_model_provider(
     """
     Single selection point for the ModelProvider implementation.
 
-    Selection (Phase 7R Part 6):
-        PLATRIXA_MODEL_ENDPOINT_URL set → RemoteHFModelProvider
-        otherwise                       → LocalHFModelProvider (unchanged)
+    Selection (Phase 7R Part 6, transport seam added Phase 7S):
+        PLATRIXA_MODEL_ENDPOINT_URL unset            → LocalHFModelProvider
+        set + PLATRIXA_MODEL_TRANSPORT=gradio        → HFGradioModelProvider
+        set + anything else (default "http")         → RemoteHFModelProvider
 
     Explicit `provider` argument wins (tests / advanced wiring).
     """
@@ -311,6 +339,10 @@ def get_model_provider(
         return provider
 
     if endpoint_url():
+        if transport_mode() == "gradio":
+            from backend.model_provider.hf_gradio import HFGradioModelProvider
+
+            return HFGradioModelProvider(config=config)
         return RemoteHFModelProvider(config=config)
 
     from backend.model_provider.local_hf import LocalHFModelProvider
@@ -323,4 +355,5 @@ __all__ = [
     "get_model_provider",
     "REQUIRED_FIELDS_18",
     "ENDPOINT_URL_ENV",
+    "TRANSPORT_ENV",
 ]
