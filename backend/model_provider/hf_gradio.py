@@ -75,6 +75,39 @@ def hf_token() -> str:
     return os.environ.get(HF_TOKEN_ENV, "").strip()
 
 
+def _build_gradio_client(url: str, token: Optional[str], timeout: float):
+    """
+    Construct a gradio_client.Client, tolerant of 1.x/2.x signature drift.
+
+    gradio_client 1.x: Client(src, hf_token=...) — no ``token=`` kwarg.
+    gradio_client 2.x: Client(src, token=...)    — ``hf_token`` removed;
+                       ``httpx_kwargs`` available for timeout control.
+
+    Attempts are ordered newest-first; a TypeError (unknown kwarg) moves to
+    the next signature. Any other construction failure propagates (and the
+    caller maps it to ModelUnavailableError) — fail closed, never silent.
+    """
+    from gradio_client import Client
+
+    tok = token or None
+    attempts = (
+        {"token": tok, "httpx_kwargs": {"timeout": timeout}},  # 2.x + timeout
+        {"token": tok},  # 2.x
+        {"hf_token": tok, "httpx_kwargs": {"timeout": timeout}},  # 1.x + timeout
+        {"hf_token": tok},  # 1.x
+    )
+    last_error: Optional[TypeError] = None
+    for kwargs in attempts:
+        try:
+            return Client(url, verbose=False, **kwargs)
+        except TypeError as exc:
+            last_error = exc
+            continue
+    raise TypeError(
+        f"no compatible gradio_client.Client signature found: {last_error}"
+    )
+
+
 def _identity_problems(model_info: Dict[str, Any]) -> list:
     """Return a list of human-readable identity mismatches (empty = OK)."""
     problems: list = []
@@ -167,14 +200,8 @@ class HFGradioModelProvider(RemoteHFModelProvider):
         interpretation content can flow downstream: a response that does not
         carry the exact locked artifact identity fails closed.
         """
-        from gradio_client import Client
-
         try:
-            client = Client(
-                self._url,
-                hf_token=self._token or None,
-                verbose=False,
-            )
+            client = _build_gradio_client(self._url, self._token, self._timeout)
         except Exception as exc:  # noqa: BLE001 — fail closed on any connect issue
             raise ModelUnavailableError(
                 f"gradio transport: cannot reach Space: {type(exc).__name__}: {exc}"

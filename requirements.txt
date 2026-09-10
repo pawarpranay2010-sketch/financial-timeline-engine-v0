@@ -6,6 +6,7 @@ uvicorn[standard]>=0.30
 streamlit>=1.32
 
 requests>=2.31
+gradio_client>=1.0
 pandas>=2.0
 python-docx>=1.1
 pypdf>=4.0
