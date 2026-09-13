@@ -205,6 +205,20 @@ class RemoteHFModelProvider:
                 "forbidden accounting fields present: " + ", ".join(forbidden)
             )
 
+        # Status-authority contract (Phase 9). The model is a
+        # language-understanding component and never claims VERIFIED — only the
+        # deterministic accounting kernel may produce VERIFIED. This is the
+        # documented contract (see backend/maths/fyjc_llm_specialist.py:
+        # "suggested_status MUST ALWAYS be REVIEW_REQUIRED. Never set
+        # VERIFIED.") and mirrors the local-path enforcement in
+        # backend/maths/fyjc_local_model_runner.py. Enforced here at the
+        # provider boundary so BOTH remote transports (Modal HTTP and the HF
+        # Gradio Space) normalize the field before schema validation,
+        # grounding, and the kernel see it. The grounding gate's Rule 0
+        # fail-closed check remains the backstop, unchanged.
+        if str(candidate.get("suggested_status", "")).strip().upper() == "VERIFIED":
+            candidate["suggested_status"] = "REVIEW_REQUIRED"
+
         self._last_call_ok = True
 
         return InterpretationResult(
