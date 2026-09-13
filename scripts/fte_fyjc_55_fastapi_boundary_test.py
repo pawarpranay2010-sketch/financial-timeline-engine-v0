@@ -33,6 +33,11 @@ Required checks (Phase 7F spec):
   23. Existing 7C tests still pass.
   24. Existing 7D tests still pass.
   25. Existing 7E persistence boundary tests still pass.
+  26. Health endpoint is lightweight: serving /health imports no model
+      provider, no torch/transformers/peft module, and never touches the
+      Kernel or ModelProvider path.
+  27. Kernel contains no direct persistence call — persistence is
+      invoked exclusively from the API boundary via the Phase 7E contract.
 
 No GPU or live model inference is required: the Kernel is injected via the
 route module's test hooks (set_kernel / set_persistence).
@@ -454,6 +459,97 @@ def main() -> int:
     ok &= _check("empty raw_input rejected at request-shape level (422)", resp.status_code == 422)
     resp = client.post("/api/v1/kernel/process", json={})
     ok &= _check("missing raw_input rejected at request-shape level (422)", resp.status_code == 422)
+
+    # ------------------------------------------------------------------
+    # 26–27. Health lightweightness + persistence path uniqueness
+    # ------------------------------------------------------------------
+    _section("Health lightweightness + persistence path uniqueness (checks 26, 27)")
+
+    # Health must be servable with NO kernel and NO persistence wiring,
+    # and must not import any model/provider/torch module while serving.
+    kr.reset_kernel()
+    kr.reset_persistence()
+    heavy_modules = [
+        "backend.model_provider.local_hf",
+        "backend.model_provider.remote_hf",
+        "backend.model_provider.hf_gradio",
+        "transformers",
+        "torch",
+        "peft",
+    ]
+    modules_before_health = set(sys.modules)
+    resp = client.get("/api/v1/health")
+    ok &= _check(
+        "health responds 200 with no Kernel/provider wiring at all",
+        resp.status_code == 200 and resp.json().get("status") == "ok",
+    )
+    newly_loaded = [
+        m for m in heavy_modules
+        if m in sys.modules and m not in modules_before_health
+    ]
+    ok &= _check(
+        "serving health imports no model/provider/torch module (check 26)",
+        not newly_loaded,
+    )
+
+    # Subprocess proof (the authoritative form of check 26): in a clean
+    # interpreter that imports ONLY the API and serves /health, none of the
+    # model/provider/torch modules may appear in sys.modules. This is
+    # immune to test-process contamination from elsewhere importing Kernel.
+    import json as _json
+    import subprocess
+
+    _probe = (
+        "import json,sys;sys.path.insert(0, r'%s');"
+        "from fastapi.testclient import TestClient;"
+        "from api.main import app;"
+        "r=TestClient(app).get('/api/v1/health');"
+        "heavy=['backend.model_provider.local_hf','backend.model_provider.remote_hf',"
+        "'backend.model_provider.hf_gradio','transformers','torch','peft'];"
+        "hits=[m for m in heavy if m in sys.modules];"
+        "print(json.dumps({'status_code':r.status_code,'body_status':r.json().get('status'),"
+        "'heavy_loaded':hits}))" % ROOT
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", _probe],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=120,
+    )
+    probe_ok = False
+    probe_detail = proc.stdout.strip() or proc.stderr.strip()[:200]
+    try:
+        pdata = _json.loads(proc.stdout.strip().splitlines()[-1])
+        probe_ok = (
+            proc.returncode == 0
+            and pdata.get("status_code") == 200
+            and pdata.get("body_status") == "ok"
+            and not pdata.get("heavy_loaded")
+        )
+    except Exception:
+        probe_ok = False
+    ok &= _check(
+        "clean-interpreter health serving loads zero model/provider/torch modules (check 26)",
+        probe_ok,
+    )
+    if not probe_ok:
+        print(f"      probe output: {probe_detail}")
+    body_text_health = resp.text
+    ok &= _check(
+        "health payload exposes no model internals (check 26)",
+        "adapter" not in body_text_health.lower()
+        and "lora" not in body_text_health.lower()
+        and "hf.space" not in body_text_health.lower(),
+    )
+
+    # Persistence must have exactly one invocation site: the API boundary.
+    # The Kernel itself must never persist (Phase 7C/7E responsibility split).
+    kernel_src = (ROOT / "backend" / "kernel" / "kernel.py").read_text()
+    ok &= _check(
+        "Kernel performs no direct persistence call (check 27)",
+        ".persist(" not in kernel_src,
+    )
 
     # ------------------------------------------------------------------
     # 21–25. Regression sweep
