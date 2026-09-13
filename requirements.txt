@@ -31,13 +31,4 @@ tenacity>=8.2
 
 numpy>=1.26
 
-tiktoken>=0.7
-
-faiss-cpu>=1.8
-
-sentence-transformers>=3.0
-
-langchain>=0.3
-langgraph>=0.2
-
 pytest>=8.0
