@@ -124,3 +124,53 @@ class KernelProcessResponse(BaseModel):
     # Phase 7E persistence outcome — explicit, never silently discarded:
     persisted: bool = False
     persistence_error: Optional[Dict[str, str]] = None
+
+
+# ---------------------------------------------------------------------------
+# Developer API (Phase 13 — versioned hosted boundary over the public
+# developer interface; transport only, no status authority)
+# ---------------------------------------------------------------------------
+
+
+class DeveloperProcessResponse(BaseModel):
+    """
+    Stable versioned projection of a public-interface result.
+
+    The state taxonomy is the Kernel's own, carried verbatim:
+        VERIFIED, REVIEW_REQUIRED, BLOCKED, VALIDATION_FAILED,
+        GROUNDING_FAILED, FORBIDDEN_OUTPUT, MODEL_UNAVAILABLE,
+        UNSUPPORTED_TRANSACTION
+
+    The HTTP layer can never create or upgrade states — the ``status``
+    field is a verbatim copy of the Kernel's terminal state.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    status: str
+    status_label: str = ""
+    success: bool = False
+    next_action: Optional[str] = None
+    issues: List[str] = Field(default_factory=list)
+    grounding_issues: List[str] = Field(default_factory=list)
+    rule_evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    interpretation: Optional[Dict[str, Any]] = None
+    accounting: Optional[Dict[str, Any]] = None
+
+
+class DeveloperHealthResponse(BaseModel):
+    """Liveness — the API process is alive. Touches nothing."""
+
+    status: str
+    service: str
+    api_version: str
+
+
+class DeveloperReadyResponse(BaseModel):
+    """Readiness — dependencies available enough to process a request."""
+
+    status: str
+    api_version: str
+    provider: Dict[str, Any]
+    rule_pack: Optional[Dict[str, Any]] = None
+    reason: Optional[str] = None

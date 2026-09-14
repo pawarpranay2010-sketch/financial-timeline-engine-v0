@@ -62,14 +62,40 @@ def create_app() -> FastAPI:
             content={"detail": f"Unhandled error: {type(exc).__name__}"},
         )
 
+    # Phase 13: app-level body-size cap for the versioned developer API.
+    # Enforced BEFORE request-body parsing so oversized payloads are
+    # rejected with 413 instead of being read and schema-validated.
+    _MAX_DEV_BODY_BYTES = 64 * 1024
+
+    @app.middleware("http")
+    async def _developer_body_size_guard(request, call_next):
+        if request.url.path.startswith("/v1/"):
+            content_length = request.headers.get("content-length", "")
+            if content_length.isdigit() and int(content_length) > _MAX_DEV_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "api_version": "v1",
+                        "error": {
+                            "code": "REQUEST_TOO_LARGE",
+                            "message": "request body too large",
+                        },
+                    },
+                )
+        return await call_next(request)
+
     # API routes first, so /api/v1/* is never shadowed by the static mount.
-    from api.routes import health, intelligence, kernel, market
+    from api.routes import developer, health, intelligence, kernel, market
 
     app.include_router(health.router, prefix="/api/v1")
     app.include_router(market.router, prefix="/api/v1")
     app.include_router(intelligence.router, prefix="/api/v1")
     # Phase 7F: authoritative Kernel boundary (lazy heavy imports inside).
     app.include_router(kernel.router, prefix="/api/v1")
+    # Phase 13: versioned developer API — transport boundary over the
+    # public developer interface (platrixa), mounted at top-level /v1 so
+    # the public contract is versioned independently of /api/v1.
+    app.include_router(developer.router)
 
     # Standalone frontend: served at / (landing + app UI)
     if _FRONTEND_DIR.is_dir():
