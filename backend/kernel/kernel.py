@@ -127,6 +127,7 @@ class KernelResult:
         issues: Optional[List[str]] = None,
         next_action: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        rule_evidence: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         self.request_id = request_id
         self.raw_input = raw_input
@@ -143,6 +144,9 @@ class KernelResult:
         self.issues = issues or []
         self.next_action = next_action
         self.metadata = metadata or {}
+        # Phase 10: structured evidence from the developer rule boundary
+        # (empty when no rule pack is configured).
+        self.rule_evidence = rule_evidence or []
 
     @property
     def success(self) -> bool:
@@ -166,6 +170,7 @@ class KernelResult:
             "issues": self.issues,
             "next_action": self.next_action,
             "metadata": self.metadata,
+            "rule_evidence": self.rule_evidence,
         }
 
 
@@ -193,6 +198,8 @@ class Kernel:
         *,
         model_provider: Optional[ModelProvider] = None,
         provider_config: Optional[ProviderConfig] = None,
+        rule_pack: Optional[str] = None,
+        rule_hooks: Any = None,
     ) -> None:
         if model_provider is not None:
             self._model_provider = model_provider
@@ -208,6 +215,19 @@ class Kernel:
         self._accounting = None
         self._schema_validator = None
         self._grounding_gate = None
+
+        # Phase 10: optional developer rule boundary (default OFF — behavior
+        # is byte-identical when neither a YAML rule pack nor hooks are
+        # provided). Rules may only downgrade a deterministic success state;
+        # see backend/rules/engine.py for the authority invariant.
+        self._rule_pack_path = rule_pack
+        self._rule_hooks = tuple(rule_hooks) if rule_hooks else ()
+        self._rule_engine: Optional[Any] = None
+        # Fail closed at construction: a malformed rule pack must prevent the
+        # Kernel from being built at all rather than surfacing on the first
+        # request
+        if self._rule_pack_path or self._rule_hooks:
+            self._get_rule_engine()
 
     # ------------------------------------------------------------------
     # ModelProvider access
@@ -412,11 +432,34 @@ class Kernel:
                 next_action="Rephrase as a supported transaction.",
             )
 
+        # 6. Developer rule boundary (Phase 10, optional, default off).
+        #
+        # Runs ONLY on accounting-produced success states, so rules can
+        # never repair a failure or manufacture a success. The engine's
+        # policy is downgrade-only: a blocking rule outcome downgrades
+        # VERIFIED to REVIEW_REQUIRED/BLOCKED per its decision hint; no
+        # decision can upgrade any state or produce VERIFIED.
+        rule_evidence: List[Dict[str, Any]] = []
+        flow_label = self._label_for(flow_status)
+        engine = self._get_rule_engine()
+        if engine is not None:
+            from backend.rules.contract import RuleContext
+
+            context = RuleContext(
+                request_id=request_id,
+                raw_input=raw_input,
+                interpretation=candidate,
+            )
+            flow_status, flow_label, rule_results = engine.evaluate(
+                context, status=flow_status, status_label=self._label_for(flow_status)
+            )
+            rule_evidence = [r.to_dict() for r in rule_results]
+
         return KernelResult(
             request_id=request_id,
             raw_input=raw_input,
             status=flow_status,
-            status_label=self._label_for(flow_status),
+            status_label=flow_label,
             interpretation=interpretation,
             verification_status="GROUNDED",
             accounting_result=accounting_result,
@@ -425,6 +468,7 @@ class Kernel:
                 "model_id": interpretation.model_id,
                 "provider_revision": interpretation.provider_revision,
             },
+            rule_evidence=rule_evidence,
         )
 
     # ------------------------------------------------------------------
@@ -517,6 +561,19 @@ class Kernel:
 
             self._grounding_gate = ExpandedGroundingGate()
         return self._grounding_gate
+
+    def _get_rule_engine(self) -> Optional[Any]:
+        """Lazy rule engine (Phase 10). None when no rule pack/hooks configured."""
+        if self._rule_engine is None and (self._rule_pack_path or self._rule_hooks):
+            from backend.rules.engine import RuleEngine
+
+            rules = ()
+            if self._rule_pack_path:
+                from backend.rules.loader import load_yaml_rule_pack
+
+                rules = load_yaml_rule_pack(self._rule_pack_path)  # fails closed on malformed packs
+            self._rule_engine = RuleEngine(rules=rules, hooks=self._rule_hooks)
+        return self._rule_engine
 
 
 # ---------------------------------------------------------------------------

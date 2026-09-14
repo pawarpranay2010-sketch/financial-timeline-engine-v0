@@ -1,0 +1,33 @@
+# Platrixa — Example declarative rule pack (Phase 10C)
+# =====================================================
+#
+# Demonstrates the three minimal YAML primitives. Load with:
+#
+#     Kernel(rule_pack="examples/rules/platrixa_rules.yaml")
+#
+# Rules may only CONSTRAIN outcomes: a failed rule downgrades a deterministic
+# VERIFIED to REVIEW_REQUIRED or BLOCKED. No rule can produce VERIFIED.
+
+rules:
+  # A field must be present and non-empty in the model's interpretation.
+  - id: invoice_reference_required
+    type: required
+    field: references
+    decision: REVIEW_REQUIRED
+    message: "This policy requires an invoice/reference on every transaction."
+
+  # A field's value must be one of an allowed set (absent field passes).
+  - id: payment_method_allowed
+    type: allowed_values
+    field: payment_method_enum
+    values: [CASH, CREDIT, BANK, CHEQUE, UPI, UNKNOWN]
+    decision: REVIEW_REQUIRED
+
+  # A numeric comparison on a (dotted-path) field; absent field passes.
+  - id: high_value_review
+    type: threshold
+    field: amounts.0.value
+    operator: ">"
+    value: 100000
+    decision: REVIEW_REQUIRED
+    message: "Transactions above Rs.1,00,000 require manual review under this policy."
