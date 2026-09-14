@@ -96,6 +96,10 @@ def create_app() -> FastAPI:
     # public developer interface (platrixa), mounted at top-level /v1 so
     # the public contract is versioned independently of /api/v1.
     app.include_router(developer.router)
+    # Phase 15: deterministic malformed-request normalization for /v1 only
+    # (400 instead of the framework-default 422 for parsing/validation
+    # failures). Browser-facing /api/v1 keeps its documented behavior.
+    developer.register_developer_error_handlers(app)
 
     # Standalone frontend: served at / (landing + app UI)
     if _FRONTEND_DIR.is_dir():

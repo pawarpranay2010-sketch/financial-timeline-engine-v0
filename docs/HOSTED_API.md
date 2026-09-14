@@ -40,6 +40,16 @@ or `python3 -m uvicorn api.main:app --port 8000`. No provider keys,
 database, or model download are needed to boot; the model loads lazily on
 first processing request (or per your provider configuration).
 
+## Authentication (optional, server-side)
+
+The endpoint is open by default (zero-config local development). To gate
+it, the server operator sets `PLATRIXA_DEV_API_KEY`; requests must then
+send the exact value in the `X-Platrixa-API-Key` header. Missing,
+empty, or invalid keys are rejected with **401** *before any processing*
+(the key is compared in constant time and never logged, echoed, or
+serialized). Developers cannot supply rule packs or Python hooks — the
+request schema carries only `raw_input`.
+
 ## Request
 
 `POST /v1/process` with a JSON body using the existing canonical input
@@ -116,11 +126,18 @@ Machine-readable envelope; no stack traces, filesystem paths, or secrets:
 
 | Condition | Code | HTTP |
 |---|---|---|
+| Malformed request (invalid JSON, empty body, wrong content type, missing/wrong-typed fields) | `REQUEST_MALFORMED` | 400 |
 | Empty/whitespace input, oversized text | `INPUT_INVALID` | 422 |
-| Malformed request body / wrong types / invalid JSON | (FastAPI validation detail) | 422 |
 | Body over 64 KiB | `REQUEST_TOO_LARGE` | 413 |
+| Missing/invalid API key (when configured) | `UNAUTHORIZED` | 401 |
 | Provider runtime failure / unavailable | `PROVIDER_UNAVAILABLE` | 503 |
 | Unexpected server error | `detail` (exception type name only) | 500 |
+
+Malformed HTTP never reaches the runtime (Kernel invocation = 0) and the
+400 body carries only field paths and error types — never raw input
+values, stack traces, or filesystem paths. Domain-level rejections
+(valid JSON rejected by the runtime's input contract) keep their
+documented 422 `INPUT_INVALID` shape.
 
 ## Health vs readiness
 
@@ -167,6 +184,14 @@ processing operation. The API performs no deduplication and no retries;
 each accepted request runs the Kernel once and returns its own result.
 Distributed exactly-once semantics are future work.
 
+## Known limits (launch posture)
+
+- Authentication is a single shared server-side key (`PLATRIXA_DEV_API_KEY`); there is no per-developer key issuance, usage metering, or billing yet.
+- No application-level rate limiting; platform-level controls only.
+- `X-Request-Id` is a best-effort correlation id, not an idempotency key.
+- The API is a transport boundary: it cannot be used to alter rule
+  packs, hooks, provider configuration, or the runtime's authority model.
+
 ## Hosting limitations (honest)
 
 - The runtime depends on an external model provider. On the HF Space path,
@@ -184,19 +209,28 @@ curl:
 ```bash
 curl -s -X POST http://127.0.0.1:8000/v1/process \
   -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_DEV_API_KEY" \
   -H "X-Request-Id: my-req-1" \
   -d '{"raw_input": "Purchased furniture for cash ₹15,000"}'
 ```
 
+(Omit the API-key header when the server has none configured.)
+
 Python (HTTP only — no internal backend objects):
 
 ```python
+import os
+
 import requests
+
+headers = {"X-Request-Id": "my-req-1"}
+if os.getenv("PLATRIXA_DEV_API_KEY"):
+    headers["X-Platrixa-API-Key"] = os.environ["PLATRIXA_DEV_API_KEY"]
 
 resp = requests.post(
     "http://127.0.0.1:8000/v1/process",
     json={"raw_input": "Purchased furniture for cash ₹15,000"},
-    headers={"X-Request-Id": "my-req-1"},
+    headers=headers,
     timeout=120,
 )
 resp.raise_for_status()

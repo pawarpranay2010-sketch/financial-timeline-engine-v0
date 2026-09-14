@@ -1,5 +1,76 @@
 # Platrixa — Financial & Accounting Intelligence Platform
 
+**Stop prompts guessing math.** Platrixa puts a deterministic financial
+runtime behind the model: an LLM interprets the student's transaction,
+then grounding and deterministic accounting rules — not the model — decide
+the answer, with evidence for every decision. First proving ground:
+FYJC / Class 11 commerce bookkeeping.
+
+## Hosted developer API (v1)
+
+The hosted API is a **transport boundary** over the deterministic runtime:
+malformed requests fail closed before any model or accounting code runs,
+the model only ever *suggests*, and the runtime alone decides the final
+state (`VERIFIED` / `REVIEW_REQUIRED` / `BLOCKED` / …).
+
+Quickstart (run the server locally with
+`uvicorn api.main:app --host 127.0.0.1 --port 8000`):
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/process \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_DEV_API_KEY" \
+  -d '{"raw_input": "Purchased furniture for cash ₹15,000"}'
+```
+
+Actual response shape (fields abridged):
+
+```json
+{
+  "api_version": "v1",
+  "status": "VERIFIED",
+  "success": true,
+  "interpretation": {
+    "transaction_type_enum": "PURCHASE",
+    "amounts": [{"value": "15000", "source": "explicit"}],
+    "suggested_status": "REVIEW_REQUIRED"
+  },
+  "accounting": {
+    "debit_lines":  [{"account": "Furniture", "amount": 15000}],
+    "credit_lines": [{"account": "Cash", "amount": 15000}]
+  }
+}
+```
+
+The model's suggestion (`REVIEW_REQUIRED`) and the final state
+(`VERIFIED`) are deliberately different objects: interpretation is the
+model's, the state is the runtime's.
+
+Fail-closed demonstration — a malformed request never reaches the
+runtime:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/v1/process \
+  -H "Content-Type: application/json" \
+  -d '{broken json'
+```
+
+```json
+{
+  "api_version": "v1",
+  "error": {"code": "REQUEST_MALFORMED",
+             "message": "request body could not be parsed as a valid process request",
+             "fields": [{"field": "", "reason": "json_invalid"}]}
+}
+```
+
+Authentication: open by default for local development; when the server
+sets `PLATRIXA_DEV_API_KEY`, requests must send that exact value in the
+`X-Platrixa-API-Key` header (401 otherwise, before any processing).
+There is no per-developer key issuance, metering, or billing yet — see
+docs/HOSTED_API.md for the full contract, states, error table, provider
+configuration, rule-pack configuration, and current limitations.
+
 ## Project Identity
 
 **Platrixa** is the financial/accounting reasoning platform being developed in this repository.

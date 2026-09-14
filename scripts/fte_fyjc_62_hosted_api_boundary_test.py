@@ -343,16 +343,19 @@ def section_h(client: TestClient) -> None:
 
 def section_i(client: TestClient) -> None:
     print("\nI — malformed requests rejected")
+    # Phase 15 contract: network-level structural/parsing failures are
+    # normalized to 400 (REQUEST_MALFORMED envelope); this is a deliberate,
+    # documented change from the earlier framework-default 422.
     r = client.post("/v1/process", json={"wrong": 1})
-    check("I1 missing raw_input → 422", r.status_code == 422, str(r.status_code))
+    check("I1 missing raw_input → 400 (Phase 15 normalization)", r.status_code == 400 and r.json()["error"]["code"] == "REQUEST_MALFORMED", str(r.status_code))
     r = client.post("/v1/process", json={"raw_input": 12345})
-    check("I2 non-string raw_input → 422", r.status_code == 422, str(r.status_code))
+    check("I2 non-string raw_input → 400 (Phase 15 normalization)", r.status_code == 400, str(r.status_code))
     r = client.post(
         "/v1/process", json={"raw_input": "x"}, headers={"content-length": str(64 * 1024 + 1)}
     )
     check("I3 oversized body → 413 before processing", r.status_code == 413, str(r.status_code))
     r = client.post("/v1/process", content=b"{not json", headers={"content-type": "application/json"})
-    check("I4 invalid JSON → 422", r.status_code == 422, str(r.status_code))
+    check("I4 invalid JSON → 400 (Phase 15 normalization)", r.status_code == 400 and r.json()["error"]["code"] == "REQUEST_MALFORMED", str(r.status_code))
 
 
 def section_j(client: TestClient) -> None:
@@ -626,7 +629,7 @@ def section_s(client: TestClient) -> None:
         # schema and is rejected by the public interface's InputError
         # contract (422 INPUT_INVALID envelope).
         r = client.post("/v1/process", json={"raw_input": ""})
-        check("S6 empty input → 422 (schema)", r.status_code == 422, str(r.status_code))
+        check("S6 empty input → 400 (Phase 15 schema normalization)", r.status_code == 400, str(r.status_code))
         r = client.post("/v1/process", json={"raw_input": "   "})
         check("S7 whitespace input → 422 INPUT_INVALID (facade contract)", r.status_code == 422 and r.json()["error"]["code"] == "INPUT_INVALID", str(r.status_code))
     finally:
