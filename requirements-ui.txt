@@ -1,0 +1,12 @@
+# Platrixa — UI manifest: the student-facing Streamlit frontend.
+#
+# Install together with requirements-core.txt for the full experience:
+#     pip install -r requirements-core.txt -r requirements-ui.txt
+#
+# These are the heavy data packages that need prebuilt wheels (or a C
+# toolchain on-device) — kept OUT of the core manifest so the hosted API
+# and deterministic runtime install cleanly on Termux / free containers.
+# Neither package is imported anywhere on the API+kernel path (verified).
+
+streamlit>=1.32
+pandas>=2.0

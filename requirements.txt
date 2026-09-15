@@ -1,4 +1,11 @@
 # Stage 2 web backend
+#
+# Split manifests (preferred):
+#   requirements-core.txt — hosted API + deterministic runtime (mobile-safe,
+#                           ~49 MiB, no pandas/numpy/streamlit/redis)
+#   requirements-ui.txt   — Streamlit frontend + pandas (needs wheel support)
+# This full manifest remains for desktop/Railway installs.
+
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
