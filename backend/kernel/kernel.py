@@ -68,6 +68,24 @@ from backend.model_provider.base import (
     extract_json_candidate,
 )
 
+# Phase 17: typed semantic IR boundary. The model's output is a CANDIDATE
+# semantic IR; only deterministic grounding can convert it into a
+# GROUNDED semantic IR, and deterministic accounting consumes ONLY the
+# grounded representation. The Kernel wires these together — it performs
+# no grounding or accounting of its own.
+from backend.semantics import (
+    CandidateSemanticIR,
+    GroundedSemanticIR,
+    SCHEMA_VERSION,
+    SemanticIRError,
+)
+from backend.semantics.evidence import (
+    ExecutionEvidence,
+    prompt_identity,
+    rule_pack_identity,
+    sha256_of_text,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -128,6 +146,9 @@ class KernelResult:
         next_action: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         rule_evidence: Optional[List[Dict[str, Any]]] = None,
+        evidence: Optional["ExecutionEvidence"] = None,
+        candidate_ir: Optional["CandidateSemanticIR"] = None,
+        grounded_ir: Optional["GroundedSemanticIR"] = None,
     ) -> None:
         self.request_id = request_id
         self.raw_input = raw_input
@@ -147,6 +168,12 @@ class KernelResult:
         # Phase 10: structured evidence from the developer rule boundary
         # (empty when no rule pack is configured).
         self.rule_evidence = rule_evidence or []
+        # Phase 17: versioned execution evidence chain binding this result to
+        # the actual configuration that produced it, plus the typed IRs the
+        # runtime actually passed between boundaries.
+        self.evidence = evidence
+        self.candidate_ir = candidate_ir
+        self.grounded_ir = grounded_ir
 
     @property
     def success(self) -> bool:
@@ -171,6 +198,7 @@ class KernelResult:
             "next_action": self.next_action,
             "metadata": self.metadata,
             "rule_evidence": self.rule_evidence,
+            "evidence": self.evidence.to_dict() if self.evidence is not None else None,
         }
 
 
@@ -374,6 +402,27 @@ class Kernel:
 
         candidate = interpretation.candidate
 
+        # 2.5 Phase 17: bind the model output as a typed CANDIDATE semantic
+        # IR. This is the model's PROPOSED meaning — it has no authority and
+        # cannot reach accounting. Construction fails closed on any
+        # accounting-truth fields smuggled into the candidate.
+        try:
+            candidate_ir = CandidateSemanticIR(
+                raw_input=raw_input,
+                fields=candidate,
+                model_id=interpretation.model_id,
+                model_revision=interpretation.provider_revision,
+            )
+        except SemanticIRError as e:
+            return self._failed(
+                status=FORBIDDEN_OUTPUT,
+                request_id=request_id,
+                raw_input=raw_input,
+                interpretation=interpretation,
+                issues=["candidate IR rejected: " + str(e)],
+                next_action="Model output was rejected.",
+            )
+
         # 3. Schema validation against existing contract.
         validator = self._get_schema_validator()
         report = validator.validate(candidate, allow_expanded=True)
@@ -385,6 +434,7 @@ class Kernel:
                 interpretation=interpretation,
                 issues=["schema validation: " + "; ".join(e.issue for e in report.errors)],
                 next_action="Review the model output and retry.",
+                candidate_ir=candidate_ir,
             )
 
         # 4. Grounding/verification extension point.
@@ -399,6 +449,24 @@ class Kernel:
                 grounding_issues=ground_result.issues,
                 issues=["grounding: " + "; ".join(ground_result.issues)],
                 next_action="Review the input and retry.",
+                candidate_ir=candidate_ir,
+            )
+
+        # 4.5 Phase 17: the passing grounding result is the ONLY authority
+        # that converts the candidate into a GROUNDED semantic IR. From here
+        # accounting sees exclusively the grounded representation.
+        try:
+            grounded_ir = GroundedSemanticIR.from_candidate(candidate_ir, ground_result)
+        except SemanticIRError as e:
+            return self._failed(
+                status=GROUNDING_FAILED,
+                request_id=request_id,
+                raw_input=raw_input,
+                interpretation=interpretation,
+                verification_status="GROUNDING_FAILED",
+                grounding_issues=[str(e)],
+                issues=["grounded IR construction refused: " + str(e)],
+                next_action="Review the input and retry.",
             )
 
         # 5. Deterministic accounting processing.
@@ -408,7 +476,11 @@ class Kernel:
         # BLOCKED, ...) instead of upgrading it: a REVIEW_REQUIRED decision
         # from the deterministic implementation must never be relabelled as
         # a trusted VERIFIED result at the Kernel boundary.
-        accounting_result = self.process_accounting(candidate, raw_input)
+        #
+        # Phase 17: accounting consumes ONLY the grounded representation —
+        # the grounded IR's admission payload (source text + grounded fields),
+        # never the raw candidate. The candidate cannot reach this point.
+        accounting_result = self.process_accounting(grounded_ir)
         if accounting_result is None:
             return self._failed(
                 status=UNSUPPORTED_TRANSACTION,
@@ -417,6 +489,8 @@ class Kernel:
                 interpretation=interpretation,
                 issues=["unsupported transaction"],
                 next_action="Rephrase as a supported transaction.",
+                candidate_ir=candidate_ir,
+                grounded_ir=grounded_ir,
             )
 
         flow_status = accounting_result.get("status")
@@ -455,6 +529,32 @@ class Kernel:
             )
             rule_evidence = [r.to_dict() for r in rule_results]
 
+        # 7. Phase 17 execution evidence: bind THIS result to the actual
+        # configuration that executed. Every value is captured from live
+        # runtime objects after processing — never asserted independently
+        # (§8: recorded evidence == actual execution).
+        evidence = ExecutionEvidence(
+            request_id=request_id or "",
+            input_hash=sha256_of_text(raw_input),
+            candidate_interpretation_hash=candidate_ir.content_digest,
+            grounded_interpretation_hash=grounded_ir.content_digest,
+            model_identity={
+                "model_id": interpretation.model_id,
+                "provider_revision": interpretation.provider_revision,
+            },
+            adapter_identity={
+                "adapter_repo_id": getattr(self._provider_config, "adapter_repo_id", "") or "",
+                "adapter_revision": getattr(self._provider_config, "adapter_revision", "") or "",
+            }
+            if self._provider_config is not None
+            else {},
+            schema_version=SCHEMA_VERSION,
+            prompt_version=self._prompt_version(),
+            rule_pack_hash=rule_pack_identity(self._rule_pack_path),
+            rule_evidence=rule_evidence,
+            final_state=flow_status,
+        )
+
         return KernelResult(
             request_id=request_id,
             raw_input=raw_input,
@@ -469,7 +569,23 @@ class Kernel:
                 "provider_revision": interpretation.provider_revision,
             },
             rule_evidence=rule_evidence,
+            evidence=evidence,
+            candidate_ir=candidate_ir,
+            grounded_ir=grounded_ir,
         )
+
+    def _prompt_version(self) -> str:
+        """Identity of the exact prompt template the runtime executes.
+
+        The production provider (LocalHFModelProvider) receives its prompt
+        via the Kernel's provider construction; when a prompt template is
+        configured on the provider it is hashed. Providers that manage their
+        own default prompt record an empty prompt_version rather than an
+        invented identity — no unmeasured hash is ever claimed (§8).
+        """
+        provider = self._model_provider
+        prompt = getattr(provider, "_system_prompt", None) if provider is not None else None
+        return prompt_identity(prompt)
 
     # ------------------------------------------------------------------
     # Grounding / verification extension point
@@ -484,24 +600,33 @@ class Kernel:
     # ------------------------------------------------------------------
 
     def process_accounting(
-        self, candidate: Dict[str, Any], raw_input: str
+        self,
+        grounded: "GroundedSemanticIR",
     ) -> Optional[Dict[str, Any]]:
         """
         Delegate to the existing deterministic accounting implementation.
 
-        This preserves existing behavior. It does not invent a second
-        accounting engine. It returns the accounting result dict or None
-        when the transaction is explicitly unsupported by the existing
-        implementation.
+        Phase 17 boundary: accounting accepts ONLY a GroundedSemanticIR.
+        Passing a CandidateSemanticIR (or any other type) raises at the
+        boundary — ``accounting(candidate_ir)`` is not an accepted normal
+        execution path. The existing deterministic flow itself is UNCHANGED.
         """
+        if not isinstance(grounded, GroundedSemanticIR):
+            raise SemanticIRError(
+                "process_accounting accepts ONLY a GroundedSemanticIR "
+                f"(got {type(grounded).__name__}); ungrounded candidates "
+                "cannot reach deterministic accounting"
+            )
         accounting = self._get_accounting()
-        # Present the validated semantic facts to the existing accounting
+        # Present the grounded semantic facts to the existing accounting
         # flow in the form it already expects: a description plus optional
-        # resolved amounts/parties derived from the interpretation when
-        # available. We keep this intentionally thin so the Kernel does not
-        # become a second interpreter.
-        description = _best_description(candidate, raw_input)
-        amount = _best_amount(candidate, raw_input)
+        # resolved amounts/parties derived from the GROUNDED interpretation
+        # (every value here was verified against the source by the grounding
+        # gate before this point). We keep this intentionally thin so the
+        # Kernel does not become a second interpreter.
+        payload = grounded.for_accounting()
+        description = _best_description(payload)
+        amount = _best_amount(payload)
         result = accounting.process(description, amount)
         if result is None:
             return None
@@ -524,6 +649,8 @@ class Kernel:
         grounding_issues: Optional[List[str]] = None,
         accounting_result: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        candidate_ir: Optional["CandidateSemanticIR"] = None,
+        grounded_ir: Optional["GroundedSemanticIR"] = None,
     ) -> KernelResult:
         return KernelResult(
             request_id=request_id,
@@ -537,6 +664,8 @@ class Kernel:
             issues=issues,
             next_action=next_action,
             metadata=metadata,
+            candidate_ir=candidate_ir,
+            grounded_ir=grounded_ir,
         )
 
     # ------------------------------------------------------------------
@@ -627,33 +756,32 @@ class _ExistingAccountingAdapter:
 # Very thin helpers to preserve existing behavior without reinterpretation
 # ---------------------------------------------------------------------------
 
-def _best_description(candidate: Dict[str, Any], raw_input: str) -> str:
+def _best_description(payload: Dict[str, Any]) -> str:
     """
     Return the description used for accounting processing.
 
-    We prefer the raw student input because that is what the existing
-    deterministic implementation is built around and tested against.
-    The interpretation candidate is metadata, not a replacement for the
+    We use the grounded payload's raw_input (the student's own text, which
+    deterministic grounding verified the interpretation against) because that
+    is what the existing deterministic implementation is built around and
+    tested against. The interpretation is metadata, not a replacement for the
     original description.
     """
-    return raw_input
+    return str(payload.get("raw_input") or "")
 
 
-def _best_amount(candidate: Dict[str, Any], raw_input: str) -> Any:
+def _best_amount(payload: Dict[str, Any]) -> Any:
     """
-    Return an optional resolved amount from the interpretation candidate
-    when that amount is actually grounded in the original student input.
+    Return an optional resolved amount from the GROUNDED payload.
 
-    The grounding gate requires amounts to be supported by the source text,
-    so we only forward a candidate amount when its numeric value appears in
-    the original input. Otherwise we pass None and let the existing
-    deterministic accounting flow detect the amount itself from the
+    Every amount here already passed deterministic grounding against the
+    source text (the grounding gate rejects amounts unsupported by the
+    input), so the former textual re-verification of the candidate against
+    raw_input is no longer required at this boundary — the grounded IR is
+    the admission contract. Amounts are forwarded in order; None lets the
+    existing deterministic flow detect the amount itself from the
     description.
-
-    This is intentionally conservative: we do not invent amounts and we do
-    not forward values that cannot be traced back to the student's text.
     """
-    amounts = candidate.get("amounts")
+    amounts = payload.get("amounts")
     if not isinstance(amounts, list) or not amounts:
         return None
 
@@ -664,9 +792,9 @@ def _best_amount(candidate: Dict[str, Any], raw_input: str) -> Any:
         if value is None:
             continue
         if isinstance(value, (int, float)):
-            value = str(value)
-        if value and value in raw_input:
-            return value
+            return str(value)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
 
     return None
 
