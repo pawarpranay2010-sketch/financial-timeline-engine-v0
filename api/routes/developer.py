@@ -38,11 +38,18 @@ Hard architectural rules enforced here (Phase 13 §0, hardened Phase 15):
     no hook/rule field, so clients can never submit executable rule code
     or a rules_path — arbitrary server filesystem reads and arbitrary
     Python execution via HTTP are structurally impossible.
-  * Authentication is an HTTP-boundary concern ONLY: an optional
-    PLATRIXA_DEV_API_KEY (server-side secret) gates /v1/process. The key
-    is compared in constant time, never logged, never echoed, and never
-    part of any response or evidence. Kernel/business logic stays
-    auth-free.
+  * Authentication is an HTTP-boundary concern ONLY. Phase 15 gated
+    /v1/process with a single shared PLATRIXA_DEV_API_KEY; Phase 16
+    extends that boundary into the metered developer gate
+    (backend/auth): per-key SHA-256-hashed credentials resolved to
+    tenants, database-safe ATOMIC monthly quota reservation, and
+    fail-closed behavior when the metering store is unavailable. When
+    metering is not configured (PLATRIXA_METERING_DATABASE_URL unset),
+    the Phase 15 single-key gate remains the boundary — zero-config
+    local development stays open, exactly as documented. The key is
+    compared in constant time, never logged, never echoed, never
+    persisted, and never part of any response or evidence.
+    Kernel/business logic stays auth-free.
   * Malformed HTTP input (invalid JSON, wrong content type, missing
     fields, wrong types) is normalized to HTTP 400 with a deterministic
     error envelope — framework defaults (FastAPI/Pydantic 422) are
@@ -68,7 +75,7 @@ import re
 import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -84,6 +91,93 @@ from api.schemas import (
     DeveloperReadyResponse,
     KernelProcessRequest,
 )
+
+# Phase 16 metered gate — HTTP-agnostic admission control. Imported at
+# module scope is SAFE here (unlike the public interface): the auth
+# package touches no provider/model/persistence code at import time and
+# reads its env-var configuration lazily at request time.
+from backend.auth import gate as metered_gate
+
+# Gate reason → HTTP mapping (single source of truth for /v1):
+#   missing/unknown/inactive key → 401 (externally indistinguishable)
+#   quota exhausted              → 429
+#   metering store unavailable   → 503 (fail closed — never admit)
+_GATE_HTTP_STATUS = {
+    metered_gate.REASON_MISSING_KEY: 401,
+    metered_gate.REASON_UNKNOWN_KEY: 401,
+    metered_gate.REASON_INACTIVE: 401,
+    metered_gate.REASON_QUOTA_EXHAUSTED: 429,
+    metered_gate.REASON_METERING_UNAVAILABLE: 503,
+}
+
+_GATE_ERROR_CODES = {
+    metered_gate.REASON_MISSING_KEY: "UNAUTHORIZED",
+    metered_gate.REASON_UNKNOWN_KEY: "UNAUTHORIZED",
+    metered_gate.REASON_INACTIVE: "UNAUTHORIZED",
+    metered_gate.REASON_QUOTA_EXHAUSTED: "QUOTA_EXHAUSTED",
+    metered_gate.REASON_METERING_UNAVAILABLE: "METERING_UNAVAILABLE",
+}
+
+_GATE_MESSAGES = {
+    metered_gate.REASON_QUOTA_EXHAUSTED: (
+        "monthly quota exhausted for this API key"
+    ),
+    metered_gate.REASON_METERING_UNAVAILABLE: (
+        "metering service unavailable; request not admitted"
+    ),
+}
+
+
+_GATE_ERROR_MESSAGES = {
+    "UNAUTHORIZED": "missing or invalid API key",
+    "QUOTA_EXHAUSTED": "monthly quota exhausted for this API key",
+    "METERING_UNAVAILABLE": "metering service unavailable; request not admitted",
+}
+
+
+def _gate_http_exception(reason: str) -> HTTPException:
+    """Gate rejection as HTTPException.
+
+    FastAPI dependencies can only abort a request by RAISING — a returned
+    JSONResponse from a dependency is discarded. The deterministic /v1
+    envelope is rendered by the scoped handler installed in
+    register_developer_error_handlers.
+    """
+    return HTTPException(
+        status_code=_GATE_HTTP_STATUS[reason],
+        detail=_GATE_ERROR_CODES[reason],
+        headers={"X-Platrixa-Error": _GATE_ERROR_CODES[reason]},
+    )
+
+
+def _metered_api_key_guard(request: Request) -> None:
+    """
+    FastAPI dependency implementing the Phase 16 metered admission
+    boundary, in request order:
+
+      1. Phase 15 single-key gate (when PLATRIXA_DEV_API_KEY is set) —
+         still the zero-config local boundary.
+      2. Metered gate (when a metering store is configured):
+         hash → tenant → ATOMIC reservation. 401/429/503 on rejection;
+         on success the reservation is ALREADY committed before any
+         processing begins.
+
+    RAISES (aborting the request) whenever the request is rejected —
+    rejection happens strictly before the public interface is resolved
+    and before Kernel.process, so a rejected request can never load the
+    model. Returns None only when the request is admitted.
+    """
+    phase15_failure = _check_api_key(request)
+    if phase15_failure is not None:
+        raise _gate_http_exception(metered_gate.REASON_MISSING_KEY)
+
+    if not metered_gate._metering_configured():
+        return  # metering not configured → Phase 15 boundary only
+
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, _ctx = metered_gate.authorize_request(provided)
+    if reason != metered_gate.REASON_OK:
+        raise _gate_http_exception(reason)
 
 logger = logging.getLogger("platrixa.api")
 
@@ -237,12 +331,38 @@ def developer_validation_handler(request: Request, exc: RequestValidationError):
 
 def register_developer_error_handlers(app) -> None:
     """
-    Install the /v1 malformed-request normalization.
+    Install the /v1 malformed-request normalization plus the gate
+    rejection envelope.
 
     Scoped explicitly to /v1 paths so the browser-facing /api/v1 contract
     (Phase 7F) keeps its documented FastAPI behavior unchanged.
     """
     original_handler = developer_validation_handler
+
+    from fastapi import HTTPException as _HTTPException
+
+    async def gate_error_handler(request: Request, exc: _HTTPException):
+        """Render gate rejections as the deterministic /v1 envelope.
+
+        Scoped to /v1 paths and to gate-produced error codes, so every
+        other HTTPException (including /api/v1 browser routes) keeps the
+        framework's documented behavior.
+        """
+        code = exc.detail if isinstance(exc.detail, str) else None
+        if request.url.path.startswith("/v1") and code in _GATE_ERROR_MESSAGES:
+            return _error_response(
+                exc.status_code,
+                code or "ERROR",
+                _GATE_ERROR_MESSAGES[code],
+                request_id=_sanitize_request_id(
+                    request.headers.get("x-request-id", "")
+                ),
+            )
+        from fastapi.exception_handlers import http_exception_handler
+
+        return await http_exception_handler(request, exc)
+
+    app.add_exception_handler(_HTTPException, gate_error_handler)
 
     async def handler(request: Request, exc: RequestValidationError):
         if request.url.path.startswith("/v1"):
@@ -362,8 +482,9 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
     )
 
 
-@router.post("/v1/process", response_model=DeveloperProcessResponse)
-def process_v1(payload: KernelProcessRequest, request: Request) -> JSONResponse:
+@router.post("/v1/process", response_model=DeveloperProcessResponse,
+             dependencies=[Depends(_metered_api_key_guard)])
+def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperProcessResponse":
     """
     Process one financial transaction through the public developer
     interface (which forwards to the Kernel exactly once).
@@ -379,12 +500,22 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> JSONResponse:
         provider runtime failure (PlatrixaError)      → 503 error envelope
         missing/invalid API key                       → 401 (before any
                                                          processing)
+        quota exhausted                               → 429 (reservation
+                                                         happens BEFORE the
+                                                         public interface is
+                                                         resolved)
+        metering store unavailable                    → 503 (fail closed —
+                                                         never admitted)
         unexpected failure                            → 500 (global handler,
                                                          type name only)
+
+    Quota policy: exactly one unit is consumed per admitted request. The
+    reservation is the first processing-path operation, so malformed
+    requests (400, rejected pre-dependency by the validation handler)
+    and failed authentication (401) never consume quota; an admitted
+    request that later fails downstream keeps its reservation (the
+    unit paid for admission to the processing system).
     """
-    auth_failure = _check_api_key(request)  # auth strictly precedes processing
-    if auth_failure is not None:
-        return auth_failure
     rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
     started = time.perf_counter()
 

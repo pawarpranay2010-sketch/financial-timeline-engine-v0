@@ -40,15 +40,48 @@ or `python3 -m uvicorn api.main:app --port 8000`. No provider keys,
 database, or model download are needed to boot; the model loads lazily on
 first processing request (or per your provider configuration).
 
-## Authentication (optional, server-side)
+## Authentication (server-side)
 
-The endpoint is open by default (zero-config local development). To gate
-it, the server operator sets `PLATRIXA_DEV_API_KEY`; requests must then
-send the exact value in the `X-Platrixa-API-Key` header. Missing,
-empty, or invalid keys are rejected with **401** *before any processing*
-(the key is compared in constant time and never logged, echoed, or
-serialized). Developers cannot supply rule packs or Python hooks — the
+Two independent, stackable gates protect the endpoint:
+
+**1. Shared server key (zero-config).** Open by default (zero-config local
+development). To gate it, the server operator sets `PLATRIXA_DEV_API_KEY`;
+requests must then send the exact value in the `X-Platrixa-API-Key` header.
+Missing, empty, or invalid keys are rejected with **401** *before any
+processing* (the key is compared in constant time and never logged, echoed,
+or serialized). Developers cannot supply rule packs or Python hooks — the
 request schema carries only `raw_input`.
+
+**2. Metered developer gate (per-key, per-tenant quota — Phase 16).** When
+the server sets `PLATRIXA_METERING_DATABASE_URL` (a PostgreSQL URL, after
+running `python -m backend.auth.init_metering` to create the table), each
+request must present a per-developer API key in the same
+`X-Platrixa-API-Key` header. The gate hashes the key (SHA-256), resolves
+the tenant, and atomically reserves one unit of that tenant's monthly
+quota **before** the public interface is resolved — a rejected request
+never loads the model:
+
+| Condition | HTTP | Error code |
+|---|---|---|
+| missing / unknown / deactivated key | 401 | `UNAUTHORIZED` (all three externally indistinguishable) |
+| monthly quota exhausted | 429 | `QUOTA_EXHAUSTED` |
+| metering store unavailable | 503 | `METERING_UNAVAILABLE` (fail closed — never admitted) |
+
+Quota semantics: `YYYY-MM` UTC buckets (a stale bucket rolls over inside
+the same atomic reservation — no scheduler, and August usage is never
+counted as September usage); authentication and quota failures consume
+zero units; one unit is consumed per **admitted** request, including
+requests that later fail domain validation (the unit paid for admission).
+Raw keys are never stored (hash only) and never appear in responses,
+logs, or error bodies. Concurrency safety is enforced by the database: a
+single `UPDATE` whose `WHERE` clause carries the full admission predicate,
+so concurrent admissions can never exceed the monthly limit.
+
+Tenants are provisioned by the operator (dev/test helper:
+`python -m backend.auth.dev_seed_tenant --tenant <id> --limit <n>`, which
+prints the raw key exactly once). When the metering variable is unset,
+gate 2 is absent entirely — gate 1 behavior is unchanged (there is no
+fallback to `DATABASE_URL`; metering activation is explicit).
 
 ## Request
 
@@ -186,7 +219,9 @@ Distributed exactly-once semantics are future work.
 
 ## Known limits (launch posture)
 
-- Authentication is a single shared server-side key (`PLATRIXA_DEV_API_KEY`); there is no per-developer key issuance, usage metering, or billing yet.
+- Per-developer authentication and monthly quota metering are implemented
+  (Phase 16, `PLATRIXA_METERING_DATABASE_URL`); billing and automated
+  key issuance are not — tenants are provisioned by the operator.
 - No application-level rate limiting; platform-level controls only.
 - `X-Request-Id` is a best-effort correlation id, not an idempotency key.
 - The API is a transport boundary: it cannot be used to alter rule
@@ -197,8 +232,9 @@ Distributed exactly-once semantics are future work.
 - The runtime depends on an external model provider. On the HF Space path,
   ZeroGPU quota and model cold starts can make requests slow (tens of
   seconds) or temporarily unavailable (`MODEL_UNAVAILABLE` → 503).
-- No authentication, rate limiting, billing, multi-tenancy, or SDK is
-  included in this phase.
+- Metering requires a reachable PostgreSQL store; when it is configured
+  but unavailable the API fails closed (503) rather than admitting
+  unmetered requests.
 - The API is not deployed by default; run it locally with the command
   above.
 

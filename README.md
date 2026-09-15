@@ -67,8 +67,14 @@ curl -s -X POST http://127.0.0.1:8000/v1/process \
 Authentication: open by default for local development; when the server
 sets `PLATRIXA_DEV_API_KEY`, requests must send that exact value in the
 `X-Platrixa-API-Key` header (401 otherwise, before any processing).
-There is no per-developer key issuance, metering, or billing yet — see
-docs/HOSTED_API.md for the full contract, states, error table, provider
+Per-developer API keys with atomic monthly quota metering are also
+supported (Phase 16): setting `PLATRIXA_METERING_DATABASE_URL` (PostgreSQL;
+run `python -m backend.auth.init_metering` once to create the table)
+activates the metered gate — each request must then present a valid
+per-tenant key (401), within its monthly quota (429 `QUOTA_EXHAUSTED`),
+with fail-closed 503 when the metering store is unavailable. There is no
+billing or automated key issuance yet — see docs/HOSTED_API.md for the
+full contract, states, error table, metering semantics, provider
 configuration, rule-pack configuration, and current limitations.
 
 ## Project Identity
