@@ -23,6 +23,7 @@ python-dotenv>=1.0
 pyyaml>=6.0
 requests>=2.31
 gradio_client>=1.0
+groq>=0.4.0
 
 # Developer-facing regression suites (fte_*) use TestClient + embedded PG:
 httpx>=0.27
