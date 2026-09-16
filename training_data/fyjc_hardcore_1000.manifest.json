@@ -1,0 +1,105 @@
+{
+  "dataset_name": "fyjc_hardcore_1000",
+  "version": "phase20-candidate-v1",
+  "row_count": 1000,
+  "source_dataset": "training_data/fyjc_specialist_1000.jsonl",
+  "source_dataset_sha256": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+  "candidate_dataset_sha256": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+  "generation_seed": 20260916,
+  "generator_version": "phase20-generator-1.0.0",
+  "validator_version": "phase20-validator-1.0.0",
+  "determinism": {
+    "python_hash_seed_pinned": true,
+    "note": "deterministic across processes with PYTHONHASHSEED=0; Groq enrichment (off) would break full reproducibility"
+  },
+  "generation_model": null,
+  "generation_model_revision": null,
+  "enriched_rows": 0,
+  "distributions": {
+    "difficulty": {
+      "incomplete": 368,
+      "ambiguous": 350,
+      "clear": 230,
+      "adversarial": 52
+    },
+    "category": {
+      "single": 658,
+      "multi": 121,
+      "adversarial": 106,
+      "reference": 71,
+      "distractor": 44
+    },
+    "transaction_type": {
+      "SALE": 278,
+      "UNKNOWN": 277,
+      "PURCHASE": 226,
+      "RETURN_OUT": 60,
+      "DRAWING": 52,
+      "EXPENSE": 49,
+      "SETTLEMENT": 40,
+      "CAPITAL": 18
+    },
+    "payment_method": {
+      "CASH": 359,
+      "UNKNOWN": 299,
+      "CREDIT": 116,
+      "CHEQUE": 113,
+      "BANK": 74,
+      "UPI": 39
+    },
+    "language_style": {
+      "standard": 862,
+      "conversational": 83,
+      "noisy": 55
+    },
+    "family": {
+      "ambiguous_pronoun": 40,
+      "basic_capital": 18,
+      "basic_drawing": 15,
+      "basic_expense": 43,
+      "basic_purchase": 53,
+      "basic_receipt": 40,
+      "basic_sale": 69,
+      "cash_discount": 28,
+      "compound_multi": 121,
+      "contradictory_payment": 21,
+      "contrast_pair": 85,
+      "gst_aware": 27,
+      "incomplete_minimal": 20,
+      "incomplete_no_amount": 12,
+      "incomplete_no_mode": 6,
+      "incomplete_no_party": 14,
+      "informal_noisy": 55,
+      "irrelevant_context": 44,
+      "paraphrase_set": 29,
+      "pm_matrix_bank": 17,
+      "pm_matrix_cash": 8,
+      "pm_matrix_cheque": 13,
+      "pm_matrix_credit": 17,
+      "pm_matrix_neft": 20,
+      "pm_matrix_upi": 9,
+      "purchase_return": 37,
+      "reference_history": 31,
+      "sales_return": 38,
+      "settlement_full": 16,
+      "settlement_partial": 26,
+      "trade_discount": 28
+    }
+  },
+  "rejection_statistics": {
+    " duplicate_input": 14,
+    " gate": 7,
+    " keyword_substring_mismatch": 8,
+    " near_dup_of_original": 1,
+    "event_signature_cap": 162,
+    "near_dup_within_candidate": 184
+  },
+  "validation": {
+    "schema_verifier": "validate_structured_interpretation(allow_expanded=True) \u2014 all rows pass",
+    "grounding_gate": "ExpandedGroundingGate.safe_for_kernel \u2014 all rows pass",
+    "verified_claims": 0,
+    "duplicate_inputs_vs_original": 0,
+    "near_duplicate_threshold_jaccard": 0.75,
+    "status": "ACCEPTED_CANDIDATE"
+  }
+}
