@@ -1,0 +1,86 @@
+{
+  "dataset_name": "phase22_v02_train",
+  "version": "1.0",
+  "row_count": 1793,
+  "composition": {
+    "canonical_kept": 779,
+    "canonical_corrective_relabel": 21,
+    "canonical_excluded_ids": [],
+    "hardcore_verbatim": 998,
+    "hardcore_gate_or_schema_dropped": [],
+    "hardcore_excluded_ids": [
+      "hc_00092",
+      "hc_00928"
+    ],
+    "leakage_or_duplicate_dropped": [
+      {
+        "id": "noi_00219",
+        "reason": "exact_duplicate_of:sta_00217"
+      },
+      {
+        "id": "sta_00210",
+        "reason": "exact_duplicate_of:noi_00229"
+      },
+      {
+        "id": "sta_00220",
+        "reason": "exact_duplicate_of:noi_00218"
+      },
+      {
+        "id": "con_00397",
+        "reason": "exact_duplicate_of:con_00477"
+      },
+      {
+        "id": "sta_00624",
+        "reason": "phase17_benchmark_near_dup:PB-0011"
+      }
+    ]
+  },
+  "sources": {
+    "canonical_train_sha256": "33bd2baee1386577cb3fe80af733a9929f34408e282c61170baef61a7620d21c",
+    "hardcore_sha256": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "hardcore_expected_sha256": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd"
+  },
+  "output_sha256": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+  "leakage_checks": {
+    "input_duplicates_within_dataset": 0,
+    "duplicate_ids": 0,
+    "overlap_vs_canonical_val_test": 0,
+    "exact_overlap_vs_phase17_benchmark": 0,
+    "near_dup_ge_0.75_vs_phase17_benchmark": 0,
+    "excluded_ids_present": 0,
+    "rows_dropped_for_leakage_or_duplicates": 5,
+    "result": "PASS"
+  },
+  "distributions": {
+    "source": {
+      "fyjc_specialist_train": 795,
+      "fyjc_hardcore_1000": 998
+    },
+    "phase22": {
+      "canonical": 774,
+      "corrective_relabel": 21,
+      "verbatim_18field": 998
+    },
+    "transaction_type": {
+      "unknown": 11,
+      "purchase": 481,
+      "capital": 55,
+      "expense": 131,
+      "sale": 451,
+      "payment": 96,
+      "receipt": 81,
+      "drawing": 97,
+      "return_out": 65,
+      "return_in": 8,
+      "settlement": 40,
+      "": 277
+    },
+    "suggested_status": {
+      "REVIEW_REQUIRED": 1167,
+      "VERIFIED": 626
+    }
+  },
+  "target_format": "full 18-field contract rows {id, input, output, metadata}; assistant target == compact 18-field JSON (v0.1 job contract)",
+  "determinism": "fixed corpus ordering; PYTHONHASHSEED=0; no timestamps",
+  "validator": "backend.schema_verifier.validate_structured_interpretation(allow_expanded=True) + ExpandedGroundingGate (production stack, unmodified)"
+}
