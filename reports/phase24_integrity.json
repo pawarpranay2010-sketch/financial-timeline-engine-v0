@@ -1,0 +1,64 @@
+{
+  "phase": "24",
+  "artifact": "foundation_scout_integrity",
+  "timestamp_utc": "2026-09-17T11:32:57.854932+00:00",
+  "git": {
+    "HEAD": "848599b8351082a66da0e629cd9295a1129f7648",
+    "tracked_modifications": [],
+    "tracked_modification_count": 0,
+    "phase24_allowlist_untracked": [
+      "?? training_data/phase24_foundation_scout.jsonl",
+      "?? training_data/phase24_foundation_scout_manifest.json"
+    ]
+  },
+  "frozen_artifact_sha256": {
+    "locked_test": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "hardcore_1000": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "phase22_v02_train": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+    "fyjc_specialist_1000_original": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+    "phase6c_evaluate": "c89244233a62b693998929a0e2dac12a335e2731437405a06d9b5f73bc4c082c",
+    "fte_74_v02_evaluator": "c4f54c3f6b3667796233021e66061c4de962907a54deb3f415ff6c55b80ce5fc",
+    "fte_75_phase23_helper": "73f6c5badd287113864cb6dca89e0f59f522f838496df1678485c42b642671c9",
+    "trl_sft_job_v01": "34f619564ce521470b7b91cf8c18da5e26a4aef9815e3e15f1aff766679fef78",
+    "trl_sft_job_v02": "8b8ab8c61a5be800a85c636bdffb3ed7d32c27c555a034f8499263dc0ce8254f",
+    "format": "68e5e18a8d67ce9a4411034d2463c156af92448d90faee0d070d83c857a88261",
+    "fyjc_ai_specialist": "bc722a9d3ed3757386f0507b40a4bc72b0753306972930733b05c3f29dc132d1",
+    "schema_verifier": "539010bbb918bc5e8f5cf97d00a2cc1e417eaaaa99df9367817080f2b0b1c783",
+    "fyjc_grounding_gate": "3909af0ff3f17d3b347a3281e05362a4ccf2304bfa5e9042aa46a963d0dfeb3e",
+    "phase24_scout_dataset": "c1026fd4ed1cfaceacdd00d60d9c6016225970d5cdd2b91ae44320019aaa1bbc",
+    "phase24_manifest": "9e6ebd1b85010be06c83643d6f85fe54e122e0b5372b7f7f12278b90d874ffc2"
+  },
+  "missing_files": [],
+  "expected_sha_checks": {
+    "locked_test": {
+      "actual": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+      "expected": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+      "match": true
+    },
+    "hardcore_1000": {
+      "actual": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+      "expected": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+      "match": true
+    },
+    "phase22_v02_train": {
+      "actual": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+      "expected": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+      "match": true
+    },
+    "fyjc_specialist_1000_original": {
+      "actual": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+      "expected": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+      "match": true
+    }
+  },
+  "locked_test_row_count": 100,
+  "all_expected_match": true,
+  "tracked_tree_clean": true,
+  "allowlist_respected": true,
+  "notes": [
+    "Phase 24 allowlist: scout jsonl, manifest, fte_76 runner, reports/phase24_* \u2014 nothing else created or modified",
+    "No model inference, no training, no commit, no push performed in this phase",
+    "Pre- and post-authoring hashes identical for all frozen artifacts (verified in final sweep)",
+    "fs_017 regenerated post-audit (0.861 template near-dup of hc_00146 found in 40-file re-audit); dataset SHA updated; final leakage re-audit CLEAN"
+  ]
+}

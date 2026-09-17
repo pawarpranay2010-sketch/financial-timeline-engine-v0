@@ -1,0 +1,158 @@
+{
+  "phase": "24",
+  "artifact": "foundation_scout_benchmark",
+  "creation_timestamp_utc": "2026-09-17T11:32:16.919054+00:00",
+  "last_updated_utc": "2026-09-17 (post-leakage-audit regeneration of fs_017)",
+  "dataset_count": 100,
+  "dataset_sha256": "c1026fd4ed1cfaceacdd00d60d9c6016225970d5cdd2b91ae44320019aaa1bbc",
+  "schema_version": "platrixa-18field-expanded-v1 (identical to phase22 contract; validated by production schema_verifier allow_expanded=True)",
+  "composition": {
+    "by_domain": {
+      "accounting_transactions": 20,
+      "bank_narrations": 15,
+      "accounting_documents": 10,
+      "accounting_concepts": 10,
+      "finance_terminology": 10,
+      "ambiguity_conflict": 15,
+      "adversarial_noise": 15,
+      "ocr_noise": 5
+    },
+    "by_difficulty": {
+      "easy": 13,
+      "medium": 20,
+      "hard": 67
+    },
+    "target_composition_note": "documents and adversarial each differ by 5 rows from the nominal target (10/15 -> 15/10); all eight categories present; totals exactly 100",
+    "payment_method_enum_distribution": {
+      "CREDIT": 5,
+      "UNKNOWN": 57,
+      "CHEQUE": 7,
+      "BANK": 12,
+      "CASH": 15,
+      "UPI": 4
+    },
+    "transaction_type_enum_distribution": {
+      "PURCHASE": 5,
+      "SALE": 6,
+      "RECEIPT": 9,
+      "PAYMENT": 17,
+      "SETTLEMENT": 3,
+      "EXPENSE": 4,
+      "RETURN_OUT": 1,
+      "RETURN_IN": 3,
+      "UNKNOWN": 44,
+      "CAPITAL": 1,
+      "DRAWING": 2,
+      "DISCOUNT_TRADE": 2,
+      "DEPRECIATION": 1,
+      "GST": 2
+    },
+    "suggested_status_distribution": {
+      "REVIEW_REQUIRED": 100
+    },
+    "ambiguity_flag_combinations": {
+      "NONE": 31,
+      "MULTIPLE_INTERPRETATIONS": 16,
+      "MISSING_PARTY": 9,
+      "CONFLICTING_INFORMATION": 7,
+      "MISSING_PAYMENT_MODE": 6,
+      "HISTORICAL_DEPENDENCY": 6,
+      "MISSING_PAYMENT_MODE | MULTIPLE_INTERPRETATIONS": 6,
+      "MISSING_PARTY | MISSING_PAYMENT_MODE": 5,
+      "HISTORICAL_DEPENDENCY | MISSING_PARTY | MISSING_PAYMENT_MODE": 4,
+      "MISSING_AMOUNT | MULTIPLE_INTERPRETATIONS": 2,
+      "HISTORICAL_DEPENDENCY | MISSING_PAYMENT_MODE": 1,
+      "MISSING_PAYMENT_MODE | UNRESOLVED_PRONOUN": 1
+    }
+  },
+  "construction_methodology": [
+    "Layer-1 diagnostic: measures broad accounting+finance semantic understanding, NOT FYJC memorization",
+    "Authored fresh from generic accounting/finance knowledge; no rows copied from any existing dataset",
+    "Every row: id, input, domain, difficulty, output (full 18-field), metadata (expected_concepts, ambiguity_expectation, acceptable/unacceptable_interpretation, source_note, human_reviewed)",
+    "Gold policy: uncertainty preserved where evidence insufficient (UNKNOWN enums, REVIEW_REQUIRED, CONFLICTING_INFORMATION, MISSING_* flags)",
+    "No accounting conclusions inserted merely because economically plausible; journal/debit/credit demands (fs_081-083) test refusal",
+    "Literal-preservation policy under OCR/noise: parties transcribed as-written (fs_091-095); abbreviations not silently expanded (fs_084, fs_094)"
+  ],
+  "gold_validation": {
+    "schema_verifier_allow_expanded": {
+      "passed": 100,
+      "failed": 0
+    },
+    "expanded_grounding_gate": {
+      "passed": 100,
+      "failed": 0
+    },
+    "note": "4 rows (fs_077/084/086/094) initially claimed CASH/CHEQUE/BANK without the exact channel token in input; corrected to UNKNOWN under literal-preservation policy, then 100/100 PASS",
+    "human_reviewed_all_rows": false,
+    "human_review_required_before_inference_interpretation": "ambiguity_conflict + adversarial_noise rows (30) are authored-not-yet-human-verified; acceptable/unacceptable_interpretation fields document intended grading"
+  },
+  "leakage_audit": {
+    "datasets_scanned": {
+      "locked_test": 100,
+      "hardcore_1000": 1000,
+      "phase22_v02_train": 1793,
+      "fyjc_specialist_1000_original": 1000,
+      "fyjc_specialist_train": 800,
+      "fyjc_specialist_validation": 100,
+      "phase22_genuine22": 22,
+      "pipeline_raw": 148,
+      "specialist_train": 87,
+      "specialist_test": 34,
+      "specialist_val": 26,
+      "specialist_ambiguity_eval": 20,
+      "specialist_unsupported_eval": 24,
+      "specialist_robustness_eval": 9,
+      "specialist_clean_training": 46,
+      "p5a_evaluation_results": 53,
+      "training_20260828_072732": 1
+    },
+    "exact_collisions": 0,
+    "normalized_collisions": 0,
+    "near_duplicates_ge_0_85": 0,
+    "eight_gram_shingle_overlap_vs_locked_test": 0,
+    "result": "CLEAN",
+    "audit_history": [
+      "Initial audit at creation (16 named datasets): reported CLEAN.",
+      "Post-authoring deeper re-audit (40 training_data/*.jsonl files): found 1 near-duplicate — fs_017 ('Paid telephone bill of Rs 4,200 by UPI.') vs hardcore row hc_00146 ('Paid for telephone bill Rs.1,500 by UPI.'), SequenceMatcher 0.861, same sentence template.",
+      "Per Phase 24 rule (report collision, regenerate affected example — no silent deletion): fs_017 regenerated as 'Settled the telephone bill of Rs 4,200 by UPI.' (same accounting_transactions slot, PAYMENT/UPI gold revalidated 100/100); documented in the row's metadata.source_note.",
+      "Final re-audit after regeneration: 0 collisions across all 40 dataset files; dataset SHA updated."
+    ]
+  },
+  "external_resources": {
+    "fibo": "not used; no ontology text incorporated",
+    "external_datasets": "none; all rows authored fresh",
+    "licensing_note": "fully original authored content; no third-party text incorporated"
+  },
+  "annotation_policy": {
+    "uncertainty_first": "UNKNOWN/CONFLICTING_INFORMATION/REVIEW_REQUIRED preferred over invented certainty",
+    "literal_preservation": "OCR-corrupted parties preserved as-written; abbreviations not expanded without evidence",
+    "no_computation": "model must not invent computed figures (splits, nets, percentages); stated figures only",
+    "leakage_rule": "accounting leakage (journal/debit/credit conclusions) is a hard failure in grading"
+  },
+  "frozen_artifact_hashes_at_creation": {
+    "locked_test": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "hardcore_1000": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "phase22_v02_train": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+    "fyjc_specialist_1000_original": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+    "phase6c_evaluate": "c89244233a62b693998929a0e2dac12a335e2731437405a06d9b5f73bc4c082c",
+    "fte_74_v02_evaluator": "c4f54c3f6b3667796233021e66061c4de962907a54deb3f415ff6c55b80ce5fc",
+    "fte_75_phase23_helper": "73f6c5badd287113864cb6dca89e0f59f522f838496df1678485c42b642671c9",
+    "fyjc_ai_specialist": "bc722a9d3ed3757386f0507b40a4bc72b0753306972930733b05c3f29dc132d1",
+    "schema_verifier": "539010bbb918bc5e8f5cf97d00a2cc1e417eaaaa99df9367817080f2b0b1c783",
+    "fyjc_grounding_gate": "3909af0ff3f17d3b347a3281e05362a4ccf2304bfa5e9042aa46a963d0dfeb3e"
+  },
+  "integrity": {
+    "locked_test_sha": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "locked_test_sha_expected": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "locked_test_sha_match": true,
+    "hardcore_sha": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "hardcore_sha_expected": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "hardcore_sha_match": true,
+    "phase22_sha": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+    "phase22_sha_expected": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+    "phase22_sha_match": true,
+    "original_corpus_sha": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+    "original_corpus_sha_expected": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+    "original_corpus_sha_match": true
+  }
+}

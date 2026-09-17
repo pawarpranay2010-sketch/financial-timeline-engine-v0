@@ -1,0 +1,109 @@
+{
+  "phase": "24",
+  "artifact": "foundation_scout_run",
+  "state": "PRE_RUN_INFRASTRUCTURE_READY_INFERENCE_NOT_EXECUTED",
+  "timestamp_utc": "2026-09-17T11:39:15.742757+00:00",
+  "scout_dataset": {
+    "path": "training_data/phase24_foundation_scout.jsonl",
+    "count": 100,
+    "sha256": "c1026fd4ed1cfaceacdd00d60d9c6016225970d5cdd2b91ae44320019aaa1bbc",
+    "composition": {
+      "accounting_transactions": 20,
+      "bank_narrations": 15,
+      "accounting_documents": 10,
+      "accounting_concepts": 10,
+      "finance_terminology": 10,
+      "ambiguity_conflict": 15,
+      "adversarial_noise": 15,
+      "ocr_noise": 5
+    },
+    "composition_note": "5 rows shifted accounting_documents->adversarial_noise vs nominal target; all 8 categories present; total exactly 100"
+  },
+  "leakage_audit": {
+    "datasets_scanned": 40,
+    "exact": 0,
+    "normalized": 0,
+    "near_dup_ge_0_85": 0,
+    "eight_gram_shingle_overlap_vs_locked_test": 0,
+    "result": "CLEAN",
+    "audit_history": "initial 16-dataset audit CLEAN; 40-file re-audit found fs_017 ~ hc_00146 near-dup (0.861); fs_017 regenerated per Phase 24 rule; final re-audit CLEAN"
+  },
+  "gold_validation": {
+    "schema_verifier_pass": 100,
+    "grounding_gate_pass": 100
+  },
+  "candidates_registered": [
+    {
+      "repo_id": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "status": "READY",
+      "license": "apache-2.0"
+    },
+    {
+      "repo_id": "WiroAI/WiroAI-Finance-Qwen-1.5B",
+      "revision": "f79cfbc65f90691b879f1a3960bf02a89f998ae6",
+      "status": "READY",
+      "license": "apache-2.0",
+      "note": "base Qwen2.5-Math-1.5B; deepseek-style template"
+    },
+    {
+      "repo_id": "Qwen/Qwen2.5-3B-Instruct",
+      "status": "READY",
+      "license": "qwen-research-NONCOMMERCIAL"
+    },
+    {
+      "repo_id": "Qwen/Qwen2.5-7B-Instruct",
+      "status": "READY",
+      "license": "qwen-research-NONCOMMERCIAL",
+      "note": "bf16 exceeds stock T4"
+    },
+    {
+      "repo_id": "WiroAI/WiroAI-Finance-Qwen-7B",
+      "status": "READY",
+      "license": "apache-2.0",
+      "note": "base Qwen2.5-Math-7B"
+    },
+    {
+      "repo_id": "OVHaiLLM/Qwen-Open-Finance-R-8B",
+      "status": "READY",
+      "license": "apache-2.0",
+      "note": "gated:auto; DragonLLM redirect; Qwen3-8B base"
+    },
+    {
+      "repo_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-8B",
+      "status": "READY_FAIL_CLOSED",
+      "license": "UNVERIFIED-401",
+      "note": "resolved+hashed at download"
+    }
+  ],
+  "candidates_dropped": [
+    {
+      "repo_id": "dschauhan08/Qwen2.5-3B-Finance-GGUF",
+      "reason": "unverifiable provenance"
+    },
+    {
+      "repo_id": "ProsusAI/finbert",
+      "reason": "verified sentiment classifier; not a foundation candidate"
+    }
+  ],
+  "evaluation_protocol": {
+    "decoding": "greedy",
+    "max_new_tokens": 512,
+    "batch_size": 8,
+    "max_input_tokens": 2048,
+    "gates": [
+      "schema_verifier allow_expanded",
+      "ExpandedGroundingGate",
+      "safe_for_kernel derivation"
+    ],
+    "single_score": false,
+    "slices": [
+      "domain",
+      "difficulty"
+    ]
+  },
+  "runner_check_only": "PASS",
+  "metrics": null,
+  "slice_metrics": null,
+  "note": "metrics populated by fte_fyjc_76 on the GPU host; per-candidate predictions land in reports/phase24_scout_<Model>_predictions.jsonl"
+}
