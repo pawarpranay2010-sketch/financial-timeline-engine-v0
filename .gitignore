@@ -12,6 +12,13 @@ formula_engine/bin/
 scripts/chatinput_test.py
 scripts/tabs_test.py
 
+# Pilot API keys / local credentials - never commit
+.platrixa_pilot_key
+*.pilot_key
+
+# Temporary diagnostic scripts - never commit
+tmp_plx_*
+
 # Credential-handling / diagnostic scripts — never commit
 append_env_keys.py
 scripts/set_ai_keys.py
