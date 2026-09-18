@@ -1,159 +1,207 @@
-# Platrixa — Financial & Accounting Intelligence Platform
+# Platrixa
 
-**Stop prompts guessing math.** Platrixa puts a deterministic financial
-runtime behind the model: an LLM interprets the student's transaction,
-then grounding and deterministic accounting rules — not the model — decide
-the answer, with evidence for every decision. First proving ground:
-FYJC / Class 11 commerce bookkeeping.
+**Financial semantics infrastructure for developers.**
 
-## Hosted developer API (v1)
+Send financial language; receive structured, validated, evidence-grounded
+accounting semantics — with explicit `VERIFIED`, `REVIEW_REQUIRED`, or
+`BLOCKED` states instead of confident guesses.
 
-The hosted API is a **transport boundary** over the deterministic runtime:
-malformed requests fail closed before any model or accounting code runs,
-the model only ever *suggests*, and the runtime alone decides the final
-state (`VERIFIED` / `REVIEW_REQUIRED` / `BLOCKED` / …).
+## What Platrixa does
 
-Quickstart (run the server locally with
-`uvicorn api.main:app --host 127.0.0.1 --port 8000`):
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/v1/process \
-  -H "Content-Type: application/json" \
-  -H "X-Platrixa-API-Key: $PLATRIXA_DEV_API_KEY" \
-  -d '{"raw_input": "Purchased furniture for cash ₹15,000"}'
+```
+input (transaction text)
+   ↓
+semantic interpretation (LLM — suggests only)
+   ↓
+CandidateSemanticIR (18-field structured contract)
+   ↓
+schema verification (strict, fail-closed)
+   ↓
+grounding / evidence validation (fail-closed)
+   ↓
+deterministic accounting kernel
+   ↓
+VERIFIED / REVIEW_REQUIRED / BLOCKED  →  JSON result
 ```
 
-Actual response shape (fields abridged):
+**LLM ≠ authority.** The model interprets financial language; Platrixa
+deterministically validates, grounds, and decides the final accounting
+result. Every output carries its evidence; anything the runtime cannot
+prove is downgraded to `REVIEW_REQUIRED` or `BLOCKED` — never guessed.
+Transaction-level deterministic reasoning includes multi-payment
+settlement (cash/bank/cheque/NEFT/fractions), GST handling, and
+contradiction detection.
+
+## What works today
+
+| Capability | Status |
+|---|---|
+| Hosted `POST /v1/process` (versioned developer API) | ✅ shipped |
+| API-key authentication (fail-closed 401) | ✅ shipped |
+| Unique per-tenant API keys (CSPRNG, hash-only storage) | ✅ shipped |
+| Tenant monthly quotas with atomic reservation | ✅ shipped |
+| `GET /v1/health` · `GET /v1/ready` | ✅ shipped |
+| Python library (`from platrixa import Platrixa`) | ✅ shipped |
+| CLI (`python -m platrixa process`) | ✅ shipped |
+| Schema verification + grounding + deterministic kernel | ✅ shipped |
+| Server-side rule packs / hooks (downgrade-only) | ✅ shipped |
+| Self-serve signup / billing automation / dashboard | ❌ not yet |
+| Key-rotation UI, idempotency, app-level rate limiting | ❌ not yet |
+| Bank statements / invoices / document understanding | ⏳ under evaluation |
+
+## How developers use Platrixa
+
+### 1. Hosted API (primary path)
+
+```bash
+curl -s -X POST https://<your-platrixa-host>/v1/process \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  -d '{"raw_input": "Paid ₹12,500 to Raj for office furniture by cheque."}'
+```
+
+Response shape (fields abridged; the runtime's state is authoritative):
 
 ```json
 {
   "api_version": "v1",
+  "request_id": "…",
   "status": "VERIFIED",
+  "status_label": "Verified",
   "success": true,
+  "next_action": null,
+  "issues": [],
+  "grounding_issues": [],
+  "rule_evidence": [],
   "interpretation": {
     "transaction_type_enum": "PURCHASE",
-    "amounts": [{"value": "15000", "source": "explicit"}],
-    "suggested_status": "REVIEW_REQUIRED"
+    "parties": ["Raj"],
+    "amounts": [{"value": "12500", "source": "explicit"}]
   },
   "accounting": {
-    "debit_lines":  [{"account": "Furniture", "amount": 15000}],
-    "credit_lines": [{"account": "Cash", "amount": 15000}]
+    "debit_lines":  [{"account": "Furniture", "amount": 12500}],
+    "credit_lines": [{"account": "Bank", "amount": 12500}]
   }
 }
 ```
 
-The model's suggestion (`REVIEW_REQUIRED`) and the final state
-(`VERIFIED`) are deliberately different objects: interpretation is the
-model's, the state is the runtime's.
+`interpretation` is the model's suggestion; `status` is decided by the
+deterministic runtime and is the only field your integration should act on.
 
-Fail-closed demonstration — a malformed request never reaches the
-runtime:
+Transport rules: malformed JSON → `400 REQUEST_MALFORMED`; invalid domain
+input → `422 INPUT_INVALID`; missing/invalid key → `401 UNAUTHORIZED`;
+exhausted quota → `429 QUOTA_EXHAUSTED`; metering store unavailable →
+`503 METERING_UNAVAILABLE` (fail-closed — never admitted). See
+`docs/HOSTED_API.md` for the full contract.
+
+### API keys
+
+API keys are currently **provisioned manually by the operator** (there is
+no self-serve signup yet). Every tenant receives a **unique**
+cryptographically random key (`plx_…`):
 
 ```bash
-curl -s -X POST http://127.0.0.1:8000/v1/process \
-  -H "Content-Type: application/json" \
-  -d '{broken json'
+# 1. create the quota table (once, idempotent)
+PLATRIXA_METERING_DATABASE_URL=postgresql://… python -m backend.auth.init_metering
+
+# 2. provision one tenant — the raw key is printed EXACTLY ONCE
+PLATRIXA_METERING_DATABASE_URL=postgresql://… \
+  python -m backend.auth.dev_seed_tenant --tenant acme-dev --limit 2000
 ```
 
-```json
-{
-  "api_version": "v1",
-  "error": {"code": "REQUEST_MALFORMED",
-             "message": "request body could not be parsed as a valid process request",
-             "fields": [{"field": "", "reason": "json_invalid"}]}
-}
-```
-
-Authentication: open by default for local development; when the server
-sets `PLATRIXA_DEV_API_KEY`, requests must send that exact value in the
-`X-Platrixa-API-Key` header (401 otherwise, before any processing).
-Per-developer API keys with atomic monthly quota metering are also
-supported (Phase 16): setting `PLATRIXA_METERING_DATABASE_URL` (PostgreSQL;
-run `python -m backend.auth.init_metering` once to create the table)
-activates the metered gate — each request must then present a valid
-per-tenant key (401), within its monthly quota (429 `QUOTA_EXHAUSTED`),
-with fail-closed 503 when the metering store is unavailable. There is no
-billing or automated key issuance yet — see docs/HOSTED_API.md for the
-full contract, states, error table, metering semantics, provider
-configuration, rule-pack configuration, and current limitations.
-
-## Project Identity
-
-**Platrixa** is the financial/accounting reasoning platform being developed in this repository.
-
-Its current architecture includes:
-- Semantic compilation of financial transactions
-- Curriculum-aware normalization
-- Deterministic accounting reasoning (double-entry, single-entry, bill books)
-- Settlement resolution (multi-payment, fraction-based, verbal amounts)
-- GST handling (CGST/SGST/IGST)
-- Multi-payment resolution (cash, bank, NEFT, cheque, fractions)
-- Contradiction detection and safety/closure gates
-- Provenance tracking
-- Trusted curricular knowledge resolution
-- Student-facing pedagogical projection
-
-The next architectural expansion is: **stateful multi-transaction accounting processing**.
-
----
-
-## Modular Architecture Migration
-
-This project is being migrated from a single 1,300-line `app.py` into the
-modular architecture below, **one module at a time**, with every existing
-feature preserved exactly. See the bottom of this file for the rule this
-migration follows.
-
-### Target architecture
+The developer sends the key on every call:
 
 ```
-Platrixa/
-    core/          ✅ DONE (this delivery)
-    ingestion/     ⏳ not started
-    gateway/       ⏳ not started
-    timeline/      ⏳ not started
-    intelligence/  ⏳ not started
-    memo/          ⏳ not started
-    exports/       ⏳ not started
-    backend/       ⏳ not started
-    frontend/      ⏳ not started
-    tests/         🔶 started (core only so far)
+X-Platrixa-API-Key: <their-key>
 ```
 
-## Status: Module 1 — `core/` ✅
+**Storage:** the server stores only the SHA-256 hash of the key — never
+the plaintext. The raw key is not recoverable from the database and is
+never logged or echoed. Treat the printed key like a password: it cannot
+be re-displayed later (manual replacement = provision a new key).
 
-**What was built:**
-- `core/exceptions.py` — full custom exception hierarchy (`ProviderError`,
-  `DocumentParsingError`, `ResponseValidationError`, `ExportGenerationError`,
-  etc.), ready for `gateway/`, `ingestion/`, and `exports/` to raise instead
-  of bare `ValueError`/`RuntimeError`.
-- `core/config.py` — `EngineSettings` (typed, immutable config: model IDs,
-  timeouts, retry policy, chunk sizes) + a `SecretsProvider` abstraction
-  (`StreamlitSecretsProvider`, `EnvSecretsProvider`) so secrets can come
-  from Streamlit today and environment variables / a secrets manager in
-  the future backend, without other code changing.
-- `core/constants.py` — `GROUNDING_RULE`, `DEFAULT_SESSION_STATE`, `ERROR_RESPONSE_MARKERS`.
-- `core/logging.py` — standard Python logging setup + `ProviderEventLogger`
-  with an injectable sink (`StreamlitSessionLogSink` today, `InMemoryLogSink`
-  for tests/backend later) + `get_provider_health()`.
-- `core/utilities.py` — `hash_text`, `CacheManager` (generic get-or-compute
-  cache over any mutable mapping), `retry` (retry-with-backoff).
-- `core/validation.py` — `is_error_response`, `contains_error_marker`,
-  `extract_json` (robust JSON-from-AI-response parsing).
+### Metering
 
-## Migration rule (applies to every future module)
+Each tenant has a monthly quota (`monthly_limit`) counted in UTC `YYYY-MM`
+buckets. One unit is consumed per **admitted** request; authentication
+failures consume zero. Quota reservation is a single atomic database
+UPDATE, so concurrent requests can never exceed the limit. When exhausted:
 
-1. Build one production module.
-2. Integrate it into `app.py` (replace the corresponding inline code with
-   imports; keep every existing name/behavior working).
-3. Verify compatibility (compile check + unit tests).
-4. Stop and wait for confirmation before starting the next module.
+```
+HTTP/1.1 429 Too Many Requests
+{"api_version": "v1", "error": {"code": "QUOTA_EXHAUSTED",
+ "message": "monthly quota exhausted for this API key"}}
+```
 
-## Suggested next module
+Month rollover resets usage automatically inside the reservation (no
+scheduler, no cross-month leakage).
 
-`gateway/` — Provider Manager, Router, Retry Engine, Circuit Breaker, Model
-Selector. This absorbs Section 3 of `app.py` (`call_google_ai_studio`,
-`call_groq_engine`, `_openrouter_request`, `call_openrouter_engine`,
-`call_ai_with_fallback`), adds a real circuit breaker + cooldown (currently
-missing — only retry-with-backoff exists today), and is what eventually
-lets you plug in your own AI Gateway alongside Google/Groq/OpenRouter.
+### 2. Python (local library)
+
+```python
+from platrixa import Platrixa
+
+p = Platrixa()
+result = p.process("Paid ₹12,500 to Raj for office furniture by cheque.")
+print(result.status)          # VERIFIED / REVIEW_REQUIRED / BLOCKED …
+print(result.interpretation)  # 18-field structured interpretation
+print(result.accounting)      # deterministic accounting result
+print(result.to_dict())       # JSON-safe projection
+```
+
+The Python library runs the same deterministic pipeline locally and is a
+separate surface from the hosted API.
+
+### 3. CLI
+
+```bash
+python -m platrixa process "Paid ₹12,500 to Raj for office furniture by cheque."
+python -m platrixa --version
+```
+
+## Do I need to download the model?
+
+**No — not for the hosted API.** The model is an internal implementation
+detail behind the semantic pipeline; hosted-API developers never download
+or manage model weights.
+
+Local execution via the Python library is supported for development but
+requires installing the model dependencies and letting the provider load
+weights on first use (`provider="auto"` resolves the configured provider).
+Direct model download is not the documented integration path.
+
+## Current limitations
+
+NOT currently available:
+
+- self-serve signup, billing automation, payment webhooks
+- self-serve dashboard or API-key rotation UI
+- application-level rate limiting, idempotency keys, exactly-once
+  request deduplication (monthly quota metering is not a rate limiter)
+- enterprise SLA guarantees or uptime commitments
+- consumer financial advice — Platrixa produces accounting semantics,
+  not investment advice, by design
+
+Breadth: Platrixa's proven domain is FYJC-style transaction language.
+Bank narration, invoice, and broader financial-document support are under
+evaluation — do not treat them as supported until the Phase 24 foundation
+evaluation and subsequent validation establish evidence.
+
+## Roadmap (short)
+
+1. Manual-provisioning maturity: usage endpoint + operator tooling.
+2. Billing: payment → automated tenant provisioning (webhook).
+3. Self-serve dashboard with key rotation.
+4. Breadth expansion gated on evaluation evidence.
+
+Historical phase reports and research live in `reports/`, `docs/`, and
+`training/` — the root README reflects only the current product.
+
+## Hosting & deployment
+
+The service is a long-running FastAPI app (`uvicorn api.main:app`), reads
+`PORT`, and needs PostgreSQL only when metering is enabled
+(`PLATRIXA_METERING_DATABASE_URL`) or for the application datastore
+(`DATABASE_URL`). Model/provider credentials are server-side environment
+secrets and are never exposed through the API. See `DEPLOYMENT.md` and
+`docs/HOSTED_API.md` for the complete operational contract.
