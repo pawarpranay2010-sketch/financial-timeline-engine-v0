@@ -76,6 +76,22 @@ INVENTORY_TURNOVER = "Inventory Turnover"
 RECEIVABLES_TURNOVER = "Receivables Turnover"
 PAYABLES_TURNOVER = "Payables Turnover"
 
+# Authority Expansion batch 2 (Phase E, 2026-09): canonical targets the
+# extended registry did not yet carry. One concept, ONE definition -
+# growth formulas reuse the legacy C++ 'Revenue Growth' semantics via
+# CPP_KEY_ALIASES; no variant formulas are registered.
+ROI = "ROI"
+FREE_CASH_FLOW = "Free Cash Flow"
+DSCR = "DSCR"
+REVENUE_GROWTH = "Revenue Growth"
+PROFIT_GROWTH = "Profit Growth"
+INVESTMENT_COST = "Investment Cost"
+OPERATING_CASH_FLOW = "Operating Cash Flow"
+CAPITAL_EXPENDITURE = "Capital Expenditure"
+DEBT_SERVICE = "Debt Service"
+PREVIOUS_REVENUE = "Previous Revenue"
+PREVIOUS_NET_PROFIT = "Previous Net Profit"
+
 NET_PROFIT = "Net Profit"
 REVENUE = "Revenue"
 EQUITY = "Equity"
@@ -458,6 +474,102 @@ def build_extended_registry() -> FormulaRegistry:
         source_ref="Payables Turnover = COGS / Average Payables",
     ))
 
+    # ------------------------------------------------------------------
+    # Authority Expansion batch 2 (Phase E, 2026-09): deterministic
+    # Formula Authority additions. Single-op formulas (ROI, Free Cash
+    # Flow, DSCR) run through the generic op-driven path on BOTH sides
+    # (Python expression + C++ op field). The two growth formulas are
+    # FORWARD-ONLY on both sides: the C++ legacy growth entries are
+    # op-less with no registered inverse (fail-closed reverse solving),
+    # so the Python definitions register no inverses either - the two
+    # authorities cannot drift apart on reverse claims. Growth from a
+    # non-positive base is rejected by the denominator zero-check only
+    # (the legacy C++ growth policy); sign interpretation of negative
+    # bases is a documented limitation, never silently reinterpreted.
+    # ------------------------------------------------------------------
+    reg.register(FormulaDefinition(
+        formula_id="ROI",
+        target=ROI,
+        description="Return on Investment = Net Profit / Investment Cost "
+                    "(percentage)",
+        expression="Net Profit / Investment Cost",
+        dependencies=[NET_PROFIT, INVESTMENT_COST],
+        inverses={
+            NET_PROFIT: "ROI * Investment Cost / 100",
+            INVESTMENT_COST: "Net Profit / (ROI / 100)",
+        },
+        unit_kind="percent",
+        period_mode="same",
+        denominator_constraints=[INVESTMENT_COST],
+        version="1.0",
+        source_ref="ROI = Net Profit / Investment Cost x 100",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="FREE_CASH_FLOW",
+        target=FREE_CASH_FLOW,
+        description="Free Cash Flow = Operating Cash Flow - Capital "
+                    "Expenditure",
+        expression="Operating Cash Flow - Capital Expenditure",
+        dependencies=[OPERATING_CASH_FLOW, CAPITAL_EXPENDITURE],
+        inverses={
+            OPERATING_CASH_FLOW: "Free Cash Flow + Capital Expenditure",
+            CAPITAL_EXPENDITURE: "Operating Cash Flow - Free Cash Flow",
+        },
+        unit_kind="amount",
+        period_mode="same",
+        version="1.0",
+        source_ref="FCF = Cash from Operations - Capital Expenditure",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="DSCR",
+        target=DSCR,
+        description="Debt Service Coverage Ratio = Operating Cash Flow / "
+                    "Debt Service",
+        expression="Operating Cash Flow / Debt Service",
+        dependencies=[OPERATING_CASH_FLOW, DEBT_SERVICE],
+        inverses={
+            OPERATING_CASH_FLOW: "DSCR * Debt Service",
+            DEBT_SERVICE: "Operating Cash Flow / DSCR",
+        },
+        unit_kind="ratio",
+        period_mode="same",
+        denominator_constraints=[DEBT_SERVICE],
+        version="1.0",
+        source_ref="DSCR = Operating Cash Flow / Total Debt Service",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="REVENUE_GROWTH",
+        target=REVENUE_GROWTH,
+        description="Revenue Growth = (Revenue - Previous Revenue) / "
+                    "Previous Revenue (percentage; forward-only)",
+        expression="(Revenue - Previous Revenue) / Previous Revenue",
+        dependencies=[REVENUE, PREVIOUS_REVENUE],
+        unit_kind="percent",
+        period_mode="different",
+        denominator_constraints=[PREVIOUS_REVENUE],
+        version="1.0",
+        source_ref="Growth = (Current - Prior) / Prior x 100 "
+                   "(period-over-period)",
+    ))
+
+    reg.register(FormulaDefinition(
+        formula_id="PROFIT_GROWTH",
+        target=PROFIT_GROWTH,
+        description="Profit Growth = (Net Profit - Previous Net Profit) / "
+                    "Previous Net Profit (percentage; forward-only)",
+        expression="(Net Profit - Previous Net Profit) / Previous Net Profit",
+        dependencies=[NET_PROFIT, PREVIOUS_NET_PROFIT],
+        unit_kind="percent",
+        period_mode="different",
+        denominator_constraints=[PREVIOUS_NET_PROFIT],
+        version="1.0",
+        source_ref="Growth = (Current - Prior) / Prior x 100 "
+                   "(period-over-period)",
+    ))
+
     # Sprint 12D section F: registered algebraic opposite links so
     # Revenue + Loss -> Profit and Profit + Revenue -> Loss are solvable
     # deterministically (never guessed; declared relationships only).
@@ -660,6 +772,54 @@ EXTENDED_FORMULA_METADATA: Dict[str, Dict[str, Any]] = {
         "status_requirement": "weakest-link",
         "lineage_behavior": "full",
         "excel_template": "Cost of Sales / Average Payables",
+    },
+    # Authority Expansion batch 2 (Phase E, 2026-09): metadata for the
+    # five new formula families (12C section-8 shape, unchanged).
+    "ROI": {
+        "name": ROI,
+        "output_kind": "percent",
+        "expected_input_kinds": {NET_PROFIT: "amount",
+                                 INVESTMENT_COST: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Net Profit / Investment Cost",
+    },
+    "FREE_CASH_FLOW": {
+        "name": FREE_CASH_FLOW,
+        "output_kind": "amount",
+        "expected_input_kinds": {OPERATING_CASH_FLOW: "amount",
+                                 CAPITAL_EXPENDITURE: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Operating Cash Flow - Capital Expenditure",
+    },
+    "DSCR": {
+        "name": DSCR,
+        "output_kind": "ratio",
+        "expected_input_kinds": {OPERATING_CASH_FLOW: "amount",
+                                 DEBT_SERVICE: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "Operating Cash Flow / Debt Service",
+    },
+    "REVENUE_GROWTH": {
+        "name": REVENUE_GROWTH,
+        "output_kind": "percent",
+        "expected_input_kinds": {REVENUE: "amount",
+                                 PREVIOUS_REVENUE: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "(Revenue - Previous Revenue) / Previous Revenue",
+    },
+    "PROFIT_GROWTH": {
+        "name": PROFIT_GROWTH,
+        "output_kind": "percent",
+        "expected_input_kinds": {NET_PROFIT: "amount",
+                                 PREVIOUS_NET_PROFIT: "amount"},
+        "status_requirement": "weakest-link",
+        "lineage_behavior": "full",
+        "excel_template": "(Net Profit - Previous Net Profit) "
+                          "/ Previous Net Profit",
     },
 }
 

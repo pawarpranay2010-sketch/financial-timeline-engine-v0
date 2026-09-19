@@ -744,11 +744,95 @@ BK_PATTERNS: List[Dict[str, Any]] = [
     {
         "key": "INCOME_RECEIVED",
         "label": "Income received",
+        # Authority Expansion batch 1 (2026-09): the '... in advance'
+        # wordings MUST be checked first (the INCOME_RECEIVED_IN_ADVANCE
+        # entry sits later in this table) - 'Interest received in advance'
+        # contains the contiguous phrase 'interest received', and the
+        # generic income receipt must never claim it (income received
+        # before it is earned is a liability, not income).
         "when": ("received commission", "commission received",
                  "received interest", "interest received",
                  "received rent", "rent received",
                  "received dividend", "dividend received"),
         "debit": ["Cash", "Bank"], "credit": ["_INCOME_ACCOUNT"],
+        "not_when": ("in advance",),
+    },
+    # ------------------------------------------------------------------
+    # Authority Expansion batch 1 (2026-09): banking charges, credit
+    # notes, accrued/advance income. Every entry reuses the existing
+    # declarative pattern contract (canonical accounts, variable-account
+    # placeholders, party placeholders) - no new machinery. These entries
+    # sit BEFORE the PAID_TO/RECEIVED_FROM fallbacks (same ordering rule
+    # as the expense/income/cheque patterns: a named expense or an
+    # advance/accrual wording is never collapsed into a party payment).
+    # Behaviors pinned by scripts/fte_authority_expansion_batch1_test.py.
+    # ------------------------------------------------------------------
+    {
+        "key": "BANK_CHARGES_PAID",
+        "label": "Bank charges paid",
+        "when": ("paid bank charges", "bank charges paid",
+                 "paid banking charges", "paid bank commission",
+                 "paid service charges", "bank charges",
+                 "bank commission", "service charges"),
+        "debit": ["_EXPENSE_ACCOUNT"], "credit": ["Cash", "Bank"],
+    },
+    {
+        "key": "ACCRUED_INCOME_RECEIVED",
+        "label": "Previously accrued income received",
+        # Receipt of income accrued in an EARLIER period: Cash/Bank in,
+        # the Accrued Income asset is settled. Must be checked before the
+        # accrual pattern (the same 'accrued' word appears in both).
+        "when": ("accrued interest received", "accrued commission received",
+                 "accrued rent received", "accrued income received",
+                 "received accrued interest", "received accrued commission",
+                 "received accrued rent", "received accrued income",
+                 "accrued but not received earlier",
+                 "due but not received earlier"),
+        "debit": ["Cash", "Bank"], "credit": ["Accrued Income"],
+    },
+    {
+        "key": "ACCRUED_INCOME_PROVIDED",
+        "label": "Income earned but not yet received",
+        # Accrual-basis treatment (IAS 1 / Ind AS 1 accrual concept): the
+        # income is recognized when earned, not when cash arrives. The
+        # credit resolves through _INCOME_ACCOUNT_WORDS so the SPECIFIC
+        # income account (Interest/Commission/Rent Received) is used.
+        "when": ("accrued but not received", "due but not received",
+                 "income due but not received", "earned but not received",
+                 "accrued income", "income accrued"),
+        "not_when": ("received earlier", "due but not received earlier"),
+        "debit": ["Accrued Income"], "credit": ["_INCOME_ACCOUNT"],
+    },
+    {
+        "key": "INCOME_RECEIVED_IN_ADVANCE",
+        "label": "Income received in advance",
+        # Present obligation to perform/earn later (IAS 37 / Ind AS 37
+        # liability concept; FYJC 'income received in advance').
+        "when": ("received in advance", "income received in advance",
+                 "rent in advance", "interest in advance",
+                 "commission in advance", "salary in advance",
+                 "rent received in advance", "interest received in advance",
+                 "commission received in advance"),
+        "debit": ["Cash", "Bank"], "credit": ["Unearned Income"],
+    },
+    {
+        "key": "CREDIT_NOTE_ISSUED",
+        "label": "Credit note issued to customer",
+        # Same deterministic treatment as a sales return (Dr Sales Returns
+        # / Cr the customer) - a credit note is the document form of that
+        # return. Mirrors the SALES_RETURN line specs exactly.
+        "when": ("issued a credit note", "issued credit note",
+                 "credit note issued to", "credit note to"),
+        "debit": ["Sales Returns"], "credit": [{"party": "giver"}],
+    },
+    {
+        "key": "CREDIT_NOTE_RECEIVED",
+        "label": "Credit note received from supplier",
+        # Same deterministic treatment as a purchase return (Dr the
+        # supplier / Cr Purchase Returns). Mirrors PURCHASE_RETURN.
+        "when": ("received a credit note", "received credit note",
+                 "credit note received from", "credit note from"),
+        "debit": [{"party": "giver"}], "credit": ["Purchase Returns"],
     },
     {
         "key": "PAID_TO",
@@ -905,6 +989,18 @@ _EXPENSE_ACCOUNT_WORDS: List[Tuple[str, str]] = [
     ("wages", "Wages"), ("insurance", "Insurance"),
     ("advertisement", "Advertisement"), ("electricity", "Electricity"),
     ("office expenses", "Office Expenses"), ("office", "Office Expenses"),
+    # Authority Expansion batch 1 (2026-09): bank-related charges are a
+    # nominal expense. The bank family sits BEFORE the generic
+    # 'commission'/'interest' words because _resolve_variable_account
+    # is FIRST-MATCH-IN-LIST-ORDER - 'bank commission' must resolve to
+    # Bank Charges, never the generic Commission Paid (same ordering
+    # priority as the carriage family below).
+    ("bank commission", "Bank Charges"),
+    ("bank charges", "Bank Charges"),
+    ("bank charge", "Bank Charges"),
+    ("bank fees", "Bank Charges"),
+    ("banking charges", "Bank Charges"),
+    ("service charges", "Bank Charges"),
     ("general expenses", "General Expenses"), ("commission", "Commission Paid"),
     ("interest", "Interest Paid"),
     # longest first: 'carriage outward'/'carriage on sales' must win over
@@ -959,6 +1055,13 @@ _INCOME_ACCOUNT_WORDS: List[Tuple[str, str]] = [
     ("commission", "Commission Received"), ("interest", "Interest Received"),
     ("rent", "Rent Received"), ("discount", "Discount Received"),
     ("dividend", "Dividend Received"),
+    # Authority Expansion batch 1 (2026-09): accrued-income wordings resolve
+    # through the same variable-income machinery (Dr Accrued Income /
+    # Cr <income> is handled by the dedicated pattern; these words feed the
+    # account resolution).
+    ("interest accrued", "Interest Received"),
+    ("commission accrued", "Commission Received"),
+    ("rent accrued", "Rent Received"),
 ]
 
 
@@ -1204,6 +1307,16 @@ def _party_from_text(text: str) -> Optional[str]:
 
 def _resolve_cash_bank(text: str) -> str:
     low = " " + str(text or "").lower() + " "
+    # Authority Expansion batch 1 (2026-09): the word 'bank' inside a
+    # registered ACCOUNT name ('bank charges', 'bank commission') is
+    # account vocabulary, not a settlement channel. Registered bank-
+    # named expense phrases are stripped before the settlement test so
+    # 'Paid bank charges in cash' credits Cash while 'Paid bank charges
+    # by cheque' still credits Bank. Registry-driven: any future bank-
+    # named account phrase is handled without touching this function.
+    for phrase, _account in _EXPENSE_ACCOUNT_WORDS:
+        if "bank" in phrase:
+            low = low.replace(phrase, " ")
     if "bank" in low or "cheque" in low or "check" in low:
         return "Bank"
     return "Cash"
@@ -1469,6 +1582,18 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
                 "why": ("The installation charge names more than one asset "
                         "to capitalise into. Platrixa never guesses the split."),
             }
+    # Authority Expansion batch 1 (2026-09): 'Paid Rs.500 to Raj for
+    # office furniture by cheque' BUYS the named asset - payment for a
+    # single named asset is an asset purchase (the party is the seller),
+    # never a party payment or an office expense. Checked AFTER the
+    # installation-capitalisation branch so a capitalised installation
+    # wording keeps priority; the expense shortcut above already stands
+    # down for asset clauses.
+    if assets and ("paid" in low or "cheque" in low or "check" in low) \
+            and "sold" not in low and "sale of" not in low \
+            and "returned" not in low \
+            and _for_clause_object(low)[0] != "expense":
+        return _asset_pattern(text, assets, purchase=True)
     # goods-return wording ('returned ... to <party>' = purchase return;
     # '<party> returned goods' = sales return) - structural, registry-free.
     returns = _returns_rule(text)
@@ -1906,7 +2031,12 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
     # marks a personal bill and is never silently booked as a business
     # expense.
     if "paid" in low and " for " in low:
-        if _expense_near_for(low) is not None:
+        # Authority Expansion batch 1 (2026-09): the 'paid ... for ...'
+        # clause EXPENSE shortcut never fires when the clause names a
+        # FIXED ASSET ('for office furniture' buys furniture - an asset,
+        # not an office expense). The dedicated asset branch below owns
+        # the wording; the expense family keeps everything else.
+        if _for_clause_object(low)[0] == "expense":
             return {
                 "key": "EXPENSE_PAID",
                 "label": "Expense paid",
@@ -1922,6 +2052,15 @@ def classify_bk_type(question: str) -> Optional[Dict[str, Any]]:
             if direction == "sale" and "PURCHASE" in cand["key"]:
                 continue
             if direction == "purchase" and "SALE" in cand["key"]:
+                continue
+            # NEGATIVE context ('not_when') - a phrase may appear inside a
+            # more specific wording that a LATER entry owns (e.g. 'interest
+            # received' inside 'interest received in advance'). A matching
+            # phrase inside a not_when context is not this pattern's
+            # transaction; the matcher keeps scanning instead of claiming
+            # it (fail-closed ordering, no earlier-entry shadowing).
+            not_when = cand.get("not_when") or ()
+            if any(neg in low for neg in not_when):
                 continue
             return dict(cand)
         # Sprint 15C P0 fallbacks: the amount often sits BETWEEN the verb
@@ -4336,30 +4475,66 @@ def _build_personal_split_journal(
     }
 
 
-def _expense_near_for(low: str) -> Optional[str]:
-    """The REGISTERED expense word adjacent to 'for' in a 'paid ...
-    for ...' / 'paid <expense> ... for ...' clause, or None. A
-    possessive-pronoun bill ('paid his mobile bill') is a personal bill,
-    never silently booked as a business expense (Sprint 15I-TX)."""
-    # Sprint 15I-TX: the amount between 'paid' and 'for' carries a
+def _for_clause_object(low: str) -> Tuple[str, Optional[str]]:
+    """What the 'paid ... for ...' clause bought, by HEAD NOUN.
+
+    Returns ("expense", account) when a REGISTERED expense word is the
+    operative noun of the clause ('vehicle insurance', 'furniture
+    repairs' - repairs to an asset are expensed; the asset word is only
+    a modifier), ("asset", account) when the clause names exactly one
+    fixed asset and no expense word ('office furniture'), or
+    ("other", None) when the clause is absent or undecidable. A
+    possessive-pronoun bill ('paid his mobile bill') is a personal bill
+    and never a business expense (Sprint 15-TX).
+
+    This is the ONE generic 'paid ... for ...' noun resolver: the
+    asset-purchase branch and the EXPENSE_PAID shortcut both consult it
+    (Authority Expansion batch 1, 2026-09), so the two branches can
+    never disagree about the same clause."""
+    # Sprint 15-TX: the amount between 'paid' and 'for' carries a
     # currency period ('paid rs.500 for ...') - a '[^.;]' clause class
     # would stop at the 'rs.' dot and miss the clause entirely. Only
-    # semicolons/newlines are real clause breaks here.
-    # The tail after 'for' is GREEDY so the registered expense word
-    # ('paid rs.500 for MOBILE recharge') is inside the scanned clause -
-    # a non-greedy tail would stop at 'for' and miss the expense word.
+    # semicolons/newlines are relevant. The tail after 'for' is GREEDY
+    # so a registered word later in the clause ('paid rs.500 for MOBILE
+    # recharge') is inside the scanned clause - a non-greedy tail would
+    # stop at 'for' and miss it.
     m = re.search(r"\bpaid\b[^;\n]{0,80}?\bfor\b[^;\n]{0,80}\b", low)
     if m is None:
-        return None
+        return "other", None
     clause = m.group(0)
+    # Expense words first: the registered expense vocabulary is the
+    # stronger signal and the deterministic tie-break ('furniture and
+    # repairs' is expensed, never capitalised by guesswork).
     for phrase, account in _EXPENSE_ACCOUNT_WORDS:
         for mm in re.finditer(
                 r"(?<![a-z])" + re.escape(phrase) + r"(?![a-z])", clause):
             before = clause[max(0, mm.start() - 10):mm.start()]
             if re.search(r"\b(?:his|her|their|its|my|our)\b\s*$", before):
                 continue
-            return account
-    return None
+            # Head-noun rule: an expense word immediately modified by a
+            # following asset word ('office furniture') is an attribute
+            # of the asset, not the operative noun - the asset branch
+            # owns such clauses. Only the word DIRECTLY after counts
+            # ('insurance by the vehicle dealer' keeps insurance as the
+            # head: 'vehicle' there is not the modifier).
+            m2 = re.match(r"\s*(?:the\s+|a\s+|an\s+)?([a-z]+)",
+                          clause[mm.end():])
+            if m2 and named_assets(" " + m2.group(1) + " "):
+                continue
+            return "expense", account
+    assets = named_assets(clause)
+    if len(assets) == 1:
+        return "asset", assets[0]
+    return "other", None
+
+
+def _expense_near_for(low: str) -> Optional[str]:
+    """Thin wrapper kept for the possessive-pronoun rule: the REGISTERED
+    expense word of the 'paid ... for ...' clause, or None. The generic
+    head-noun resolver is _for_clause_object; that function now owns the
+    clause-scanning contract this helper used to carry."""
+    kind, account = _for_clause_object(low)
+    return account if kind == "expense" else None
 
 
 _GST_PARTIAL_PAYMENT_RE = re.compile(

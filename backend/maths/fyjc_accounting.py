@@ -76,6 +76,10 @@ ACCOUNT_ROLES: Dict[str, str] = {
     "Building": ASSET, "Land": ASSET, "Vehicle": ASSET, "Equipment": ASSET,
     "Investments": ASSET, "Prepaid Expenses": ASSET, "Bills Receivable": ASSET,
     "Goodwill": ASSET, "Patents": ASSET, "Office Equipment": ASSET,
+    # Authority Expansion batch 1 (2026-09): income earned but not yet
+    # received is a receivable (accrual basis; IAS 1/Ind AS 1 accrual
+    # concept) - an asset until settled.
+    "Accrued Income": ASSET,
     # expenses
     "Purchases": EXPENSE, "Rent": EXPENSE, "Salaries": EXPENSE,
     "Wages": EXPENSE, "Insurance": EXPENSE, "Advertisement": EXPENSE,
@@ -87,6 +91,10 @@ ACCOUNT_ROLES: Dict[str, str] = {
     "Postage": EXPENSE, "Stationery": EXPENSE, "Audit Fees": EXPENSE,
     "Legal Fees": EXPENSE, "Fuel": EXPENSE, "Rent Paid": EXPENSE,
     "Loss on Sale of Asset": EXPENSE, "Income Tax": EXPENSE,
+    # Authority Expansion batch 1 (2026-09): banking/bank-related charge is a
+    # nominal expense of the business (IFRS/Ind AS presentation as finance
+    # cost or other expense; deterministic FYJC treatment: expense debited).
+    "Bank Charges": EXPENSE,
     # Sprint 15I-J vocabulary expansion: unambiguous FYJC expense accounts
     # that student wording commonly names with synonyms.
     "Conveyance": EXPENSE, "Printing": EXPENSE,
@@ -112,6 +120,10 @@ ACCOUNT_ROLES: Dict[str, str] = {
     "Sales Returns": CONTRA_INCOME, "Returns Inward": CONTRA_INCOME,
     "Purchase Returns": CONTRA_EXPENSE, "Returns Outward": CONTRA_EXPENSE,
     "Provision for Depreciation": CONTRA_ASSET,
+    # Authority Expansion batch 1 (2026-09): income received before it is
+    # earned is an obligation to perform (IAS 37/Ind AS 37 present-obligation
+    # concept; FYJC 'income received in advance') - a liability. This is the
+    # existing 'Unearned Income' account kept as the single canonical name.
 }
 
 ACCOUNT_ALIASES: Dict[str, str] = {
@@ -147,6 +159,13 @@ ACCOUNT_ALIASES: Dict[str, str] = {
     "purchase returns": "Purchase Returns", "returns outward": "Purchase Returns",
     "commission received": "Commission Received",
     "interest received": "Interest Received", "interest income": "Interest Received",
+    # Authority Expansion batch 1 (2026-09): banking-charge synonyms - each
+    # maps to the ONE canonical 'Bank Charges' expense account.
+    "bank charges": "Bank Charges", "bank charge": "Bank Charges",
+    "bank commission": "Bank Charges", "bank fees": "Bank Charges",
+    "bank fee": "Bank Charges", "service charges": "Bank Charges",
+    "accrued income": "Accrued Income",
+    "income accrued": "Accrued Income",
     # Sprint 15I-J synonym layer - each alias has ONE explicit accounting
     # meaning and is pinned by the 15J coverage matrix.
     "conveyance": "Conveyance", "conveyance expenses": "Conveyance",

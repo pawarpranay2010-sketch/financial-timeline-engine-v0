@@ -65,7 +65,8 @@ CPP_COVERED_KEYS = frozenset({
     # legacy registry (9)
     "ROE", "ROA", "Profit Margin", "Operating Margin", "Current Ratio",
     "Debt to Equity", "Revenue Growth", "EPS Growth", "CAGR",
-    # extended registry (24, Sprint 12A + Sprint 12F additive coverage)
+    # extended registry (27, Sprint 12A + Sprint 12F additive coverage
+    # + Authority Expansion batch 2)
     "PROFIT", "LOSS", "GROSS_PROFIT", "WORKING_CAPITAL", "ASSET_TURNOVER",
     "EQUITY_MULTIPLIER", "PROFIT_MARGIN", "ROA_TOTAL_ASSETS",
     "GROSS_MARGIN", "EBITDA_MARGIN", "NET_MARGIN", "EPS", "DEBT_TO_ASSETS",
@@ -73,6 +74,9 @@ CPP_COVERED_KEYS = frozenset({
     "PAYABLES_TURNOVER", "QUICK_RATIO", "DUPONT_PROFIT_MARGIN",
     "DUPONT_ASSET_TURNOVER", "DUPONT_EQUITY_MULTIPLIER", "DUPONT_ROE",
     "PROFIT_LOSS_OPPOSITE", "LOSS_PROFIT_OPPOSITE",
+    # Authority Expansion batch 2 (Phase E, 2026-09): single-op entries
+    # plus the dedicated forward-only profit-growth branch.
+    "ROI", "FREE_CASH_FLOW", "DSCR", "PROFIT_GROWTH",
 })
 
 # Deterministic formula_id -> C++ registry key mapping. The Python 12C/12D
@@ -83,6 +87,10 @@ CPP_KEY_ALIASES = {
     "CURRENT_RATIO": "Current Ratio",
     "DEBT_TO_EQUITY": "Debt to Equity",
     "OPERATING_MARGIN": "Operating Margin",
+    # Authority Expansion batch 2: the canonical growth concepts reuse
+    # the legacy C++ growth entries (same mathematical definition - one
+    # concept, one C++ implementation, never duplicated).
+    "REVENUE_GROWTH": "Revenue Growth",
 }
 
 # ---------------------------------------------------------------------------

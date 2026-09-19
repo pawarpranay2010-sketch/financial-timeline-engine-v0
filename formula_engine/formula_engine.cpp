@@ -435,6 +435,29 @@ static std::vector<FormulaDef> build_extended_registry() {
          {"Cost of Sales", "Average Payables"},
          "Cost of Sales ÷ Average Payables", "ratio", 2, "same",
          {"Average Payables"}, "div", "Payables Turnover"},
+        // ---- Authority Expansion batch 2 (Phase E, 2026-09) ----
+        // Single-op entries: the generic op-driven path computes them
+        // with the same registered-inverse semantics as the Python
+        // registry (zero denominator rejected in validate()).
+        {"ROI", "ROI", {"Net Profit", "Investment Cost"},
+         "Net Profit ÷ Investment Cost × 100", "percent", 2, "same",
+         {"Investment Cost"}, "div", "ROI"},
+        {"FREE_CASH_FLOW", "Free Cash Flow",
+         {"Operating Cash Flow", "Capital Expenditure"},
+         "Operating Cash Flow − Capital Expenditure", "amount", 2, "same",
+         {}, "sub", "Free Cash Flow"},
+        {"DSCR", "DSCR", {"Operating Cash Flow", "Debt Service"},
+         "Operating Cash Flow ÷ Debt Service", "ratio", 2, "same",
+         {"Debt Service"}, "div", "DSCR"},
+        // Profit Growth is FORWARD-ONLY (op-less dedicated branch below):
+        // identical policy to the legacy growth entries - growth from a
+        // non-positive base is a documented limitation, never silently
+        // reinterpreted, and no reverse solve is registered.
+        {"PROFIT_GROWTH", "Profit Growth",
+         {"Net Profit", "Previous Net Profit"},
+         "(Net Profit − Previous Net Profit) ÷ Previous Net Profit × 100",
+         "percent", 2, "different", {"Previous Net Profit"}, "",
+         "Profit Growth"},
         // Quick Ratio = (Current Assets - Inventory) / Current Liabilities.
         // No binary op (3 inputs); dedicated compute + registered-inverse
         // branches (Current Assets and Current Liabilities only).
@@ -734,6 +757,12 @@ static Result compute(const FormulaDef& def,
         steps.push_back("CAGR = " + display_value(raw, def));
     } else if (def.key == "Revenue Growth") {
         raw = val("Revenue") / val("Previous Revenue") - 1.0L;
+        steps.push_back(def.display_name + " = " + def.formula);
+        steps.push_back(def.display_name + " = " + display_value(raw, def));
+    } else if (def.key == "PROFIT_GROWTH") {
+        // Authority Expansion batch 2 (Phase E): same forward-only
+        // semantics as the legacy growth entries above.
+        raw = val("Net Profit") / val("Previous Net Profit") - 1.0L;
         steps.push_back(def.display_name + " = " + def.formula);
         steps.push_back(def.display_name + " = " + display_value(raw, def));
     } else if (def.key == "EPS Growth") {

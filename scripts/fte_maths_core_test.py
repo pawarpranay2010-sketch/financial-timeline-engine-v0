@@ -1096,10 +1096,14 @@ def test_l_cpp():
     out = subprocess.run([bin_path, "--registry-ext"], capture_output=True,
                          text=True, timeout=30)
     ext = json.loads(out.stdout)
-    check("L1b. --registry-ext returns 24 formulas (Sprint 12F coverage)",
-          len(ext) == 24, str(len(ext)))
+    # Authority Expansion batch 2 (Phase E, 2026-09): the Sprint 12F
+    # extended coverage grew from 24 to 28 formulas (ROI, Free Cash
+    # Flow, DSCR, PROFIT_GROWTH) - pin updated with the batch, and the
+    # production-gate A3 contract keeps the parity contract derived.
+    check("L1b. --registry-ext returns 28 formulas (Sprint 12F + batch 2)",
+          len(ext) == 28, str(len(ext)))
     keys = {e["metric_key"] for e in ext}
-    check("L1c. extended registry keys (Sprint 12F coverage set)",
+    check("L1c. extended registry keys (Sprint 12F + batch 2 set)",
           keys == {"PROFIT", "LOSS", "GROSS_PROFIT", "WORKING_CAPITAL",
                    "ASSET_TURNOVER", "EQUITY_MULTIPLIER", "PROFIT_MARGIN",
                    "ROA_TOTAL_ASSETS", "GROSS_MARGIN", "EBITDA_MARGIN",
@@ -1109,7 +1113,8 @@ def test_l_cpp():
                    "QUICK_RATIO", "DUPONT_PROFIT_MARGIN",
                    "DUPONT_ASSET_TURNOVER", "DUPONT_EQUITY_MULTIPLIER",
                    "DUPONT_ROE", "PROFIT_LOSS_OPPOSITE",
-                   "LOSS_PROFIT_OPPOSITE"},
+                   "LOSS_PROFIT_OPPOSITE", "ROI", "FREE_CASH_FLOW",
+                   "DSCR", "PROFIT_GROWTH"},
           str(sorted(keys)))
 
     # L2: C++ forward calculation through the Python bridge
