@@ -1,0 +1,30 @@
+{
+  "phase": "G",
+  "created": "2026-09-19",
+  "purpose": "18-field x input-type x event-family coverage matrix. Measures which semantic fields are well covered, under-covered, or context-sensitive across the planned Phase H families. The goal is correct extraction AND correct abstention, not maximally filled fields.",
+  "fields": {
+    "canonical_7": ["transaction_type", "parties", "amounts", "payment_method", "references", "ambiguities", "grounding"],
+    "expanded_11": ["transaction_type_enum", "payment_method_enum", "ambiguity_flags", "referenced_transaction_index", "referenced_party", "referenced_amount", "field_confidences", "overall_confidence", "suggested_status", "safety_flags", "scope_flags"]
+  },
+  "coverage": [
+    {"field": "transaction_type(+_enum)", "bank_narration": "STRONG (skewed: payments dominate - rebalance needed)", "invoice_bill": "STRONG (SALE/PURCHASE/SETTLEMENT)", "receipt_ocr": "MEDIUM (EXPENSE vs PURCHASE confusion risk)", "journal_desc": "STRONG", "api_payload": "STRONG", "context_sensitivity": "REFUND vs RETURN_OUT vs SETTLEMENT wording varies by domain", "defensive_priority": "HIGH (unsupported-family wording must stay UNKNOWN/UNSUPPORTED)"},
+    {"field": "parties", "bank_narration": "MEDIUM (abbreviated/truncated names)", "invoice_bill": "STRONG (structured)", "receipt_ocr": "MEDIUM", "journal_desc": "STRONG", "api_payload": "MEDIUM (masked PII)", "context_sensitivity": "customer vs vendor role is use-case dependent, not stored in contract", "defensive_priority": "HIGH (entity-name-variant class)"},
+    {"field": "amounts", "bank_narration": "MEDIUM (may be absent)", "invoice_bill": "STRONG (multi-line)", "receipt_ocr": "WEAK (OCR digits)", "journal_desc": "STRONG", "api_payload": "STRONG", "context_sensitivity": "multi-instrument splits; tax-inclusive/exclusive unstated", "defensive_priority": "CRITICAL (never guess digits)"},
+    {"field": "payment_method(+_enum)", "bank_narration": "MEDIUM (channel often implicit)", "invoice_bill": "STRONG (terms)", "receipt_ocr": "WEAK", "journal_desc": "STRONG", "api_payload": "STRONG", "context_sensitivity": "bank-named accounts must not flip settlement channel (batch-1 fix)", "defensive_priority": "HIGH (MISSING_PAYMENT_MODE abstention)"},
+    {"field": "references", "bank_narration": "WEAK (rarely present)", "invoice_bill": "STRONG", "receipt_ocr": "WEAK", "journal_desc": "MEDIUM", "api_payload": "STRONG (ids)", "context_sensitivity": "duplicate/idempotency semantics", "defensive_priority": "CRITICAL (invented ids are the classic hallucination)"},
+    {"field": "ambiguities/ambiguity_flags", "bank_narration": "STRONG (highest ambiguity input)", "invoice_bill": "MEDIUM", "receipt_ocr": "STRONG", "journal_desc": "MEDIUM", "api_payload": "LOW", "context_sensitivity": "flag vocabulary is locked (5 values)", "defensive_priority": "CRITICAL (the abstention channel)"},
+    {"field": "grounding", "bank_narration": "STRONG", "invoice_bill": "STRONG", "receipt_ocr": "STRONG", "journal_desc": "STRONG", "api_payload": "STRONG", "context_sensitivity": "evidence must trace to input tokens", "defensive_priority": "CRITICAL (no-invention enforcement)"},
+    {"field": "referenced_transaction_index/party/amount", "bank_narration": "MEDIUM", "invoice_bill": "STRONG", "receipt_ocr": "WEAK", "journal_desc": "MEDIUM", "api_payload": "STRONG", "context_sensitivity": "multi-event sentences; settlement linkage", "defensive_priority": "HIGH"},
+    {"field": "field_confidences/overall_confidence", "bank_narration": "HIGH VARIANCE", "invoice_bill": "HIGH", "receipt_ocr": "LOW-MEDIUM", "journal_desc": "HIGH", "api_payload": "HIGH", "context_sensitivity": "confidence should reflect evidence quality, not fluency", "defensive_priority": "HIGH (calibration on defensive classes)"},
+    {"field": "suggested_status", "bank_narration": "MEDIUM", "invoice_bill": "MEDIUM", "receipt_ocr": "MEDIUM", "journal_desc": "MEDIUM", "api_payload": "MEDIUM", "context_sensitivity": "REVIEW_REQUIRED must fire on ambiguity/conflict, not hide it", "defensive_priority": "CRITICAL"},
+    {"field": "safety_flags/scope_flags", "bank_narration": "MEDIUM", "invoice_bill": "MEDIUM", "receipt_ocr": "MEDIUM", "journal_desc": "MEDIUM", "api_payload": "MEDIUM", "context_sensitivity": "out-of-domain and adversarial detection", "defensive_priority": "HIGH"}
+  ],
+  "well_covered_fields": ["transaction_type", "parties", "amounts", "payment_method", "grounding", "journal_description inputs"],
+  "under_covered_fields": ["references from free text", "referenced_* across multi-event inputs", "field_confidences on messy inputs", "suggested_status calibration on conflict classes"],
+  "fields_requiring_more_defensive_examples": ["amounts (OCR/invention traps)", "references (no-invention traps)", "payment_method (MISSING_PAYMENT_MODE)", "ambiguity_flags (all 5)", "suggested_status (REVIEW_REQUIRED discipline)"],
+  "cannot_safely_populate": [
+    {"field": "payment_method", "from": "inputs with no instrument evidence", "behavior": "UNKNOWN/MISSING_PAYMENT_MODE - never infer"},
+    {"field": "references", "from": "inputs citing no document", "behavior": "empty - never invent ids"},
+    {"field": "amounts", "from": "OCR-corrupted digits", "behavior": "preserve corruption flag / REVIEW_REQUIRED - never repair silently"}
+  ]
+}

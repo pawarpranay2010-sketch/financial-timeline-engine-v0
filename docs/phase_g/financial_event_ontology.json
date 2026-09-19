@@ -1,0 +1,43 @@
+{
+  "phase": "G",
+  "created": "2026-09-19",
+  "purpose": "Financial-event ontology underpinning future dataset construction. Event FAMILIES are finer than the locked contract enum; dataset metadata carries the family, the 18-field IR carries the closest contract value. No contract change.",
+  "locked_contract_vocabularies": {
+    "transaction_type_enum": ["PURCHASE", "SALE", "PAYMENT", "RECEIPT", "CAPITAL", "EXPENSE", "RETURN_OUT", "RETURN_IN", "DISCOUNT_TRADE", "DISCOUNT_CASH", "SETTLEMENT", "GST", "DRAWING", "DEPRECIATION", "UNKNOWN"],
+    "payment_method_enum": ["CASH", "BANK", "CHEQUE", "NEFT", "UPI", "CREDIT", "UNKNOWN"],
+    "ambiguity_flags": ["MISSING_PAYMENT_MODE", "MISSING_AMOUNT", "MISSING_PARTY", "AMBIGUOUS_REFERENCE", "MULTIPLE_INTERPRETATIONS"]
+  },
+  "event_families": [
+    {"family": "PURCHASE", "contract_enum": "PURCHASE", "kernel": "SUPPORTED (goods/asset purchases incl. named-asset head-noun resolution)", "formula_relevance": "none", "knowledge_relevance": "invoice/bill documents", "gap": false},
+    {"family": "SALE", "contract_enum": "SALE", "kernel": "SUPPORTED (incl. asset sale)", "formula_relevance": "revenue facts", "knowledge_relevance": "none", "gap": false},
+    {"family": "PAYMENT", "contract_enum": "PAYMENT", "kernel": "SUPPORTED (party payment, expense, settlement, discount)", "formula_relevance": "none", "knowledge_relevance": "settlement terminology", "gap": false, "note": "existing corpus majority (2669/3598 payment-family rows) - Phase H must rebalance, not expand here"},
+    {"family": "RECEIPT", "contract_enum": "RECEIPT", "kernel": "SUPPORTED", "formula_relevance": "none", "knowledge_relevance": "none", "gap": false},
+    {"family": "EXPENSE", "contract_enum": "EXPENSE", "kernel": "SUPPORTED (expense family incl. bank charges)", "formula_relevance": "margin facts", "knowledge_relevance": "none", "gap": false},
+    {"family": "TRANSFER", "contract_enum": "PAYMENT/RECEIPT + references", "kernel": "SUPPORTED", "formula_relevance": "none", "knowledge_relevance": "none", "gap": false},
+    {"family": "SETTLEMENT", "contract_enum": "SETTLEMENT", "kernel": "SUPPORTED (full/partial, discount; partial w/o balance context REVIEW_REQUIRED)", "formula_relevance": "none", "knowledge_relevance": "settlement", "gap": "partial settlement needs balance context - defensive class"},
+    {"family": "REFUND", "contract_enum": "RETURN_OUT/RETURN_IN", "kernel": "SUPPORTED (refund pattern, batch 1)", "formula_relevance": "none", "knowledge_relevance": "credit note", "gap": false},
+    {"family": "CREDIT_NOTE", "contract_enum": "RETURN_OUT + references", "kernel": "SUPPORTED (batch 1)", "formula_relevance": "none", "knowledge_relevance": "credit note definition", "gap": false},
+    {"family": "BANK_FEE", "contract_enum": "EXPENSE", "kernel": "SUPPORTED (bank charges, batch 1)", "formula_relevance": "none", "knowledge_relevance": "bank statement", "gap": false},
+    {"family": "INTEREST", "contract_enum": "RECEIPT/EXPENSE", "kernel": "PARTIAL (accrued-income receipt supported; interest-on-loan posting NOT_SUPPORTED)", "formula_relevance": "interest facts", "knowledge_relevance": "none", "gap": true},
+    {"family": "ACCRUAL", "contract_enum": "UNKNOWN + suggested_status REVIEW_REQUIRED", "kernel": "PLANNED (ADJUSTMENT_AUTHORITY)", "formula_relevance": "none", "knowledge_relevance": "IAS 37 provisions record", "gap": true, "note": "dataset must teach REVIEW_REQUIRED here, never invented postings"},
+    {"family": "DEPRECIATION", "contract_enum": "DEPRECIATION", "kernel": "PLANNED (ADJUSTMENT_AUTHORITY)", "formula_relevance": "none", "knowledge_relevance": "IAS 16 basis (not yet a knowledge record)", "gap": true},
+    {"family": "LOAN", "contract_enum": "UNKNOWN/PAYMENT + references", "kernel": "NOT_SUPPORTED", "formula_relevance": "DSCR inputs", "knowledge_relevance": "none", "gap": true, "note": "Phase H: teach abstention, not improvised loan postings"},
+    {"family": "INVESTMENT", "contract_enum": "UNKNOWN/CAPITAL", "kernel": "NOT_SUPPORTED", "formula_relevance": "ROI inputs", "knowledge_relevance": "none", "gap": true},
+    {"family": "TAX_GST", "contract_enum": "GST", "kernel": "SUPPORTED for basic GST entries; compositional/ITC cases NOT_SUPPORTED", "formula_relevance": "none", "knowledge_relevance": "none", "gap": "component cases"},
+    {"family": "PAYROLL", "contract_enum": "EXPENSE/PAYMENT", "kernel": "NOT_SUPPORTED", "formula_relevance": "none", "knowledge_relevance": "none", "gap": true, "note": "Phase H: abstention class"},
+    {"family": "ADJUSTMENT_MISC", "contract_enum": "UNKNOWN", "kernel": "PLANNED (ADJUSTMENT_AUTHORITY)", "formula_relevance": "none", "knowledge_relevance": "none", "gap": true},
+    {"family": "DEPOSIT", "contract_enum": "RECEIPT + references", "kernel": "PARTIAL (capital/receipt supported; refundable-security semantics NOT_SUPPORTED)", "formula_relevance": "none", "knowledge_relevance": "none", "gap": true},
+    {"family": "WITHDRAWAL", "contract_enum": "PAYMENT/DRAWING", "kernel": "SUPPORTED (drawing pattern)", "formula_relevance": "none", "knowledge_relevance": "none", "gap": false},
+    {"family": "FX_EVENT", "contract_enum": "UNKNOWN", "kernel": "UNSUPPORTED (multi-currency provably refused; silently parses to bare numbers - recorded limitation)", "formula_relevance": "none", "knowledge_relevance": "none", "gap": true, "note": "Phase H must include FX inputs mapping to UNSUPPORTED/REVIEW_REQUIRED, never numeric guesses"},
+    {"family": "CAPITAL_CONTRIBUTION", "contract_enum": "CAPITAL", "kernel": "SUPPORTED", "formula_relevance": "equity facts", "knowledge_relevance": "equity definition", "gap": false},
+    {"family": "DRAWING", "contract_enum": "DRAWING", "kernel": "SUPPORTED", "formula_relevance": "none", "knowledge_relevance": "none", "gap": false},
+    {"family": "DISCOUNT", "contract_enum": "DISCOUNT_TRADE/DISCOUNT_CASH", "kernel": "SUPPORTED (settlement discount)", "formula_relevance": "none", "knowledge_relevance": "none", "gap": false},
+    {"family": "BAD_DEBT", "contract_enum": "EXPENSE + party", "kernel": "SUPPORTED (write-off; recovery)", "formula_relevance": "none", "knowledge_relevance": "counterparty risk", "gap": false}
+  ],
+  "ontology_rules": [
+    "one canonical family per financial concept; variants are metadata, not new families",
+    "a family with kernel gap=true is a dataset abstention/REVIEW_REQUIRED source until an authority exists",
+    "event families MUST NOT be added to the locked transaction_type_enum by Phase H",
+    "UNKNOWN + ambiguity_flags is the honest contract representation for unclassifiable events"
+  ]
+}

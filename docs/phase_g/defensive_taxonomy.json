@@ -1,0 +1,28 @@
+{
+  "phase": "G",
+  "created": "2026-09-19",
+  "purpose": "Failure/defensive taxonomy the future dataset must deliberately teach. Each class pairs a input situation with the expected model behavior under the locked 18-field contract and fail-closed authorities. Abstention is the skill.",
+  "expected_behaviors": ["EXTRACT", "PRESERVE_UNKNOWN", "IDENTIFY_CONFLICT", "REVIEW_REQUIRED", "BLOCKED", "UNSUPPORTED"],
+  "classes": [
+    {"id": "normal", "situation": "clean single-event financial sentence/document", "expected": "EXTRACT", "field_pressure": "all fields", "authority": "SUPPORTED for supported families"},
+    {"id": "messy_language", "situation": "colloquial/verbose financial wording", "expected": "EXTRACT with unchanged enums", "field_pressure": "transaction_type, parties", "authority": "SUPPORTED"},
+    {"id": "abbreviations", "situation": "bank-narration style abbreviations (NEFT/RTGS/IMPS, truncated party names)", "expected": "EXTRACT conservatively", "field_pressure": "parties, payment_method", "authority": "SUPPORTED; party identity stays conservative"},
+    {"id": "ocr_corruption", "situation": "OCR noise in amounts/parties/dates", "expected": "PRESERVE_UNKNOWN over guessed digits", "field_pressure": "amounts, references", "authority": "REVIEW_REQUIRED when amounts unclean"},
+    {"id": "missing_information", "situation": "missing amount/party/payment mode/date", "expected": "PRESERVE_UNKNOWN + ambiguity_flags", "field_pressure": "payment_method, parties, amounts", "authority": "REVIEW_REQUIRED"},
+    {"id": "ambiguous_information", "situation": "pronoun/party/reference ambiguity", "expected": "PRESERVE_UNKNOWN + AMBIGUOUS_REFERENCE flag", "field_pressure": "parties, referenced_*", "authority": "REVIEW_REQUIRED"},
+    {"id": "contradictory_information", "situation": "conflicting payment modes or amounts", "expected": "IDENTIFY_CONFLICT + MULTIPLE_INTERPRETATIONS", "field_pressure": "payment_method, amounts", "authority": "REVIEW_REQUIRED; never silently pick one"},
+    {"id": "multiple_payment_instruments", "situation": "part cash part cheque", "expected": "EXTRACT as multiple amounts or conflict flag", "field_pressure": "amounts, payment_method", "authority": "SUPPORTED (split payments exist in kernel)"},
+    {"id": "multiple_events_one_sentence", "situation": "two transactions in one input", "expected": "EXTRACT primary + flag, or REVIEW_REQUIRED", "field_pressure": "all", "authority": "REVIEW_REQUIRED when not separable"},
+    {"id": "duplicate_documents", "situation": "same invoice/txn twice", "expected": "IDENTIFY_CONFLICT/duplicate semantics via references", "field_pressure": "references", "authority": "REVIEW_REQUIRED (no auto-post)"},
+    {"id": "cross_document_relationship", "situation": "records implying PO->invoice->payment chains", "expected": "populate references honestly; do not invent links", "field_pressure": "references, referenced_*", "authority": "REVIEW_REQUIRED without explicit evidence"},
+    {"id": "temporal_mismatch", "situation": "event date vs settlement date vs statement date", "expected": "PRESERVE_UNKNOWN on period attribution", "field_pressure": "references (dates live in amounts/party context today)", "authority": "REVIEW_REQUIRED"},
+    {"id": "entity_name_variants", "situation": "same party, different spellings", "expected": "conservative party extraction, no forced merge", "field_pressure": "parties", "authority": "REVIEW_REQUIRED for merges"},
+    {"id": "unsupported_financial_concepts", "situation": "loan amortization, payroll, derivatives", "expected": "UNSUPPORTED - do not improvise", "field_pressure": "transaction_type stays honest", "authority": "UNSUPPORTED (kernel-proven refusals)"},
+    {"id": "unsupported_accounting_operations", "situation": "events understood semantically but no kernel authority (payroll posting, interest on loan)", "expected": "UNSUPPORTED/REVIEW_REQUIRED", "field_pressure": "suggested_status", "capability_registry": "MODEL UNDERSTANDS != CAN EXECUTE", "authority": "UNSUPPORTED"},
+    {"id": "unverifiable_claims", "situation": "model-tempting claims with no input evidence (invented invoice no., invented GST component)", "expected": "PRESERVE_UNKNOWN - never populate from priors", "field_pressure": "references, amounts", "authority": "BLOCKED by grounding gate"},
+    {"id": "conflicting_sources", "situation": "two documents disagree on a fact", "expected": "IDENTIFY_CONFLICT", "field_pressure": "ambiguity_flags", "authority": "REVIEW_REQUIRED"},
+    {"id": "out_of_domain", "situation": "poems, code, non-financial text", "expected": "PRESERVE_UNKNOWN + UNKNOWN type", "field_pressure": "all", "authority": "no authority routes"},
+    {"id": "adversarial_wording", "situation": "phrasing that tempts wrong accounts (bank commission in cash, office furniture)", "expected": "EXTRACT with correct disambiguation", "field_pressure": "transaction_type, payment_method", "authority": "SUPPORTED (batch-1 adversarial cases pinned)", "note": "adversarial corpus already exists: platrixa_ai_candidate_cases.jsonl"},
+    {"id": "model_invention_traps", "situation": "fields that COULD be filled by plausible invention (missing mode, invented ref)", "expected": "PRESERVE_UNKNOWN", "field_pressure": "payment_method, references", "authority": "REVIEW_REQUIRED; dataset must reward abstention"}
+  ]
+}

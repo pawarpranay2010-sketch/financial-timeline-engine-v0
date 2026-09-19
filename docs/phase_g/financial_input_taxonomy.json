@@ -1,0 +1,32 @@
+{
+  "phase": "G",
+  "created": "2026-09-19",
+  "purpose": "Taxonomy of financial inputs relevant to developer use cases Platrixa could serve. Support levels are measured against the current repo, not aspirational.",
+  "support_levels": {
+    "SUPPORTED": "round-trips through the 18-field contract and a deterministic authority today (evidence: Phase C registry / batch-1 gate)",
+    "CANDIDATE": "semantically mappable to the 18-field contract; Phase H dataset family",
+    "OUT_OF_SCOPE": "not semantic-interpretation work; Platrixa will not own it"
+  },
+  "inputs": [
+    {"input_type": "bank_narration", "typical_use": "bank-feed categorization, bookkeeping AI", "events": ["PAYMENT", "RECEIPT", "TRANSFER", "FEE", "INTEREST"], "relation_to_18_fields": "parties/amounts often abbreviated or absent; references rarely present", "current_support": "SUPPORTED (FYJC corpus majority; payment-skewed)", "phase_h": "CORE - defensive expansion", "notes": "highest-volume developer input"},
+    {"input_type": "journal_description", "typical_use": "accounting integrations, agents writing entries", "events": ["all posting families"], "relation_to_18_fields": "direct: description -> 18 fields -> kernel journal", "current_support": "SUPPORTED", "phase_h": "CORE", "notes": "canonical Platrixa input"},
+    {"input_type": "invoice", "typical_use": "AR automation, document AI", "events": ["SALE", "PAYMENT", "SETTLEMENT"], "relation_to_18_fields": "references field carries invoice no.; amounts may be multi-line", "current_support": "CANDIDATE (30 rows in corpora; refs supported)", "phase_h": "CORE", "notes": "document-structured, not free text"},
+    {"input_type": "bill", "typical_use": "AP automation", "events": ["PURCHASE", "PAYMENT", "SETTLEMENT"], "relation_to_18_fields": "as invoice, mirrored", "current_support": "CANDIDATE (bills authority exists in kernel)", "phase_h": "CORE"},
+    {"input_type": "receipt_doc", "typical_use": "expense capture", "events": ["EXPENSE", "PURCHASE"], "relation_to_18_fields": "OCR noise typical", "current_support": "CANDIDATE", "phase_h": "CORE (messy/OCR variants)"},
+    {"input_type": "credit_note", "typical_use": "AR/AP corrections", "events": ["REFUND", "RETURN_OUT"], "relation_to_18_fields": "references + reversal semantics", "current_support": "SUPPORTED (kernel credit-note pattern, batch 1)", "phase_h": "CORE"},
+    {"input_type": "debit_note", "typical_use": "purchase returns", "events": ["RETURN_OUT"], "relation_to_18_fields": "as credit note mirrored", "current_support": "CANDIDATE", "phase_h": "SECONDARY"},
+    {"input_type": "payment_confirmation", "typical_use": "payment/settlement systems", "events": ["PAYMENT", "SETTLEMENT"], "relation_to_18_fields": "references (txn id) strong; party often masked", "current_support": "CANDIDATE", "phase_h": "SECONDARY"},
+    {"input_type": "bank_statement", "typical_use": "reconciliation tools", "events": ["many, one row each"], "relation_to_18_fields": "row-level; cross-row relationships out of single-IR scope", "current_support": "CANDIDATE (row-wise)", "phase_h": "SECONDARY", "notes": "multi-row aggregation is future infrastructure"},
+    {"input_type": "purchase_order", "typical_use": "procurement/AP three-way match", "events": ["PURCHASE"], "relation_to_18_fields": "references; unfulfilled amounts", "current_support": "CANDIDATE", "phase_h": "SECONDARY", "notes": "three-way match needs relationship taxonomy"},
+    {"input_type": "goods_received_note", "typical_use": "AP three-way match", "events": ["PURCHASE"], "relation_to_18_fields": "no amounts until invoiced", "current_support": "CANDIDATE", "phase_h": "FUTURE"},
+    {"input_type": "ledger_entry", "typical_use": "accounting integrations", "events": ["all posting families"], "relation_to_18_fields": "already structured; Platrixa validates rather than extracts", "current_support": "CANDIDATE", "phase_h": "FUTURE"},
+    {"input_type": "trial_balance", "typical_use": "reporting, closing workflows", "events": ["aggregate states, not events"], "relation_to_18_fields": "poor fit: event contract vs balances", "current_support": "OUT_OF_SCOPE (event-level contract)", "phase_h": "none"},
+    {"input_type": "financial_statements", "typical_use": "analysis/FP&A", "events": ["aggregate states"], "relation_to_18_fields": "inputs to Formula Authority facts, not 18-field events", "current_support": "CANDIDATE via formula-fact path only", "phase_h": "SECONDARY (formula vectors, not IR)"},
+    {"input_type": "spreadsheet_rows", "typical_use": "data normalization", "events": ["varies per row"], "relation_to_18_fields": "row-wise like bank statements", "current_support": "CANDIDATE", "phase_h": "FUTURE"},
+    {"input_type": "email_or_text_thread", "typical_use": "finance agents, mail-to-ledger", "events": ["varies; often incomplete"], "relation_to_18_fields": "ambiguity flags central; abstention critical", "current_support": "CANDIDATE", "phase_h": "SECONDARY (defensive)"},
+    {"input_type": "ocr_output", "typical_use": "document AI upstream", "events": ["as underlying doc"], "relation_to_18_fields": "OCR corruption is a defensive class, not a new schema", "current_support": "CANDIDATE (as noisy text)", "phase_h": "CORE (defensive variants)", "notes": "Platrixa is NOT an OCR engine"},
+    {"input_type": "api_payload_webhook", "typical_use": "payment/event systems", "events": ["PAYMENT", "REFUND", "FEE", "SETTLEMENT"], "relation_to_18_fields": "idempotency/duplicate semantics via references", "current_support": "CANDIDATE", "phase_h": "SECONDARY"},
+    {"input_type": "accounting_system_record", "typical_use": "integrations/normalization", "events": ["vendor-specific shapes"], "relation_to_18_fields": "provider normalization is pre/post-processing", "current_support": "OUT_OF_SCOPE (provider adapters are not semantic validation)", "phase_h": "none"},
+    {"input_type": "market_data_record", "typical_use": "trading/valuation tools", "events": ["non-event quantitative series"], "relation_to_18_fields": "no semantic event; Formula Authority facts only", "current_support": "OUT_OF_SCOPE for IR", "phase_h": "none"}
+  ]
+}

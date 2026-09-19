@@ -1,0 +1,54 @@
+{
+  "phase": "G",
+  "created": "2026-09-19",
+  "purpose": "Canonical future-dataset architecture. Defines the dataset unit around a financial situation/event, the metadata schema (kept strictly separate from the locked 18-field production IR), and the mixture specification. No dataset is generated in Phase G.",
+  "dataset_unit": {
+    "concept": "one unit = one financial situation, not one document; a unit may reference related-document context but always expects exactly one 18-field IR (or an honest abstention) as the semantic output",
+    "flow": ["raw_input", "source_context (metadata only)", "semantic_interpretation", "exact_18_field_ir", "evidence", "relationships (metadata)", "authority_check (metadata)", "expected_outcome"]
+  },
+  "metadata_schema": {
+    "note": "dataset metadata NEVER enters the production IR; it selects, balances and evaluates examples",
+    "required": {
+      "example_id": "stable unique id (lineage-hashed, deterministic)",
+      "source_type": "key from financial_input_taxonomy.json",
+      "event_family": "key from financial_event_ontology.json",
+      "expected_status": "VERIFIED | REVIEW_REQUIRED | BLOCKED | UNSUPPORTED (fail-closed vocabulary from capability registry)",
+      "split": "train | dev | test_locked",
+      "leakage_group": "paraphrase/variant group id - variants of one situation never straddle splits"
+    },
+    "optional": {
+      "jurisdiction": "e.g. IN, US, international (default IN per corpus lineage)",
+      "framework": "e.g. FYJC/Ind AS vocabulary, generic double-entry",
+      "difficulty": "easy | medium | hard (defined by ambiguity/conflict count, not vibes)",
+      "ambiguity_class": "key from defensive_taxonomy.json",
+      "conflict_class": "key from defensive_taxonomy.json",
+      "document_relationships": "[{relationship: key from relationship_taxonomy.json, to: example_id|external_ref}]",
+      "evidence_refs": "spans/offsets into raw_input backing each populated field",
+      "authority_dependency": "ACCOUNTING_KERNEL | FORMULA_AUTHORITY | FINANCE_KNOWLEDGE | none",
+      "generator_lineage": "template/author/provenance chain for provenance audits",
+      "notes": "free text"
+    }
+  },
+  "mixture_specification": {
+    "principle": "balance along dimensions, not fixed percentages; each dimension has a guardrail target for Phase H batch planning",
+    "dimensions": [
+      {"dimension": "event_family", "guardrail": "no single family >35% of corpus (current corpus: payment family is ~74% of tagged rows - the exact failure Phase H corrects)", "coverage": "all 24 ontology families represented; gap=true families represented PRIMARILY as abstention/REVIEW_REQUIRED examples"},
+      {"dimension": "input_modality", "guardrail": "bank_narration <=40%; every CANDIDATE input type represented", "coverage": "narration, journal description, invoice/bill text, receipt-OCR noise, payment webhooks, email text"},
+      {"dimension": "difficulty", "guardrail": "~60/25/15 easy/medium/hard", "coverage": "difficulty derived from ambiguity/conflict class count"},
+      {"dimension": "ambiguity_defensive", "guardrail": ">=25% of examples carry at least one defensive class", "coverage": "all 20 defensive classes, with model_invention_traps and unverifiable_claims over-weighted vs natural frequency"},
+      {"dimension": "abstention_outcomes", "guardrail": ">=15% of examples expect non-EXTRACT behavior (PRESERVE_UNKNOWN/REVIEW_REQUIRED/UNSUPPORTED)", "coverage": "every UNSUPPORTED kernel family gets paired supported-neighbor examples to sharpen the boundary"},
+      {"dimension": "cross_document", "guardrail": "5-10% carry relationship metadata", "coverage": "references/settles/duplicate_of/contradicts first; fulfills/supersedes later"},
+      {"dimension": "temporal", "guardrail": "5% explicit temporal-mismatch cases", "coverage": "event vs settlement vs statement dates"},
+      {"dimension": "jurisdiction_framework", "guardrail": "majority IN per existing corpus; international slice for framework-neutral cases", "coverage": "no jurisdiction-specific field semantics added - contract is locked"},
+      {"dimension": "authority_coverage", "guardrail": "every SUPPORTED kernel/formula capability has >=N positive examples; every UNSUPPORTED/PLANNED capability has abstention examples", "coverage": "derived from capability_registry.json - the registry IS the coverage checklist"}
+    ],
+    "scalability": "unit + metadata schema are generator-agnostic: 10K -> 100K -> 1M+ scales by generating more units along the same dimensions; ontology and schema do not change"
+  },
+  "phase_h_must_not": [
+    "add fields or enum values to the 18-field IR",
+    "generate before defensive/abstention classes are represented",
+    "let one event family dominate (payment skew is the measured baseline failure)",
+    "create paraphrase leakage across splits",
+    "put dataset metadata inside the production IR"
+  ]
+}
