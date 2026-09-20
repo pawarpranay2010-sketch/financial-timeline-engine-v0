@@ -1,0 +1,70 @@
+{
+  "phase": "H",
+  "dataset": "phase_h_v01_8000",
+  "prior_corpora_checked": [
+    {
+      "path": "training_data/fyjc_specialist_1000.jsonl",
+      "sha256": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24"
+    },
+    {
+      "path": "training_data/fyjc_specialist_train.jsonl",
+      "sha256": "33bd2baee1386577cb3fe80af733a9929f34408e282c61170baef61a7620d21c"
+    },
+    {
+      "path": "training_data/fyjc_specialist_validation.jsonl",
+      "sha256": "f3c2f12c10103505efd474edec780d8393dfd4d10c5261b22d345a1702263c82"
+    },
+    {
+      "path": "training_data/fyjc_specialist_test.jsonl",
+      "sha256": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0"
+    },
+    {
+      "path": "training_data/fyjc_hardcore_1000.jsonl",
+      "sha256": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd"
+    },
+    {
+      "path": "training_data/phase22_v02_train.jsonl",
+      "sha256": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5"
+    },
+    {
+      "path": "training_data/phase24_foundation_scout.jsonl",
+      "sha256": "c1026fd4ed1cfaceacdd00d60d9c6016225970d5cdd2b91ae44320019aaa1bbc"
+    },
+    {
+      "path": "training/phase17_benchmark.jsonl",
+      "sha256": "af1ab919f6fcb196260652b5af925f5addc0f6d5117813d8e0472ddaa0281ba1"
+    }
+  ],
+  "phase_g_sources": {
+    "paths": [
+      "PLATRIXA_PHASE_G_REPORT.md",
+      "docs/phase_g/market_use_cases.json",
+      "docs/phase_g/financial_input_taxonomy.json",
+      "docs/phase_g/financial_event_ontology.json",
+      "docs/phase_g/relationship_taxonomy.json",
+      "docs/phase_g/defensive_taxonomy.json",
+      "docs/phase_g/18_field_coverage_matrix.json",
+      "docs/phase_g/dataset_architecture.json"
+    ],
+    "sha256": {
+      "PLATRIXA_PHASE_G_REPORT.md": "e277dc937a272e68b29192355f359e88a50ba59c6bccc91cdb2ef302a27a826c",
+      "docs/phase_g/market_use_cases.json": "a345339447b6ccd55c3ed33d2f94c3d0d9449874d27770e897d9156e77771c66",
+      "docs/phase_g/financial_input_taxonomy.json": "3252c72df9cdc428157187a52d8e013137e05a878b6021782ed788948c345f75",
+      "docs/phase_g/financial_event_ontology.json": "668fbb0474790d178b52736f398a1da5e377d71a7ff3540af53cd1b384d38c08",
+      "docs/phase_g/relationship_taxonomy.json": "50cb785389c3370dd6bdf23480909965de2b06e4e4bcd037137b675b3a62025f",
+      "docs/phase_g/defensive_taxonomy.json": "896456c02dcece2fe115db343c83ee0e59eec4db590641438a99873ec37ac977",
+      "docs/phase_g/18_field_coverage_matrix.json": "c35944e10f39db6ae612ecf0112566e2a18e59c36b2f67d3d177db0abc68d993",
+      "docs/phase_g/dataset_architecture.json": "13d18f5ab35d00e2b87a3116482b6013974a74fffdf40d44ff27cb6c13d325cc"
+    }
+  },
+  "controls": {
+    "exact_duplicate_vs_prior": 0,
+    "near_duplicate_vs_prior": 0,
+    "near_duplicate_threshold_jaccard": 0.75,
+    "normalised_exact_dedup_within_candidate": true,
+    "paraphrase_leakage_control": "leakage_group per Phase G schema; variants of one situation share a group and never straddle splits",
+    "split_rule": "deterministic md5(leakage_group) hash bucket; train ~85% / dev ~15%; no locked test split drawn from Phase H (locked evaluation artifacts untouched)"
+  },
+  "locked_artifacts_touched": [],
+  "status": "CLEAN"
+}

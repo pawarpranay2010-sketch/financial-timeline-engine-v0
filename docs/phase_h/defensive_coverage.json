@@ -1,0 +1,62 @@
+{
+  "phase": "H",
+  "rows": 8000,
+  "classes": {
+    "adversarial_wording": {
+      "REVIEW_REQUIRED": 244
+    },
+    "ambiguous_information": {
+      "REVIEW_REQUIRED": 93
+    },
+    "contradictory_information": {
+      "REVIEW_REQUIRED": 103
+    },
+    "cross_document_relationship": {
+      "REVIEW_REQUIRED": 460
+    },
+    "duplicate_documents": {
+      "REVIEW_REQUIRED": 61
+    },
+    "entity_name_variants": {
+      "REVIEW_REQUIRED": 41
+    },
+    "messy_language": {
+      "REVIEW_REQUIRED": 199
+    },
+    "missing_information": {
+      "REVIEW_REQUIRED": 560
+    },
+    "model_invention_traps": {
+      "REVIEW_REQUIRED": 137
+    },
+    "multiple_events_one_sentence": {
+      "REVIEW_REQUIRED": 68
+    },
+    "narration_gap": {
+      "REVIEW_REQUIRED": 368
+    },
+    "none": {
+      "REVIEW_REQUIRED": 4817
+    },
+    "ocr_corruption": {
+      "REVIEW_REQUIRED": 517
+    },
+    "out_of_domain": {
+      "REVIEW_REQUIRED": 11
+    },
+    "temporal_mismatch": {
+      "REVIEW_REQUIRED": 34
+    },
+    "unsupported_accounting_operations": {
+      "UNSUPPORTED": 157
+    },
+    "unsupported_financial_concepts": {
+      "UNSUPPORTED": 60
+    },
+    "unverifiable_claims": {
+      "BLOCKED": 70
+    }
+  },
+  "abstention_share": 0.3979,
+  "note": "defensive_class 'none' rows are the clear/extract corpus; every non-none class is an abstention/review-oriented family from docs/phase_g/defensive_taxonomy.json"
+}

@@ -1,0 +1,42 @@
+{
+  "phase": "H",
+  "dataset": "phase_h_v01_8000",
+  "row_count": 8000,
+  "sha256": "5c56b373537c982d3784452a67f01d173fa390e093978e46df4788e3048d1f29",
+  "generator_version": "phaseh-generator-1.0.0",
+  "validator_version": "phaseh-validator-1.0.0",
+  "generation_seed": 20260919,
+  "pipeline": [
+    "kernel pre-flight (every supported pattern must resolve a deterministic kernel journal or the template is demoted)",
+    "deterministic style engine (16 styles; degraded styles become defensive classes)",
+    "production re-derivation of extracted facts from final text",
+    "schema_verifier.validate_structured_interpretation(allow_expanded=True)",
+    "ExpandedGroundingGate.ground (safe_for_kernel, fail-closed)",
+    "enum membership (fyjc_contract vocabularies)",
+    "party sanity (no settlement-word bleed \u2014 Phase 22 defect class)",
+    "status consistency (model never claims VERIFIED; UNSUPPORTED/BLOCKED only by metadata class)",
+    "no-invention (conflict/ambiguity flags required where designed)",
+    "duplicate / near-duplicate (Jaccard >= 0.75) vs prior corpora and within candidates",
+    "event-signature and family-cell caps"
+  ],
+  "rejection_statistics": {
+    "duplicate_input": 266,
+    "event_signature_cap": 5201,
+    "family_cell_cap": 211,
+    "gate": 80,
+    "keyword_substring_mismatch": 47,
+    "near_dup_of_prior_corpus": 66,
+    "near_dup_within_candidate": 4119,
+    "party_sanity": 714
+  },
+  "abstention_share": 0.3979,
+  "verified_claims": 0,
+  "schema_and_grounding": {
+    "schema_verifier": "validate_structured_interpretation(allow_expanded=True) \u2014 all rows pass",
+    "grounding_gate": "ExpandedGroundingGate.safe_for_kernel \u2014 all rows pass",
+    "verified_claims": 0,
+    "abstention_share": 0.3979,
+    "near_duplicate_threshold_jaccard": 0.75,
+    "status": "ACCEPTED_CANDIDATE"
+  }
+}

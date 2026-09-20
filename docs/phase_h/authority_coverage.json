@@ -1,0 +1,38 @@
+{
+  "phase": "H",
+  "rows": 8000,
+  "dataset_rows_by_authority": {
+    "ACCOUNTING_KERNEL": 7989,
+    "none": 11
+  },
+  "registry_capabilities_by_authority": {
+    "ACCOUNTING_KERNEL": 12,
+    "FINANCE_KNOWLEDGE": 2,
+    "FORMULA_AUTHORITY": 30
+  },
+  "note": "Phase H rows exercise the ACCOUNTING_KERNEL event-level surface. FORMULA_AUTHORITY and FINANCE_KNOWLEDGE remain event-level adjacent: their capabilities are registered (see registry counts) but the 18-field IR is a transaction-semantic contract, so no formula-input or knowledge-claim examples are fabricated here (quality > count). Documented in PLATRIXA_PHASE_H_REPORT.md.",
+  "kernel_family_coverage": {
+    "ACCRUAL": 65,
+    "ADJUSTMENT_MISC": 32,
+    "BAD_DEBT": 230,
+    "BANK_FEE": 106,
+    "CAPITAL_CONTRIBUTION": 96,
+    "CREDIT_NOTE": 170,
+    "DEPRECIATION": 60,
+    "DRAWING": 159,
+    "EXPENSE": 518,
+    "FX_EVENT": 23,
+    "PAYMENT": 1193,
+    "PAYROLL": 37,
+    "PURCHASE": 1723,
+    "RECEIPT": 1167,
+    "REFUND": 104,
+    "RETURN_IN": 50,
+    "RETURN_OUT": 161,
+    "SALE": 1328,
+    "SETTLEMENT": 387,
+    "TAX_GST": 305,
+    "TRANSFER": 41,
+    "UNKNOWN": 45
+  }
+}

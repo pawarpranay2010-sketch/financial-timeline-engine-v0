@@ -1,0 +1,644 @@
+{
+  "dataset_name": "phase_h_v01_8000",
+  "version": "phase-h-v01",
+  "row_count": 8000,
+  "sha256": "5c56b373537c982d3784452a67f01d173fa390e093978e46df4788e3048d1f29",
+  "generation_seed": 20260919,
+  "generator_version": "phaseh-generator-1.0.0",
+  "validator_version": "phaseh-validator-1.0.0",
+  "determinism": {
+    "python_hash_seed_pinned": true,
+    "llm_used": false,
+    "note": "deterministic across processes (PYTHONHASHSEED=0, random.Random(SEED))"
+  },
+  "contract": "exact 18-field CandidateSemanticIR (unchanged)",
+  "metadata_schema": "docs/phase_g/dataset_architecture.json",
+  "phase_g_artifact_sha256": {
+    "PLATRIXA_PHASE_G_REPORT.md": "e277dc937a272e68b29192355f359e88a50ba59c6bccc91cdb2ef302a27a826c",
+    "docs/phase_g/market_use_cases.json": "a345339447b6ccd55c3ed33d2f94c3d0d9449874d27770e897d9156e77771c66",
+    "docs/phase_g/financial_input_taxonomy.json": "3252c72df9cdc428157187a52d8e013137e05a878b6021782ed788948c345f75",
+    "docs/phase_g/financial_event_ontology.json": "668fbb0474790d178b52736f398a1da5e377d71a7ff3540af53cd1b384d38c08",
+    "docs/phase_g/relationship_taxonomy.json": "50cb785389c3370dd6bdf23480909965de2b06e4e4bcd037137b675b3a62025f",
+    "docs/phase_g/defensive_taxonomy.json": "896456c02dcece2fe115db343c83ee0e59eec4db590641438a99873ec37ac977",
+    "docs/phase_g/18_field_coverage_matrix.json": "c35944e10f39db6ae612ecf0112566e2a18e59c36b2f67d3d177db0abc68d993",
+    "docs/phase_g/dataset_architecture.json": "13d18f5ab35d00e2b87a3116482b6013974a74fffdf40d44ff27cb6c13d325cc"
+  },
+  "prior_corpus_sha256": {
+    "training_data/fyjc_specialist_1000.jsonl": "feb7bfe5c1f415228d3ab9ccdc43beaa2df1498af8f4e66fc5856c441df61e24",
+    "training_data/fyjc_specialist_train.jsonl": "33bd2baee1386577cb3fe80af733a9929f34408e282c61170baef61a7620d21c",
+    "training_data/fyjc_specialist_validation.jsonl": "f3c2f12c10103505efd474edec780d8393dfd4d10c5261b22d345a1702263c82",
+    "training_data/fyjc_specialist_test.jsonl": "c124372369c23dfb64085289a6767c5db7ee033ffe86d9fd198cf60955904ed0",
+    "training_data/fyjc_hardcore_1000.jsonl": "56be5be11e771c8af553bc58dec2746a871521c11c7f9c07aec3eb01bcc721cd",
+    "training_data/phase22_v02_train.jsonl": "f0ba0efe9476618cc48368e57c02773cbe390f22b8e09b4d838af7e471f890d5",
+    "training_data/phase24_foundation_scout.jsonl": "c1026fd4ed1cfaceacdd00d60d9c6016225970d5cdd2b91ae44320019aaa1bbc",
+    "training/phase17_benchmark.jsonl": "af1ab919f6fcb196260652b5af925f5addc0f6d5117813d8e0472ddaa0281ba1"
+  },
+  "label_architecture": {
+    "clear_rows": "kernel_wording_family pre-flight + specialist structural machinery + full production validation",
+    "defensive_rows": "specialist honest degradation (fail-closed)",
+    "excluded_families": [
+      "LOAN",
+      "INTEREST",
+      "DEPOSIT(refundable)"
+    ],
+    "exclusion_reason": "Phase G ontology marks these gap=true while the live kernel verifies basic loan postings \u2014 stop condition \u00a720.3; documented in report"
+  },
+  "pre_flight": {
+    "results": {
+      "pur_credit": {
+        "patterns_kept": 3,
+        "patterns_total": 3,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pur_cash": {
+        "patterns_kept": 3,
+        "patterns_total": 3,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pur_chq": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "pur_upi": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pur_neft": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pur_asset": {
+        "patterns_kept": 3,
+        "patterns_total": 3,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "sale_cash": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "sale_credit": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "sale_chq": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "sale_upi": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "sale_neft": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "sale_asset": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "rec_cash": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "rec_chq": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "rec_upi": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:REVIEW_REQUIRED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "rec_neft": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "rec_plain": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "pay_cash": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pay_chq": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pay_upi": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:REVIEW_REQUIRED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "pay_neft": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "exp_word": {
+        "patterns_kept": 4,
+        "patterns_total": 4,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "stl_full": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "stl_full_bank": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:REVIEW_REQUIRED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "ret_out": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "cap_in": {
+        "patterns_kept": 3,
+        "patterns_total": 3,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "drw_cash": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "drw_bank": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "refund_out": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "cn_issued": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "cn_received": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "bank_fee": {
+        "patterns_kept": 3,
+        "patterns_total": 3,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "bad_debt_wo": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "bad_debt_rec": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "gst_purchase": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "gst_sale": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "transfer_dep": {
+        "patterns_kept": 2,
+        "patterns_total": 2,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "VERIFIED"
+        ]
+      },
+      "pur_multi_unit": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:NOT_SUPPORTED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "sale_invoice_ref": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:NOT_SUPPORTED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "rec_against_bill": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "pay_against_bill": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "exp_webhook": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "stl_discount": {
+        "patterns_kept": 0,
+        "patterns_total": 1,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "ret_in_customer": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED",
+          "REFUSED:NOT_SUPPORTED"
+        ]
+      },
+      "cap_cheque": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "REFUSED:REVIEW_REQUIRED",
+          "VERIFIED"
+        ]
+      },
+      "drw_goods": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED"
+        ]
+      },
+      "gst_inclusive_sale": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "VERIFIED"
+        ]
+      },
+      "bad_debt_partial": {
+        "patterns_kept": 0,
+        "patterns_total": 2,
+        "demoted": true,
+        "verdicts": [
+          "REFUSED:NOT_SUPPORTED",
+          "REFUSED:REVIEW_REQUIRED"
+        ]
+      },
+      "bank_fee_upi": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "REFUSED:NOT_SUPPORTED",
+          "VERIFIED"
+        ]
+      },
+      "adv_asset_words": {
+        "patterns_kept": 1,
+        "patterns_total": 1,
+        "demoted": false,
+        "verdicts": [
+          "REFUSED:REVIEW_REQUIRED",
+          "VERIFIED"
+        ]
+      }
+    },
+    "kernel": "backend.maths.fyjc_bk_reasoning.reason_bk_question"
+  },
+  "distributions": {
+    "event_family": {
+      "PURCHASE": 1723,
+      "SALE": 1328,
+      "PAYMENT": 1193,
+      "RECEIPT": 1167,
+      "EXPENSE": 518,
+      "SETTLEMENT": 387,
+      "TAX_GST": 305,
+      "BAD_DEBT": 230,
+      "CREDIT_NOTE": 170,
+      "RETURN_OUT": 161,
+      "DRAWING": 159,
+      "BANK_FEE": 106,
+      "REFUND": 104,
+      "CAPITAL_CONTRIBUTION": 96,
+      "ACCRUAL": 65,
+      "DEPRECIATION": 60,
+      "RETURN_IN": 50,
+      "UNKNOWN": 45,
+      "TRANSFER": 41,
+      "PAYROLL": 37,
+      "ADJUSTMENT_MISC": 32,
+      "FX_EVENT": 23
+    },
+    "input_type": {
+      "journal_description": 2614,
+      "bank_narration": 1433,
+      "invoice": 1309,
+      "payment_confirmation": 890,
+      "short_transaction_desc": 414,
+      "email_or_text_thread": 403,
+      "credit_note": 324,
+      "email_line": 194,
+      "debit_note": 161,
+      "bill": 136,
+      "api_payload_webhook": 122
+    },
+    "difficulty": {
+      "medium": 2953,
+      "hard": 2712,
+      "easy": 2335
+    },
+    "language_style": {
+      "number_words": 626,
+      "ocr_noisy": 571,
+      "date_prefix": 532,
+      "ack_suffix": 512,
+      "clutter": 485,
+      "punctuation_loose": 483,
+      "api_like": 457,
+      "short_desc": 457,
+      "narration": 456,
+      "currency_inr": 446,
+      "currency_rupees": 442,
+      "email_line": 413,
+      "reorder_tail": 381,
+      "plain": 370,
+      "business": 348,
+      "abbreviated": 347,
+      "currency_rs": 347,
+      "journal_style": 327
+    },
+    "transaction_type": {
+      "PURCHASE": 1625,
+      "UNKNOWN": 1598,
+      "SALE": 1421,
+      "RECEIPT": 875,
+      "PAYMENT": 836,
+      "EXPENSE": 654,
+      "SETTLEMENT": 387,
+      "RETURN_OUT": 361,
+      "DRAWING": 156,
+      "CAPITAL": 87
+    },
+    "payment_method": {
+      "UNKNOWN": 1763,
+      "CASH": 1719,
+      "CHEQUE": 1591,
+      "BANK": 1220,
+      "CREDIT": 871,
+      "UPI": 836
+    },
+    "defensive_class": {
+      "none": 4817,
+      "missing_information": 560,
+      "ocr_corruption": 517,
+      "cross_document_relationship": 460,
+      "narration_gap": 368,
+      "adversarial_wording": 244,
+      "messy_language": 199,
+      "unsupported_accounting_operations": 157,
+      "model_invention_traps": 137,
+      "contradictory_information": 103,
+      "ambiguous_information": 93,
+      "unverifiable_claims": 70,
+      "multiple_events_one_sentence": 68,
+      "duplicate_documents": 61,
+      "unsupported_financial_concepts": 60,
+      "entity_name_variants": 41,
+      "temporal_mismatch": 34,
+      "out_of_domain": 11
+    },
+    "expected_status": {
+      "REVIEW_REQUIRED": 7713,
+      "UNSUPPORTED": 217,
+      "BLOCKED": 70
+    },
+    "authority_dependency": {
+      "ACCOUNTING_KERNEL": 7989,
+      "none": 11
+    },
+    "split": {
+      "train": 6856,
+      "dev": 1144
+    }
+  },
+  "rejection_statistics": {
+    "duplicate_input": 266,
+    "event_signature_cap": 5201,
+    "family_cell_cap": 211,
+    "gate": 80,
+    "keyword_substring_mismatch": 47,
+    "near_dup_of_prior_corpus": 66,
+    "near_dup_within_candidate": 4119,
+    "party_sanity": 714
+  },
+  "validation": {
+    "schema_verifier": "validate_structured_interpretation(allow_expanded=True) \u2014 all rows pass",
+    "grounding_gate": "ExpandedGroundingGate.safe_for_kernel \u2014 all rows pass",
+    "verified_claims": 0,
+    "abstention_share": 0.3979,
+    "near_duplicate_threshold_jaccard": 0.75,
+    "status": "ACCEPTED_CANDIDATE"
+  }
+}

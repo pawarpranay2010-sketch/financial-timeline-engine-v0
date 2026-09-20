@@ -1,0 +1,122 @@
+{
+  "phase": "H",
+  "dataset": "phase_h_v01_8000",
+  "rows": 8000,
+  "families": {
+    "ACCRUAL": {
+      "ACCOUNTING_KERNEL": {
+        "UNSUPPORTED": 65
+      }
+    },
+    "ADJUSTMENT_MISC": {
+      "ACCOUNTING_KERNEL": {
+        "UNSUPPORTED": 32
+      }
+    },
+    "BAD_DEBT": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 230
+      }
+    },
+    "BANK_FEE": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 106
+      }
+    },
+    "CAPITAL_CONTRIBUTION": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 96
+      }
+    },
+    "CREDIT_NOTE": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 170
+      }
+    },
+    "DEPRECIATION": {
+      "ACCOUNTING_KERNEL": {
+        "UNSUPPORTED": 60
+      }
+    },
+    "DRAWING": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 159
+      }
+    },
+    "EXPENSE": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 518
+      }
+    },
+    "FX_EVENT": {
+      "ACCOUNTING_KERNEL": {
+        "UNSUPPORTED": 23
+      }
+    },
+    "PAYMENT": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 1193
+      }
+    },
+    "PAYROLL": {
+      "ACCOUNTING_KERNEL": {
+        "UNSUPPORTED": 37
+      }
+    },
+    "PURCHASE": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 1653,
+        "BLOCKED": 70
+      }
+    },
+    "RECEIPT": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 1167
+      }
+    },
+    "REFUND": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 104
+      }
+    },
+    "RETURN_IN": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 50
+      }
+    },
+    "RETURN_OUT": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 161
+      }
+    },
+    "SALE": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 1328
+      }
+    },
+    "SETTLEMENT": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 387
+      }
+    },
+    "TAX_GST": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 305
+      }
+    },
+    "TRANSFER": {
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 41
+      }
+    },
+    "UNKNOWN": {
+      "none": {
+        "REVIEW_REQUIRED": 11
+      },
+      "ACCOUNTING_KERNEL": {
+        "REVIEW_REQUIRED": 34
+      }
+    }
+  },
+  "family_count": 22
+}

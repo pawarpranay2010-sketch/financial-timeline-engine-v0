@@ -1,0 +1,164 @@
+{
+  "phase": "H",
+  "rows": 8000,
+  "distributions": {
+    "event_family": {
+      "PURCHASE": 1723,
+      "SALE": 1328,
+      "PAYMENT": 1193,
+      "RECEIPT": 1167,
+      "EXPENSE": 518,
+      "SETTLEMENT": 387,
+      "TAX_GST": 305,
+      "BAD_DEBT": 230,
+      "CREDIT_NOTE": 170,
+      "RETURN_OUT": 161,
+      "DRAWING": 159,
+      "BANK_FEE": 106,
+      "REFUND": 104,
+      "CAPITAL_CONTRIBUTION": 96,
+      "ACCRUAL": 65,
+      "DEPRECIATION": 60,
+      "RETURN_IN": 50,
+      "UNKNOWN": 45,
+      "TRANSFER": 41,
+      "PAYROLL": 37,
+      "ADJUSTMENT_MISC": 32,
+      "FX_EVENT": 23
+    },
+    "input_type": {
+      "journal_description": 2614,
+      "bank_narration": 1433,
+      "invoice": 1309,
+      "payment_confirmation": 890,
+      "short_transaction_desc": 414,
+      "email_or_text_thread": 403,
+      "credit_note": 324,
+      "email_line": 194,
+      "debit_note": 161,
+      "bill": 136,
+      "api_payload_webhook": 122
+    },
+    "authority_dependency": {
+      "ACCOUNTING_KERNEL": 7989,
+      "none": 11
+    },
+    "expected_status": {
+      "REVIEW_REQUIRED": 7713,
+      "UNSUPPORTED": 217,
+      "BLOCKED": 70
+    },
+    "ambiguity_class": {
+      "normal": 4817,
+      "missing_information": 560,
+      "ocr_corruption": 517,
+      "cross_document_relationship": 460,
+      "narration_gap": 368,
+      "adversarial_wording": 244,
+      "messy_language": 199,
+      "unsupported_accounting_operations": 157,
+      "model_invention_traps": 137,
+      "contradictory_information": 103,
+      "ambiguous_information": 93,
+      "unverifiable_claims": 70,
+      "multiple_events_one_sentence": 68,
+      "duplicate_documents": 61,
+      "unsupported_financial_concepts": 60,
+      "entity_name_variants": 41,
+      "temporal_mismatch": 34,
+      "out_of_domain": 11
+    },
+    "defensive_class": {
+      "none": 4817,
+      "missing_information": 560,
+      "ocr_corruption": 517,
+      "cross_document_relationship": 460,
+      "narration_gap": 368,
+      "adversarial_wording": 244,
+      "messy_language": 199,
+      "unsupported_accounting_operations": 157,
+      "model_invention_traps": 137,
+      "contradictory_information": 103,
+      "ambiguous_information": 93,
+      "unverifiable_claims": 70,
+      "multiple_events_one_sentence": 68,
+      "duplicate_documents": 61,
+      "unsupported_financial_concepts": 60,
+      "entity_name_variants": 41,
+      "temporal_mismatch": 34,
+      "out_of_domain": 11
+    },
+    "difficulty": {
+      "medium": 2953,
+      "hard": 2712,
+      "easy": 2335
+    },
+    "language_style": {
+      "number_words": 626,
+      "ocr_noisy": 571,
+      "date_prefix": 532,
+      "ack_suffix": 512,
+      "clutter": 485,
+      "punctuation_loose": 483,
+      "api_like": 457,
+      "short_desc": 457,
+      "narration": 456,
+      "currency_inr": 446,
+      "currency_rupees": 442,
+      "email_line": 413,
+      "reorder_tail": 381,
+      "plain": 370,
+      "business": 348,
+      "abbreviated": 347,
+      "currency_rs": 347,
+      "journal_style": 327
+    },
+    "label_source": {
+      "kernel_wording_family": 6511,
+      "specialist_honest_degradation": 1197,
+      "template_wording_family_kernel_gap": 292
+    },
+    "jurisdiction": {
+      "IN": 8000
+    },
+    "framework": {
+      "FYJC/double-entry": 8000
+    },
+    "transaction_type": {
+      "PURCHASE": 1625,
+      "UNKNOWN": 1598,
+      "SALE": 1421,
+      "RECEIPT": 875,
+      "PAYMENT": 836,
+      "EXPENSE": 654,
+      "SETTLEMENT": 387,
+      "RETURN_OUT": 361,
+      "DRAWING": 156,
+      "CAPITAL": 87
+    },
+    "payment_method": {
+      "UNKNOWN": 1763,
+      "CASH": 1719,
+      "CHEQUE": 1591,
+      "BANK": 1220,
+      "CREDIT": 871,
+      "UPI": 836
+    },
+    "split": {
+      "train": 6856,
+      "dev": 1144
+    },
+    "conflict_class": {
+      "none": 7897,
+      "contradictory_information": 103
+    }
+  },
+  "field_presence": {
+    "has_party": 3973,
+    "has_amount": 7261,
+    "has_payment": 6237,
+    "is_ambiguous": 5581,
+    "is_contradictory": 103,
+    "is_unsupported": 217
+  }
+}
