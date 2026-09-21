@@ -1,15 +1,18 @@
 # Platrixa
 
-**Financial semantics infrastructure for developers.**
+**Deterministic financial semantic validation infrastructure for AI-powered
+accounting and finance software.**
+
+**AI interprets. Deterministic authorities decide and execute.**
 
 Send financial language; receive structured, validated, evidence-grounded
-accounting semantics — with explicit `VERIFIED`, `REVIEW_REQUIRED`, or
+financial semantics — with explicit `VERIFIED`, `REVIEW_REQUIRED`, or
 `BLOCKED` states instead of confident guesses.
 
 ## What Platrixa does
 
 ```
-input (transaction text)
+input (messy financial language)
    ↓
 semantic interpretation (LLM — suggests only)
    ↓
@@ -44,6 +47,8 @@ contradiction detection.
 | Python library (`from platrixa import Platrixa`) | ✅ shipped |
 | CLI (`python -m platrixa process`) | ✅ shipped |
 | Schema verification + grounding + deterministic kernel | ✅ shipped |
+| Deterministic formula authority (financial ratios/calculations) | ✅ in runtime |
+| Finance knowledge authority (verified concepts, provenance-backed) | ✅ in runtime |
 | Server-side rule packs / hooks (downgrade-only) | ✅ shipped |
 | Self-serve signup / billing automation / dashboard | ❌ not yet |
 | Key-rotation UI, idempotency, app-level rate limiting | ❌ not yet |
@@ -179,13 +184,15 @@ NOT currently available:
 - application-level rate limiting, idempotency keys, exactly-once
   request deduplication (monthly quota metering is not a rate limiter)
 - enterprise SLA guarantees or uptime commitments
-- consumer financial advice — Platrixa produces accounting semantics,
+- consumer financial advice — Platrixa produces financial semantics,
   not investment advice, by design
 
-Breadth: Platrixa's proven domain is FYJC-style transaction language.
-Bank narration, invoice, and broader financial-document support are under
-evaluation — do not treat them as supported until the Phase 24 foundation
-evaluation and subsequent validation establish evidence.
+Breadth: Platrixa's proven transaction domain is FYJC-style accounting
+language — an early development and evaluation slice of the broader
+financial-semantic scope, not the product's definition. Bank narration,
+invoice, and broader financial-document semantics are under evaluation —
+do not treat them as supported until the Phase 24 foundation evaluation
+and subsequent validation establish evidence.
 
 ## Roadmap (short)
 

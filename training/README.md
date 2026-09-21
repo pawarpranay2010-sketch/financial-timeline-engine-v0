@@ -1,7 +1,12 @@
-# Platrixa FYJC Accounting AI — Training Pipeline
+# Platrixa Training Pipeline (historical FYJC slice + current Phase H dataset)
 
-A provider-independent pipeline for building a specialist accounting AI model
-trained on FYJC (Grade 11) single-entry bookkeeping and Indian accounting terminology.
+A provider-independent pipeline for building the Platrixa specialist
+accounting-language model. The original pipeline was trained on FYJC
+(Grade 11) single-entry bookkeeping and Indian accounting terminology —
+an early development/evaluation slice of Platrixa's broader
+financial-semantic scope, not the product's overall scope. Later phases
+(notably Phase H) extend the dataset across the full capability surface
+already implemented by Platrixa's three deterministic authorities.
 
 ## Architecture
 

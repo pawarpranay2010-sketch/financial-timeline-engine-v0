@@ -2,10 +2,14 @@
 <!--
   Platrixa — FYJC Accountancy Assistant (Phase 7G)
   ------------------------------------------------------------------
-  Student-facing UI for Maharashtra FYJC / Class 11 Book-Keeping.
+  Reference transaction UI for the Platrixa deterministic kernel.
+  FYJC / Class-11 Book-Keeping language was Platrixa's early development
+  and evaluation slice; Platrixa itself is deterministic financial
+  semantic validation infrastructure for AI-powered accounting and
+  finance software.
 
   Flow (client only — all reasoning happens in the backend Kernel):
-    student input → POST /api/v1/kernel/process (Phase 7F)
+    transaction input → POST /api/v1/kernel/process (Phase 7F)
                   → Kernel → ModelProvider → Schema → Grounding
                   → deterministic accounting → KernelResult
                   → this UI renders ONLY the returned fields.
@@ -20,8 +24,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Platrixa — FYJC Accountancy Assistant</title>
-  <meta name="description" content="FYJC Accountancy AI assistant: enter a transaction, see what Platrixa understood, and whether the accounting result is trusted." />
+  <title>Platrixa — Financial Semantics Assistant</title>
+  <meta name="description" content="AI interprets. Deterministic authorities decide and execute. Enter a transaction, see what Platrixa understood, and whether the accounting result is trusted." />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📒</text></svg>" />
 </head>
@@ -31,10 +35,10 @@
   <!-- ===================== Header ===================== -->
   <header class="site-header">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">FYJC</span>
+      <span class="brand-mark" aria-hidden="true">PLX</span>
       <div class="brand-text">
         <strong>Platrixa</strong>
-        <span>FYJC Accountancy Assistant</span>
+        <span>Financial Semantics Assistant</span>
       </div>
     </div>
     <div class="header-actions">
@@ -49,7 +53,7 @@
     <!-- ===================== Input card ===================== -->
     <section class="card card-input" aria-labelledby="input-heading">
       <h1 id="input-heading" class="card-title">Enter a transaction</h1>
-      <p class="card-sub">Write it the way it appears in your textbook — Platrixa does the rest.</p>
+      <p class="card-sub">Write it the way it appears in your records — Platrixa does the rest.</p>
 
       <form id="txn-form" autocomplete="off">
         <label class="field-label" for="txn-input">Transaction</label>
@@ -149,7 +153,7 @@
   </main>
 
   <footer class="site-footer">
-    <span>Platrixa — FYJC Accountancy Assistant</span>
+    <span>Platrixa — Financial Semantics Assistant</span>
     <span class="api-ref">Powered by the Platrixa deterministic Kernel · <code>/api/v1/kernel/process</code></span>
   </footer>
 

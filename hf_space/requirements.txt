@@ -1,0 +1,23 @@
+# Platrixa financial semantics specialist inference — Python requirements (Hugging Face Space)
+#
+# Minimal inference-only dependency set. The Space serves the pinned
+# Qwen2.5-1.5B-Instruct + the pinned historical FYJC Platrixa LoRA adapter. It does NOT need
+# PostgreSQL/Render/Cloudflare dependencies or the full backend tree.
+#
+# NOTE — torch is intentionally NOT pinned here. On HF ZeroGPU Spaces the
+# platform image provides a CUDA-matched torch build; pinning torch in this
+# file breaks GPU support. The ACTUAL runtime versions (torch / transformers
+# / peft / accelerate) are reported by the /health endpoint for provenance.
+#
+# Reference environment (Phase 6B/6C training/eval): torch 2.11.0,
+# transformers 5.16.1, peft 0.20.0, accelerate 1.14.0, Python 3.11.12.
+
+transformers>=4.49,<5.20
+peft>=0.15,<0.21
+accelerate>=1.0,<2.0
+gradio>=5.0,<6.0
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.0
+huggingface_hub>=0.30
+hf_transfer>=0.1

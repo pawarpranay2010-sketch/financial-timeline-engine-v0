@@ -1,7 +1,10 @@
 """
 Platrixa — Kernel boundary (Phase 7C)
 
-Application-level orchestration boundary for the FYJC student-processing path.
+Application-level orchestration boundary for financial transaction
+processing. (The kernel evolved out of the early FYJC student-practice
+slice; FYJC-style accounting language is one evaluated domain, not the
+product's overall scope.)
 
 See backend/kernel/kernel.py for the real implementation and
 backend/kernel/result.py for the result contract surface.

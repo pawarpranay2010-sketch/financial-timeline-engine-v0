@@ -1,13 +1,15 @@
 """
 Platrixa — Deterministic Kernel boundary (Phase 7C)
 
-This package is the application-level orchestration boundary for the FYJC
-student-processing path.
+This package is the application-level orchestration boundary for financial
+transaction processing. (It evolved out of the early FYJC student-practice
+slice; FYJC-style accounting language is one evaluated domain, not the
+product's overall scope.)
 
 Target architecture (Phase 7C establishes the wiring; deeper grounding/
 verification connection is intentionally deferred to Phase 7D):
 
-    Student Input
+    Transaction Input
         ↓
     FastAPI
         ↓
@@ -91,7 +93,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Reuse existing accounting status vocabulary where possible.
 # ---------------------------------------------------------------------------
-# We keep the existing FYJC status words for accounting-authority outcomes
+# We keep the existing FYJC-lineage status words for accounting-authority outcomes
 # (VERIFIED / BLOCKED / REVIEW_REQUIRED / NOT_SUPPORTED), and add our own
 # Kernel-level terminal states for model/semantic/verification failures.
 #
@@ -208,7 +210,7 @@ class KernelResult:
 
 class Kernel:
     """
-    Application-level deterministic kernel boundary for FYJC transactions.
+    Application-level deterministic kernel boundary for financial transactions.
 
     The Kernel:
       1. obtains a semantic interpretation through ModelProvider

@@ -8,7 +8,7 @@ boundary and the Hugging Face ZeroGPU Space `Pranay-20/Platrixa`.
 Why this exists
 ---------------
 The Space serves the EXACT Phase 6C artifact (Qwen2.5-1.5B @ 989aa79… with the
-locked FYJC LoRA @ b5c0a37…). ZeroGPU requires the @spaces.GPU Gradio execution
+locked historical FYJC LoRA @ b5c0a37…). ZeroGPU requires the @spaces.GPU Gradio execution
 model, so the Space cannot expose a raw FastAPI POST /interpret (confirmed by
 rebuild experiments and HF forums). It instead exposes the named Gradio API
 `/interpret_core`, whose first output is byte-compatible with the envelope the

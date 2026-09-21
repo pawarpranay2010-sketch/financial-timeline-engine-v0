@@ -2,7 +2,8 @@
 Platrixa — ModelProvider boundary (Phase 7B)
 
 This package is the ONE place where application-level model inference
-responsibility lives for the FYJC specialist path.
+responsibility lives for the specialist language-understanding path.
+(The FYJC specialist adapter was the first trained slice of that path.)
 
 Target contract:
 

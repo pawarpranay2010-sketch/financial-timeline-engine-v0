@@ -2,7 +2,7 @@
 Platrixa — ModelProvider contract (Phase 7B)
 
 Defines the minimal application-facing contract for AI/model inference in the
-FYJC specialist path.
+specialist language-understanding path.
 
 Design notes
 ------------
@@ -35,7 +35,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 #   revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306
 #
 # LoRA adapter:
-#   Pranay-20/platrixa-fyjc-specialist-v0.1
+#   Pranay-20/platrixa-fyjc-specialist-v0.1  (historical FYJC-focused slice)
 #   revision: b5c0a37cebc00e93144150dbbcaa7b28cadb259e
 #
 # The values below are the *intended* production artifacts. They are stored
@@ -243,7 +243,7 @@ class InterpretationResult:
 
 class ModelProvider(Protocol):
     """
-    Application-facing contract for FYJC model inference.
+    Application-facing contract for specialist model inference.
 
     Implementations:
       - LocalHFModelProvider (current local Hugging Face + LoRA implementation)

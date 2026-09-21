@@ -1,4 +1,4 @@
-"""Platrixa — FYJC Kernel API route (Phase 7F).
+"""Platrixa — Deterministic Kernel API route (Phase 7F).
 
 The authoritative HTTP boundary for the deterministic Kernel workflow:
 

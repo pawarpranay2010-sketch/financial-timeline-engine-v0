@@ -77,7 +77,7 @@ ways to wire them:
 Never hardcode a backend URL in committed frontend code; the FastAPI host
 is deployment configuration owned by the environment.
 
-## Model inference on Modal (Phase 7R — required for the FYJC model path)
+## Model inference on Modal (Phase 7R — required for the specialist model path)
 
 Render Free (512 MB) cannot load Qwen2.5-1.5B-Instruct: every load attempt is
 killed by the platform after ~75–96 s. The model therefore runs as a Modal

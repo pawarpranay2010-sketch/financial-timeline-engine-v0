@@ -1,9 +1,9 @@
 /* =====================================================================
-   Platrixa — FYJC Accountancy Assistant (Phase 7G)
+   Platrixa — Financial Semantics Assistant (Phase 7G)
    ---------------------------------------------------------------------
    THIN CLIENT. All accounting reasoning happens in the backend Kernel:
 
-     student input → POST /api/v1/kernel/process (Phase 7F, verbatim)
+     transaction input → POST /api/v1/kernel/process (Phase 7F, verbatim)
                    → response rendered here, defensively
 
    This file must NEVER:

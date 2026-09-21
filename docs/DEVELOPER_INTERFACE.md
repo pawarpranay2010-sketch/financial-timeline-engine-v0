@@ -13,13 +13,13 @@ readiness, API security, or authentication; those are future concerns.
 
 ## 1. What Platrixa is
 
-Platrixa turns a student's natural-language financial transaction into a
-deterministic, verified accounting result:
+Platrixa turns natural-language financial information into a
+deterministic, validated financial-semantic result:
 
 ```
 raw transaction text
     ↓  (Kernel.process — the single authoritative path)
-model interpretation (Qwen2.5-1.5B + FYJC LoRA, local or remote)
+model interpretation (Qwen2.5-1.5B + specialist LoRA, local or remote)
     ↓
 schema validation (18-field structured interpretation contract)
     ↓
@@ -156,7 +156,7 @@ states and evidence, not exceptions.
 | `VALIDATION_FAILED` | model output failed the schema contract (fail-closed) | ❌ |
 | `GROUNDING_FAILED` | interpretation not supported by the input (fail-closed) | ❌ |
 | `FORBIDDEN_OUTPUT` | model emitted forbidden accounting fields (fail-closed) | ❌ |
-| `UNSUPPORTED_TRANSACTION` | outside the supported FYJC transaction set | ❌ |
+| `UNSUPPORTED_TRANSACTION` | outside the currently supported transaction semantics | ❌ |
 
 **Authority:** only the deterministic accounting flow inside
 `Kernel.process` can produce `VERIFIED`. Developer rules (below) can only
