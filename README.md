@@ -47,12 +47,20 @@ contradiction detection.
 | Python library (`from platrixa import Platrixa`) | ✅ shipped |
 | CLI (`python -m platrixa process`) | ✅ shipped |
 | Schema verification + grounding + deterministic kernel | ✅ shipped |
-| Deterministic formula authority (financial ratios/calculations) | ✅ in runtime |
-| Finance knowledge authority (verified concepts, provenance-backed) | ✅ in runtime |
+| Deterministic formula authority (financial ratios/calculations) | ✅ in runtime — not callable via `/v1/process` |
+| Finance knowledge authority (verified concepts, provenance-backed) | ✅ in runtime — not callable via `/v1/process` |
 | Server-side rule packs / hooks (downgrade-only) | ✅ shipped |
 | Self-serve signup / billing automation / dashboard | ❌ not yet |
 | Key-rotation UI, idempotency, app-level rate limiting | ❌ not yet |
 | Bank statements / invoices / document understanding | ⏳ under evaluation |
+
+**Authority exposure note:** the formula authority
+(`backend/maths/formula_registry.py`) and the finance knowledge authority
+(`backend/maths/finance_knowledge.py`) are implemented, tested, and
+capability-registered inside the Platrixa runtime — but there is currently
+**no public calling convention** for them, and they are **not part of the
+`/v1/process` developer contract**. Do not build against them as if the
+hosted API exposed them.
 
 ## How developers use Platrixa
 
@@ -92,6 +100,8 @@ Response shape (fields abridged; the runtime's state is authoritative):
 
 `interpretation` is the model's suggestion; `status` is decided by the
 deterministic runtime and is the only field your integration should act on.
+The exact 18-field candidate contract — every field, type, and enum value —
+is documented in [`docs/SEMANTIC_CONTRACT.md`](docs/SEMANTIC_CONTRACT.md).
 
 Transport rules: malformed JSON → `400 REQUEST_MALFORMED`; invalid domain
 input → `422 INPUT_INVALID`; missing/invalid key → `401 UNAUTHORIZED`;
@@ -143,6 +153,17 @@ scheduler, no cross-month leakage).
 
 ### 2. Python (local library)
 
+The library is **not published to PyPI** (there is no `pyproject.toml` or
+`setup.py`). To use it, clone this repository and install the repository
+requirements first; the `platrixa` package then imports from the
+repository root:
+
+```bash
+git clone <this repository>
+cd financial-timeline-engine-v0
+pip install -r requirements.txt   # torch only needed for local inference
+```
+
 ```python
 from platrixa import Platrixa
 
@@ -174,6 +195,21 @@ Local execution via the Python library is supported for development but
 requires installing the model dependencies and letting the provider load
 weights on first use (`provider="auto"` resolves the configured provider).
 Direct model download is not the documented integration path.
+
+## What your application still implements
+
+Platrixa validates financial semantics and executes supported deterministic
+results — it does not automatically become your application's entire
+accounting system. Your application remains responsible for:
+
+- **Handling `REVIEW_REQUIRED` and `BLOCKED` outcomes explicitly** — queue
+  them for human review or reject them; do not treat them as success
+  (`success` is `true` only for `VERIFIED`).
+- **Deciding whether and how to persist results** for your own use (the
+  hosted service persists kernel interactions server-side; that is not your
+  application's datastore).
+- **Your own posting / business workflow** on top of returned results.
+- **Using `status` / `next_action`** to drive user-facing flows.
 
 ## Current limitations
 

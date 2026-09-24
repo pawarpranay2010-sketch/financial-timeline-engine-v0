@@ -29,7 +29,8 @@ deterministic accounting kernel (journal entries, ledger effects)
     ↓
 optional developer rules (YAML pack + Python hooks; downgrade-only)
     ↓
-final state + evidence (VERIFIED / REVIEW_REQUIRED / BLOCKED / …)
+final state + evidence (VERIFIED / REVIEW_REQUIRED / BLOCKED, plus fail-closed
+failure states such as UNSUPPORTED_TRANSACTION)
 ```
 
 The developer-facing layer (`platrixa/`) configures the Kernel and projects
@@ -130,7 +131,7 @@ the authoritative `KernelResult` (recomputed by nothing):
 |---|---|
 | `status` | terminal state (see §7) — decided by the Kernel only |
 | `status_label` | human-readable label ("Verified", "Review Required", …) |
-| `success` | True for VERIFIED/REVIEW_REQUIRED completions |
+| `success` | True ONLY when `status` is `VERIFIED`; `false` for `REVIEW_REQUIRED`, `BLOCKED`, and every failure state |
 | `interpretation` | schema-validated 18-field candidate (or None) |
 | `accounting` | deterministic accounting result (debit/credit lines, …) |
 | `issues` | failure reasons and model-level issues |
@@ -150,7 +151,7 @@ states and evidence, not exceptions.
 | State | Meaning | `success` |
 |---|---|---|
 | `VERIFIED` | transaction fully understood, grounded, and deterministically accounted | ✅ |
-| `REVIEW_REQUIRED` | valid but ambiguous (e.g. missing party/payment mode) — needs human confirmation | ✅ |
+| `REVIEW_REQUIRED` | valid but ambiguous (e.g. missing party/payment mode) — needs human confirmation | ❌ |
 | `BLOCKED` | blocked by deterministic safety/rule policy | ❌ |
 | `MODEL_UNAVAILABLE` | model/provider not reachable or not loadable (fail-closed) | ❌ |
 | `VALIDATION_FAILED` | model output failed the schema contract (fail-closed) | ❌ |

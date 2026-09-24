@@ -40,9 +40,10 @@ def create_app() -> FastAPI:
         title="Platrixa API",
         version=__version__,
         description=(
-            "Standalone web backend for the Platrixa — "
-            "Agentic RAG intelligence, extraction 2.0, and market data "
-            "served to the browser, backed by PostgreSQL."
+            "Deterministic financial semantic validation infrastructure for "
+            "AI-powered accounting and finance software. Schema-validated "
+            "semantic interpretation is routed through deterministic "
+            "authorities; served to the browser, backed by PostgreSQL."
         ),
         lifespan=lifespan,
     )
