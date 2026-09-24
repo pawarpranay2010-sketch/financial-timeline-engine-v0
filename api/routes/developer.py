@@ -86,6 +86,7 @@ from api.routes.kernel import (
     _safe_candidate,
 )
 from api.schemas import (
+    DeveloperDocumentProcessResponse,
     DeveloperHealthResponse,
     DeveloperProcessResponse,
     DeveloperReadyResponse,
@@ -596,3 +597,186 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
         status_code=transport_status,
         content=jsonable_encoder(response.model_dump()),
     )
+
+
+# ---------------------------------------------------------------------------
+# Document path (Phase 3)
+#
+# Same admission control, same status authority, same public interface as
+# /v1/process — the ONLY difference is that the source may be a PDF or an
+# image instead of a text string.
+#
+# The chain is:
+#     upload -> document understanding -> evidence adapter
+#            -> EXISTING financial semantic interpreter
+#            -> EXISTING 18-field CandidateSemanticIR
+#            -> EXISTING schema verification
+#            -> EXISTING ExpandedGroundingGate
+#            -> EXISTING authority routing
+#
+# This route owns no part of that chain beyond the first two arrows, and
+# cannot produce VERIFIED: the status in the response body is a verbatim
+# copy of the Kernel's terminal state.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/v1/process/document", response_model=DeveloperDocumentProcessResponse,
+             dependencies=[Depends(_metered_api_key_guard)])
+async def process_document_v1(request: Request) -> "DeveloperDocumentProcessResponse":
+    """Process a text, PDF, or image financial document.
+
+    Transport rules (identical in spirit to ``/v1/process``):
+        missing/invalid API key     -> 401 (before any processing)
+        quota exhausted             -> 429
+        metering store unavailable  -> 503 (fail closed)
+        no input / ambiguous input  -> 400 error envelope
+        unsupported file type       -> 415 error envelope
+        file too large              -> 413 error envelope
+        Kernel terminal states      -> mapped exactly as for /v1/process
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    started = time.perf_counter()
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    raw_input: Optional[str] = None
+    upload = None
+
+    if content_type.startswith("multipart/form-data"):
+        form = await _read_multipart_form(request)
+        raw_input = form.get("raw_input")
+        upload = form.get("document") or form.get("file")
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            return _error_response(400, "REQUEST_MALFORMED",
+                                   "Expected a JSON body with raw_input, "
+                                   "or a multipart/form-data upload.", request_id=rid)
+        if not isinstance(body, dict):
+            return _error_response(400, "REQUEST_MALFORMED",
+                                   "JSON body must be an object.", request_id=rid)
+        raw_input = body.get("raw_input")
+
+    from backend.document_understanding.inputs import (
+        DocumentInputError,
+        resolve_document_input,
+    )
+
+    try:
+        data, source_name = resolve_document_input(raw_input, upload)
+    except DocumentInputError as exc:
+        status_code = {
+            "INPUT_MISSING": 400,
+            "INPUT_AMBIGUOUS": 400,
+            "FILE_EMPTY": 400,
+            "FILE_NAME_MISSING": 400,
+            "FILE_TYPE_UNSUPPORTED": 415,
+            "CONTENT_TYPE_UNSUPPORTED": 415,
+            "FILE_TOO_LARGE": 413,
+        }.get(exc.code, 400)
+        _log("/v1/process/document", request_id=rid, status=None,
+             duration_ms=int((time.perf_counter() - started) * 1000),
+             error=exc.code)
+        return _error_response(status_code, exc.code, exc.message, request_id=rid)
+
+    try:
+        client = _get_client(request)
+    except Exception as exc:  # server configuration problem — fail closed
+        logger.error("developer client construction failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="service configuration invalid") from exc
+
+    # Imported lazily: keeps the Phase 7F clean-import discipline.
+    from backend.document_understanding.processor import DocumentProcessor
+    from backend.document_understanding.registry import get_ocr_provider
+
+    processor = DocumentProcessor(
+        process_text=client.process,
+        ocr_provider=get_ocr_provider(),
+    )
+
+    try:
+        result = processor.process(data, source_name, request_id=rid)
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        logger.warning("document request failed: %s: %s", type(exc).__name__, exc)
+        _log("/v1/process/document", request_id=rid, status=None,
+             duration_ms=duration_ms, error="PROVIDER_UNAVAILABLE")
+        return _error_response(
+            503, "PROVIDER_UNAVAILABLE",
+            "model provider is unavailable; retry later", request_id=rid,
+        )
+
+    kernel_result = result.kernel_result
+    status = result.status
+    transport_status = _HTTP_STATUS_BY_KERNEL_STATUS.get(status, 500)
+
+    document_dict = result.document.to_dict()
+    # Bound the response: full evidence is returned, but page text is not
+    # duplicated inside the per-page summary.
+    evidence = [
+        e.to_dict() for e in result.document.evidence
+    ][:500]
+
+    response = DeveloperDocumentProcessResponse(
+        api_version=API_VERSION,
+        request_id=getattr(kernel_result, "request_id", None),
+        status=status,
+        status_label=getattr(kernel_result, "status_label", "") or status,
+        success=bool(getattr(kernel_result, "success", False)),
+        next_action=getattr(kernel_result, "next_action", None),
+        issues=list(getattr(kernel_result, "issues", None) or []),
+        grounding_issues=list(getattr(kernel_result, "grounding_issues", None) or []),
+        rule_evidence=list(getattr(kernel_result, "rule_evidence", None) or []),
+        interpretation=_safe_candidate(getattr(kernel_result, "interpretation", None)),
+        accounting=_safe_accounting(getattr(kernel_result, "accounting", None)),
+        document=document_dict,
+        evidence=evidence,
+        timings_ms=result.timings_ms,
+        notes=result.notes,
+    )
+
+    _log("/v1/process/document", request_id=rid, status=status,
+         duration_ms=int((time.perf_counter() - started) * 1000), error=None)
+    return JSONResponse(
+        status_code=transport_status,
+        content=jsonable_encoder(response.model_dump()),
+    )
+
+
+async def _read_multipart_form(request: Request):
+    """Read a multipart body into ``{field_name: (value | UploadFile)}``.
+
+    A small bounded reader: the total body is capped, and a file is only
+    materialized once its size is known to be within the limit.
+    """
+    from backend.document_understanding.inputs import MAX_DOCUMENT_BYTES
+
+    try:
+        form = await request.form()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="malformed multipart body") from exc
+
+    out = {}
+    try:
+        for key in form.keys():
+            item = form[key]
+            if hasattr(item, "filename") and item.filename:
+                out[key] = item
+            else:
+                value = getattr(item, "value", item)
+                if isinstance(value, bytes):
+                    value = value.decode("utf-8", errors="replace")
+                out[key] = value
+    finally:
+        pass
+
+    # Pre-check declared size when the client provides it, so an oversized
+    # upload is refused without buffering the whole body.
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    if declared > MAX_DOCUMENT_BYTES + 64 * 1024:
+        raise HTTPException(status_code=413, detail="document too large")
+
+    return out

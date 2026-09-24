@@ -158,6 +158,38 @@ class DeveloperProcessResponse(BaseModel):
     accounting: Optional[Dict[str, Any]] = None
 
 
+class DeveloperDocumentProcessResponse(BaseModel):
+    """Versioned response for the document submission path.
+
+    Transport + provenance only. ``status`` is the Kernel's own terminal
+    state carried verbatim — the document layer can never create, upgrade
+    or soften it, and OCR output can never reach VERIFIED.
+
+    ``document`` exposes the evidence a developer needs to audit a result:
+    page count, per-page extraction status, which pages still need OCR, the
+    OCR engine used, and citable evidence (page / bbox / text /
+    confidence) for the supported semantic fields.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    status: str
+    status_label: str = ""
+    success: bool = False
+    next_action: Optional[str] = None
+    issues: List[str] = Field(default_factory=list)
+    grounding_issues: List[str] = Field(default_factory=list)
+    rule_evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    interpretation: Optional[Dict[str, Any]] = None
+    accounting: Optional[Dict[str, Any]] = None
+
+    # --- document provenance (never a financial claim) ---
+    document: Dict[str, Any] = Field(default_factory=dict)
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    timings_ms: Dict[str, Any] = Field(default_factory=dict)
+    notes: List[str] = Field(default_factory=list)
+
+
 class DeveloperHealthResponse(BaseModel):
     """Liveness — the API process is alive. Touches nothing."""
 
