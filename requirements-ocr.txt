@@ -1,0 +1,30 @@
+# Platrixa — OPTIONAL OCR manifest.
+#
+# NOT required by the hosted API, the deterministic runtime, or any
+# text-only path. The core runtime deliberately does not include these
+# packages: a text-only install must stay lightweight, and OCR must remain
+# swappable and absent-by-default.
+#
+# Install only when scanned/image documents must be recognized:
+#     pip install -r requirements-ocr.txt
+#
+# Licenses:
+#   rapidocr-onnxruntime — Apache-2.0 (code and PP-OCRv5 weights)
+#   onnxruntime          — MIT
+#   PyMuPDF              — AGPL-3.0 OR commercial. See docs:
+#                          https://pymupdf.readthedocs.io/en/latest/about.html#license
+#                          NOTE: PyMuPDF is used ONLY to rasterize PDF pages
+#                          before recognition. If AGPL-3.0 is unacceptable
+#                          for your distribution, omit PyMuPDF here and
+#                          rasterize with a differently-licensed renderer;
+#                          every scanned page then fails closed as
+#                          IMAGE_ONLY rather than being misread.
+#   pytesseract          — Apache-2.0 (requires the `tesseract` system binary)
+#
+# Everything is imported lazily by backend/document_understanding/ and is
+# unreachable unless a caller explicitly enables OCR.
+
+rapidocr-onnxruntime>=1.3
+onnxruntime>=1.16
+PyMuPDF>=1.23
+pytesseract>=0.3.10

@@ -209,10 +209,25 @@ class EvidenceAdapter:
             page_no = int(getattr(region, "page", 1) or 1)
             by_page.setdefault(page_no, []).append(region)
 
+        # Pages whose extraction FAILED are never eligible for OCR.
+        # OCR exists to read a page that has no text layer; it must never
+        # resurrect a page the reader could not even open (a corrupt or
+        # truncated file). Such a page stays EXTRACTION_FAILED and fail
+        # closed, no matter what an engine claims to have found.
+        failed_pages = {p.page for p in pages if p.status == EXTRACTION_FAILED}
+        if failed_pages:
+            notes.append(
+                f"pages {sorted(failed_pages)} failed extraction and are not "
+                f"eligible for OCR; they remain EXTRACTION_FAILED"
+            )
+
         updated: List[PageRepresentation] = []
         ocr_evidence: List[EvidenceRef] = []
 
         for page in pages:
+            if page.status == EXTRACTION_FAILED:
+                updated.append(page)
+                continue
             regions_for_page = by_page.get(page.page, [])
             usable: List[EvidenceRef] = []
             ordinal = 0
