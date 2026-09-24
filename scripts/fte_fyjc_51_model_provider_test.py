@@ -159,7 +159,7 @@ def audit_revision_pinning() -> bool:
     )
     ok &= _check(
         "adapter repo id pinned",
-        ADAPTER_REPO_ID == "Pranay-20/platrixa-fyjc-specialist-v0.1",
+        ADAPTER_REPO_ID == "Pranay-20/platrixa-financial-semantic-v0.1",
     )
     ok &= _check(
         "adapter revision pinned",

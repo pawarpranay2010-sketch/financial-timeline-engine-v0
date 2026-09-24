@@ -126,7 +126,7 @@ def section_b() -> dict[str, str]:
         print(f"  {k}: {v}")
         _check(bool(v), f"pinned identity present: {k}")
     _check(BASE_MODEL_ID == "Qwen/Qwen2.5-1.5B-Instruct", "base model family unchanged (Qwen2.5-1.5B-Instruct)")
-    _check(ADAPTER_REPO_ID == "Pranay-20/platrixa-fyjc-specialist-v0.1", "adapter repo unchanged")
+    _check(ADAPTER_REPO_ID == "Pranay-20/platrixa-financial-semantic-v0.1", "adapter repo unchanged")
     _check(len(BASE_MODEL_REVISION) == 40 and len(ADAPTER_REVISION) == 40, "revisions are full 40-hex commits")
     return identity
 

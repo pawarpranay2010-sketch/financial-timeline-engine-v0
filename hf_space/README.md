@@ -16,15 +16,16 @@ Deterministic financial semantic validation infrastructure for AI-powered
 accounting and finance software. **AI interprets. Deterministic authorities
 decide and execute.**
 
-This Space serves the **exact Phase 6C model artifact** — a historical,
-FYJC-focused development/evaluation slice of Platrixa's broader
-financial-semantic scope, not the definition of the product:
+This Space serves the **pinned Platrixa Financial Semantic v0.1 adapter** —
+the exact Phase 6C model artifact (a historical FYJC-focused
+development/evaluation slice of Platrixa's broader financial-semantic scope,
+not the definition of the product):
 
 | Artifact | Value |
 |---|---|
 | Base model | `Qwen/Qwen2.5-1.5B-Instruct` |
 | Base revision | `989aa7980e4cf806f80c7fef2b1adb7bc71aa306` |
-| Adapter | `Pranay-20/platrixa-fyjc-specialist-v0.1` |
+| Adapter | `Pranay-20/platrixa-financial-semantic-v0.1` |
 | Adapter revision | `b5c0a37cebc00e93144150dbbcaa7b28cadb259e` |
 | Decoding | greedy (temperature = 0.0), max_new_tokens = 1024 |
 | Prompt format | byte-exact Alpaca SFT template used in Phase 6B training |

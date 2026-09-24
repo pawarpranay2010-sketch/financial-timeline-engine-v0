@@ -35,7 +35,9 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 #   revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306
 #
 # LoRA adapter:
-#   Pranay-20/platrixa-fyjc-specialist-v0.1  (historical FYJC-focused slice)
+#   Pranay-20/platrixa-financial-semantic-v0.1
+#   (renamed 2026-09 from the historical name platrixa-fyjc-specialist-v0.1;
+#    same artifact, same weights, revision unchanged)
 #   revision: b5c0a37cebc00e93144150dbbcaa7b28cadb259e
 #
 # The values below are the *intended* production artifacts. They are stored
@@ -56,7 +58,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 BASE_MODEL_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
 
-ADAPTER_REPO_ID = "Pranay-20/platrixa-fyjc-specialist-v0.1"
+ADAPTER_REPO_ID = "Pranay-20/platrixa-financial-semantic-v0.1"
 ADAPTER_REVISION = "b5c0a37cebc00e93144150dbbcaa7b28cadb259e"
 
 

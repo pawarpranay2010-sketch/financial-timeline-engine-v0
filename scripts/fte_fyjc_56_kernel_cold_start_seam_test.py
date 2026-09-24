@@ -554,7 +554,7 @@ def test_provider_status_contract() -> bool:
     )
     ok &= _check(
         "H. pinned adapter repo unchanged",
-        ADAPTER_REPO_ID == "Pranay-20/platrixa-fyjc-specialist-v0.1",
+        ADAPTER_REPO_ID == "Pranay-20/platrixa-financial-semantic-v0.1",
     )
 
     from backend.maths.fyjc_local_model_runner import DEFAULT_BASE_REVISION

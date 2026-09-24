@@ -23,7 +23,7 @@ LOCKED MODEL ARTIFACT (MUST NOT DRIFT)
 --------------------------------------
     Base:     Qwen/Qwen2.5-1.5B-Instruct
     Revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306
-    Adapter:  Pranay-20/platrixa-fyjc-specialist-v0.1
+    Adapter:  Pranay-20/platrixa-financial-semantic-v0.1
     Revision: b5c0a37cebc00e93144150dbbcaa7b28cadb259e
 
 These are the exact artifacts evaluated in Phase 6C (98% transaction type,
@@ -88,7 +88,7 @@ import modal
 BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 BASE_MODEL_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
 
-ADAPTER_REPO_ID = "Pranay-20/platrixa-fyjc-specialist-v0.1"
+ADAPTER_REPO_ID = "Pranay-20/platrixa-financial-semantic-v0.1"
 ADAPTER_REVISION = "b5c0a37cebc00e93144150dbbcaa7b28cadb259e"
 
 # ---------------------------------------------------------------------------

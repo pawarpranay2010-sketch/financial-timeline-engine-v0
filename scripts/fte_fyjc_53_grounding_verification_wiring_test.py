@@ -776,7 +776,7 @@ def audit_phase6c_and_locked_test_set_untouched() -> bool:
     )
     ok &= _check("base model id pinned", BASE_MODEL_ID == "Qwen/Qwen2.5-1.5B-Instruct")
     ok &= _check("base revision pinned", BASE_MODEL_REVISION == "989aa7980e4cf806f80c7fef2b1adb7bc71aa306")
-    ok &= _check("adapter repo id pinned", ADAPTER_REPO_ID == "Pranay-20/platrixa-fyjc-specialist-v0.1")
+    ok &= _check("adapter repo id pinned", ADAPTER_REPO_ID == "Pranay-20/platrixa-financial-semantic-v0.1")
     ok &= _check("adapter revision pinned", ADAPTER_REVISION == "b5c0a37cebc00e93144150dbbcaa7b28cadb259e")
     return ok
 

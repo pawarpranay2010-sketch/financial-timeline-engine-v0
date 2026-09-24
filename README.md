@@ -223,9 +223,9 @@ NOT currently available:
 - consumer financial advice — Platrixa produces financial semantics,
   not investment advice, by design
 
-Breadth: Platrixa's proven transaction domain is FYJC-style accounting
-language — an early development and evaluation slice of the broader
-financial-semantic scope, not the product's definition. Bank narration,
+Breadth: Platrixa's evaluated transaction domain is school-level (FYJC)
+accounting language — an early development and evaluation slice of the
+broader financial-semantic scope, not the product's definition. Bank narration,
 invoice, and broader financial-document semantics are under evaluation —
 do not treat them as supported until the Phase 24 foundation evaluation
 and subsequent validation establish evidence.

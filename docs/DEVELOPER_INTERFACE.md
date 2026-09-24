@@ -189,7 +189,7 @@ client = Platrixa(PlatrixaConfig(
 
 Model identity stays pinned by default to the production artifacts
 (base `Qwen/Qwen2.5-1.5B-Instruct` @ `989aa798…`, LoRA adapter
-`Pranay-20/platrixa-fyjc-specialist-v0.1` @ `b5c0a37…`). Supply
+`Pranay-20/platrixa-financial-semantic-v0.1` @ `b5c0a37…`). Supply
 `provider_config` only if you deliberately want different artifacts.
 
 No API keys are introduced by the interface. Existing environment

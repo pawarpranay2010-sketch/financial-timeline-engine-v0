@@ -1,5 +1,5 @@
 """
-Platrixa — Local Model Runner (FYJC Specialist Inference)
+Platrixa — Local Model Runner (Financial Semantic Inference)
 ==========================================================
 
 Lazy-loading Hugging Face model runner for local inference.
@@ -63,7 +63,8 @@ DEFAULT_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 # production uses this default so the base model is NEVER loaded unpinned.
 DEFAULT_BASE_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
 
-# Pinned Platrixa FYJC LoRA adapter revision (Phase 6B/6C artifact).
+# Pinned Platrixa Financial Semantic v0.1 LoRA adapter revision (Phase 6B/6C
+# artifact; repo renamed from its historical FYJC-specialist name).
 #
 # This mirrors the pin declared at the ModelProvider boundary
 # (backend/model_provider/base.py ADAPTER_REVISION). It is duplicated here
@@ -113,7 +114,7 @@ def _classify_adapter(adapter_path: str) -> Tuple[bool, bool]:
       - Hugging Face repo id ("org/name" form) → (False, True)
       - neither                                → (False, False)
 
-    The Phase 6B/6C adapter (Pranay-20/platrixa-fyjc-specialist-v0.1) is an
+    The Phase 6B/6C adapter (Pranay-20/platrixa-financial-semantic-v0.1) is an
     HF repository, not a local directory. The previous isdir()-only gate
     silently skipped it, producing base-only inference — fixed here.
     """
@@ -321,7 +322,7 @@ class LocalModelRunner:
             #
             # Two adapter configuration forms are supported:
             #   A. local filesystem path  (os.path.isdir → PEFT from local dir)
-            #   B. Hugging Face repo ID   (e.g. "Pranay-20/platrixa-fyjc-specialist-v0.1",
+            #   B. Hugging Face repo ID   (e.g. "Pranay-20/platrixa-financial-semantic-v0.1",
             #                              pinned via PLATRIXA_FYJC_ADAPTER_REVISION)
             #
             # Fail-closed rule: if an adapter is configured but cannot be

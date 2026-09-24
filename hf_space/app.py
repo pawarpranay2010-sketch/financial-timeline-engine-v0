@@ -2,13 +2,14 @@
 Platrixa — Financial Semantics Specialist Inference (Hugging Face Space)
 ========================================================================
 
-Serves the EXACT Phase 6C Platrixa specialist artifact — a historical,
-FYJC-focused development/evaluation slice of Platrixa's broader
-financial-semantic scope (not the definition of the product):
+Serves the pinned Platrixa Financial Semantic v0.1 artifact — the exact
+Phase 6C adapter (a historical FYJC-focused development/evaluation slice
+of Platrixa's broader financial-semantic scope; the model interprets, the
+deterministic Platrixa runtime validates, grounds, and decides):
 
     Base:     Qwen/Qwen2.5-1.5B-Instruct
     Revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306
-    Adapter:  Pranay-20/platrixa-fyjc-specialist-v0.1
+    Adapter:  Pranay-20/platrixa-financial-semantic-v0.1
     Revision: b5c0a37cebc00e93144150dbbcaa7b28cadb259e
 
 It is a LANGUAGE-UNDERSTANDING service only. It returns the model's
@@ -88,7 +89,7 @@ except Exception:  # local / non-ZeroGPU execution
 BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 BASE_MODEL_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
 
-ADAPTER_REPO_ID = "Pranay-20/platrixa-fyjc-specialist-v0.1"
+ADAPTER_REPO_ID = "Pranay-20/platrixa-financial-semantic-v0.1"
 ADAPTER_REVISION = "b5c0a37cebc00e93144150dbbcaa7b28cadb259e"
 
 # Phase 6C locked evaluation decoding (temperature=0.0, greedy)

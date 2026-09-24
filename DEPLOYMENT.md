@@ -85,7 +85,9 @@ serverless GPU service and the FastAPI Kernel calls it over HTTPS.
 
 - Service code: `training/modal_inference.py` (self-contained; owns the pinned
   base `Qwen/Qwen2.5-1.5B-Instruct` @ `989aa79…`, the pinned LoRA adapter
-  `Pranay-20/platrixa-fyjc-specialist-v0.1` @ `b5c0a37…`, exact Phase 6B/6C
+  `Pranay-20/platrixa-financial-semantic-v0.1` @ `b5c0a37…` (repo renamed
+  from the historical `platrixa-fyjc-specialist-v0.1`; same artifact), exact
+  Phase 6B/6C
   runtime pins, a persistent HF cache volume, and fail-closed adapter loading).
 - Deploy (once, from a machine with Modal auth):
 
