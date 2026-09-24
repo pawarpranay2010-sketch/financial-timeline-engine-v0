@@ -23,7 +23,8 @@ Stable result + evidence
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/v1/process` | Process one financial transaction |
+| `POST` | `/v1/process` | Process one financial transaction (text) |
+| `POST` | `/v1/process/document` | Process a transaction from **text, a PDF, or an image** |
 | `GET` | `/v1/health` | Liveness — API process alive (touches nothing) |
 | `GET` | `/v1/ready` | Readiness — dependencies available enough to process |
 
@@ -285,3 +286,121 @@ internals (kernel, providers, accounting, grounding, rules, persistence)
 and performs no persistence. See `PLATRIXA_PHASE13_HOSTED_API_REPORT.md`
 for the evidence suite (`scripts/fte_fyjc_62_hosted_api_boundary_test.py`)
 proving the routing and authority invariants.
+
+---
+
+# Document submissions (`POST /v1/process/document`)
+
+Submit a **text, PDF, or image** and receive the same validated result you
+get from `/v1/process`. You do not need to run your own OCR: Platrixa owns
+ingestion, document understanding, evidence normalization, semantic
+interpretation, schema verification, grounding, and authority routing.
+
+## Request
+
+Two mutually exclusive forms:
+
+```bash
+# 1. text (JSON)
+curl -s -X POST https://<host>/v1/process/document \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  -d '{"raw_input": "Paid ₹12,500 to Raj for office furniture by cheque."}'
+
+# 2. a document (multipart)
+curl -s -X POST https://<host>/v1/process/document \
+  -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  -F "document=@invoice.pdf"
+```
+
+Accepted uploads: `.pdf`, `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`,
+`.webp`, `.txt`. Maximum **10 MiB** per document.
+
+Providing both `raw_input` and a file — or neither — is rejected.
+
+## Response
+
+The financial part of the body is identical to `/v1/process`: `status` is
+the runtime's own verdict, carried **verbatim**. The document path cannot
+produce, upgrade, or soften it. On top of that, the response adds
+provenance so a result can be audited:
+
+```json
+{
+  "api_version": "v1",
+  "status": "REVIEW_REQUIRED",
+  "success": false,
+  "document": {
+    "document_id": "doc_invoice_1a2b3c4d5e6f7890",
+    "page_count": 3,
+    "pages_by_status": {"DIGITAL_TEXT": [1, 2], "IMAGE_ONLY": [3], "EXTRACTION_FAILED": []},
+    "pages_needing_ocr": [3],
+    "engine": "rapidocr",
+    "engine_version": "1.3.24",
+    "pages": [{"page": 3, "status": "IMAGE_ONLY", "text_chars": 0, "reason": "no_extractable_text_layer"}]
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc_invoice_1a2b...:p3:e0000",
+      "page": 3,
+      "text": "Paid 12500 to Raj ...",
+      "bbox": [60.0, 130.0, 900.0, 170.0],
+      "extraction_confidence": 0.95,
+      "source_type": "rapidocr:p3",
+      "engine": "rapidocr",
+      "engine_version": "1.3.24"
+    }
+  ],
+  "timings_ms": {"document_understanding_ms": 41.2, "semantic_validation_pipeline_ms": 63.5},
+  "notes": []
+}
+```
+
+**Evidence lineage.** `evidence[]` carries the page, bounding box, text,
+confidence and OCR engine behind the content, so you can answer *"which
+page/region caused this fact?"* The `document_id` and `evidence_id` values
+are content-addressed and deterministic: the same file always yields the
+same IDs.
+
+## What the document layer will never do
+
+* OCR is **not** a financial authority. It reports what is on the page.
+* It never computes totals, taxes, balances, or any arithmetic.
+* It never emits `VERIFIED`, and it never bypasses schema verification or
+  grounding.
+* It never fabricates text, confidence, or evidence. A page that cannot be
+  read stays `EXTRACTION_FAILED`; a region below the confidence floor is
+  dropped rather than guessed.
+
+## Failure behaviour (fail-closed)
+
+| Situation | Result |
+|---|---|
+| Page has no text layer and no OCR engine installed | Page stays `IMAGE_ONLY`; no text is invented |
+| Scanned/image document, no OCR available | Interpreter receives page markers only → `GROUNDING_FAILED` (measured) |
+| OCR returns nothing usable | Page stays `IMAGE_ONLY`; `notes` explains why |
+| OCR confidence below the floor (0.30) | Region excluded from evidence entirely |
+| Corrupt / truncated file | Single `EXTRACTION_FAILED` page; no interpretation |
+| Ambiguous document | The runtime's own refusal state (`BLOCKED` / `NOT_SUPPORTED` / `REVIEW_REQUIRED`) |
+
+Transport errors are `400` (missing/ambiguous/empty input), `413` (too
+large), `415` (unsupported type). They are **not** financial verdicts.
+
+## Enabling OCR
+
+OCR is **off by default** so the core install stays lightweight. To enable:
+
+```bash
+pip install -r requirements-ocr.txt
+```
+
+Platrixa then selects RapidOCR (PP-OCRv5, Apache-2.0) and falls back to
+Tesseract, using them only for pages that have no text layer. Force a
+choice with `PLATRIXA_OCR_ENGINE=rapidocr | tesseract | none`, and disable
+entirely with `none`.
+
+If no OCR engine is installed, text-based documents are unaffected and
+scanned documents fail closed.
+
+See `docs/PLATRIXA_DOCUMENT_UNDERSTANDING_PHASE_1_4_REPORT.md` for the full
+architecture, measured benchmarks, licensing, and known gaps.
