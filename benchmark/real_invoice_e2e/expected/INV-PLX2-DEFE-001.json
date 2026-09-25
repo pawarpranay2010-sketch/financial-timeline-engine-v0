@@ -1,0 +1,48 @@
+{
+  "candidate_18": {
+    "transaction_type": "PURCHASE",
+    "parties": [
+      "B-001-TEST-BUYER",
+      "S-001-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "10,500.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "CASH",
+    "references": [
+      "BILL-DE-01",
+      "REF-DE-01",
+      "DOC-DE-01"
+    ],
+    "ambiguities": [
+      "CONFLICTING_INFORMATION"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "PURCHASE",
+    "payment_method_enum": "CASH",
+    "ambiguity_flags": [
+      "CONFLICTING_INFORMATION"
+    ],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.50",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-DE-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller under consignment terms\nDescription: Benchmark synthetic conflicting consignment invoice\nAccount Code: 4000-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: CASH\nPayment Terms: Net 15\nReference No: REF-DE-01\nDoc Ref: DOC-DE-01\nConsignor: S-001-TEST-SELLER (agent holds goods on our behalf)\nConsignee: B-001-TEST-BUYER\nOwnership has not transferred; this document is NOT a sale"
+}

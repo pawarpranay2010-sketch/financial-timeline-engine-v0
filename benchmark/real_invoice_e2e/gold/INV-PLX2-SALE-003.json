@@ -1,0 +1,13 @@
+{
+  "invoice_id": "INV-PLX2-SALE-003",
+  "scenario": "sale",
+  "source_type": "digital",
+  "difficulty": "easy",
+  "expected_transaction_type": "SALE",
+  "expected_status": "VERIFIED",
+  "expected_authority": "COMMERCIAL_CORE",
+  "expected_amount_total": "12,880.00",
+  "expected_party_payer": "B-003-TEST-BUYER",
+  "expected_party_payee": "S-003-TEST-SELLER",
+  "expected_payment_method": "UPI"
+}

@@ -1,0 +1,13 @@
+{
+  "invoice_id": "INV-PLX2-SIMP-001",
+  "scenario": "simple_purchase",
+  "source_type": "digital",
+  "difficulty": "easy",
+  "expected_transaction_type": "PURCHASE",
+  "expected_status": "VERIFIED",
+  "expected_authority": "COMMERCIAL_CORE",
+  "expected_amount_total": "12,390.00",
+  "expected_party_payer": "B-001-TEST-BUYER",
+  "expected_party_payee": "S-001-TEST-SELLER",
+  "expected_payment_method": "NEFT"
+}

@@ -1,0 +1,13 @@
+{
+  "invoice_id": "INV-PLX2-AMBI-002",
+  "scenario": "ambiguous_incomplete",
+  "source_type": "digital",
+  "difficulty": "hard",
+  "expected_transaction_type": "UNKNOWN",
+  "expected_status": "REVIEW_REQUIRED",
+  "expected_authority": "DISCREPANCY_AUTHORITY",
+  "expected_amount_total": "1,234.56",
+  "expected_party_payer": "",
+  "expected_party_payee": "S-002-TEST-SELLER",
+  "expected_payment_method": "UNKNOWN"
+}

@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "PURCHASE",
+    "parties": [
+      "B-001-TEST-BUYER",
+      "S-001-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "12,390.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "NEFT",
+    "references": [
+      "BILL-MU-01",
+      "REF-MU-01",
+      "DOC-MU-01"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "PURCHASE",
+    "payment_method_enum": "NEFT",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-MU-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller across attached pages\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 10,500.00\nGST Amount: 1,890.00\nTotal Amount: 12,390.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-01\nDoc Ref: DOC-MU-01\nPage 2: continuation of line items\nCarried-forward Total Amount on page 2: 12,390.00"
+}

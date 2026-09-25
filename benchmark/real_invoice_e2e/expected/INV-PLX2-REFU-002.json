@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "RETURN_OUT",
+    "parties": [
+      "B-002-TEST-BUYER",
+      "S-002-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "11,000.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "NEFT",
+    "references": [
+      "BILL-RE-02",
+      "REF-RE-02",
+      "DOC-RE-02"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "RETURN_OUT",
+    "payment_method_enum": "NEFT",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-RE-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Purchase return processed and refunded by supplier\nDescription: Benchmark synthetic supplier refund after purchase return\nAccount Code: 4003-00\nNet Amount: 11,000.00\nGST Amount: 0.00\nTotal Amount: 11,000.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-RE-02\nDoc Ref: DOC-RE-02\nOriginal purchase bill referenced for this return"
+}

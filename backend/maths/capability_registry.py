@@ -255,6 +255,266 @@ _KERNEL_TEST_REF = (
 )
 
 
+def _register_invoice_capabilities() -> None:
+    """Sprint INV-ROLE (Phase 3): invoice-labelled-facts capabilities.
+
+    SUPPORTED requires BOTH an implementation and a deterministic gate
+    that proves it (scripts/fte_invoice_role_gate_test.py). Anything the
+    narration/document domain does not yet prove stays PARTIAL or
+    UNSUPPORTED with explicit limitations - never an unproven claim.
+    """
+    _impl = (
+        "backend/maths/fyjc_orchestration.py:"
+        "_invoice_labelled_facts_outcome; "
+        "backend/maths/invoice_executor.py:compose_invoice_journal"
+    )
+    _impl_roles = (
+        "backend/maths/invoice_amount_roles.py:resolve_invoice_roles"
+    )
+    _tests = "scripts/fte_invoice_role_gate_test.py"
+    _evidence = (
+        "explicit 'label: value' invoice amounts with spans; party side; "
+        "per-capability required fields; arithmetic reconciliation "
+        "recorded as evidence (never an amount source)"
+    )
+
+    # -- SUPPORTED: implementation + gate both exist -----------------
+    register(Capability(
+        capability_id="KERNEL.INVOICE_PURCHASE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Purchase invoice from labelled facts",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Deterministic purchase/expense journal from explicit "
+            "invoice labels (net/tax/total, CGST+SGST or IGST, "
+            "discount, shipping, optional part-payment). Debit side "
+            "follows the existing classification machinery: Purchases "
+            "for inventory, the narration engine's own asset account "
+            "under ASSET_AUTHORITY, or the expense account for labelled "
+            "expense invoices. Never a hardcoded 'DR Purchases'."
+        ),
+        required_inputs=("net", "total", "party side"),
+        deterministic_op=(
+            "base = net - discount; DR base + Input GST (+ Carriage "
+            "Inward for labelled shipping) / CR party base+tax+shipping "
+            "(or CR Cash paid + CR party remainder)"
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="FYJC narration conventions (generate_journal) "
+                   "reused for account naming and GST treatment",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "amount-form GST follows the intra/inter-state treatment "
+            "the labels state (CGST+SGST or IGST); tax-inclusive "
+            "pricing and freight-forwarding composition are out of "
+            "scope; mixed GST schemes are refused"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_SALE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Sales invoice from labelled facts",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Deterministic credit-sale journal from explicit invoice "
+            "labels (net/tax/total, GST amount form, discount). DR "
+            "party total / CR Sales base / CR Output GST, mirroring "
+            "generate_journal's own sale convention net of trade "
+            "discount."
+        ),
+        required_inputs=("net", "total", "customer party"),
+        deterministic_op=(
+            "base = net - discount; DR party total / CR Sales base + "
+            "CR Output GST"
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="FYJC narration conventions (generate_journal) "
+                   "reused for account naming and GST treatment",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "cash-sale POS documents (no customer named) are out of "
+            "scope; shipping on a sales invoice is refused (no "
+            "deterministic account); tax-inclusive pricing out of scope"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_GST_AMOUNTS",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Invoice GST handling (amount form)",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Amount-form GST on invoice documents: the narration "
+            "engine requires a rate, so the invoice path posts the "
+            "LABELLED amounts - CGST+SGST components sum per component "
+            "name; a labelled IGST amount posts ONE IGST line; "
+            "contradictory or unresolvable tax evidence refuses. No "
+            "rate is ever invented and no amount is ever modified."
+        ),
+        required_inputs=("explicit GST/CGST/SGST/IGST amount labels"),
+        deterministic_op=(
+            "tax_total = single explicit label or per-component sum; "
+            "Input/Output prefix by direction; IGST stays one line"
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="generate_journal GST treatment (component scheme, "
+                   "Input/Output side, IGST single-line posting)",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "no rate computation from amounts (rate form stays with "
+            "the narration path); IGST+CGST/SGST mixtures refuse; "
+            "tax-inclusive pricing refuses"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_PAYMENT_AGAINST",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Payment against invoice (settlement)",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Deterministic settlement from payment + outstanding + "
+            "total labels (paid + balance due == total, else refuse). "
+            "Posts ONLY the payment fact under SETTLEMENT_AUTHORITY "
+            "- the outstanding balance is evidence, never a new "
+            "receivable/payable posting."
+        ),
+        required_inputs=("payment", "outstanding", "total"),
+        deterministic_op=(
+            "assert paid + outstanding == total; DR party / CR Cash "
+            "(supplier side) or DR Cash / CR party (customer side)"
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="SETTLEMENT_AUTHORITY narration conventions "
+                   "(payment direction from the document party side)",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "instrument words in the Payment line are not used to pick "
+            "a Bank account (narration convention posts Cash); "
+            "part-settlement of GST components is out of scope"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_REFUND",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Invoice refund",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Refund voucher from an explicit refund-amount label: DR "
+            "Cash / CR party (the narration engine's own refund "
+            "convention). The document must name the customer "
+            "receiving the refund."
+        ),
+        required_inputs=("refund amount", "customer party"),
+        deterministic_op="DR Cash R / CR party R",
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="narration refund convention",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "GST component effects of a refund are out of scope; "
+            "supplier-side refund documents refuse (counterparty "
+            "cannot be resolved)"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_CREDIT_NOTE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Credit note (purchase return)",
+        supported_status=_STATUS_SUPPORTED,
+        description=(
+            "Credit note from an explicit credit-note-amount label: DR "
+            "party / CR Purchase Returns (the narration engine's own "
+            "purchase-return convention). The document must name the "
+            "supplier issuing the note."
+        ),
+        required_inputs=("credit note amount", "supplier party"),
+        deterministic_op="DR party R / CR Purchase Returns R",
+        implementation_ref=_impl,
+        test_ref=_tests,
+        source_ref="narration purchase-return convention",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "sales-return credit notes issued BY the business (RETURN_"
+            "OUT direction) are out of scope; GST reversal on credit "
+            "notes is out of scope"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_OUTSTANDING_EVIDENCE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Outstanding balance evidence",
+        supported_status=_STATUS_PARTIAL,
+        description=(
+            "Labelled outstanding/balance-due amounts are resolved as "
+            "deterministic EVIDENCE for the payment+outstanding "
+            "composition (paid + outstanding == total); they are never "
+            "posted as new receivable/payable lines on their own."
+        ),
+        required_inputs=("outstanding",),
+        deterministic_op="outstanding + paid == total (reconciliation "
+                         "evidence only)",
+        implementation_ref=_impl_roles,
+        test_ref=_tests,
+        source_ref="invoice role layer reconciliation",
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "no standalone receivable/payable ledger posting; "
+            "aging/valuation of outstanding balances out of scope"
+        ),
+    ))
+
+    # -- UNSUPPORTED: honest boundary records ------------------------
+    register(Capability(
+        capability_id="KERNEL.INVOICE_TAX_INCLUSIVE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Tax-inclusive invoice pricing",
+        supported_status=_STATUS_UNSUPPORTED,
+        description=(
+            "Invoices where the stated total includes unstated GST "
+            "(no net or rate evidence): the net and tax can only be "
+            "invented, so the kernel refuses instead."
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "REVIEW_REQUIRED whenever only a tax-inclusive total is "
+            "labelled; the narration GST suite covers the rate-form "
+            "inclusive wording ('inclusive of GST') separately"
+        ),
+    ))
+    register(Capability(
+        capability_id="KERNEL.INVOICE_DEBIT_NOTE",
+        authority=AUTHORITY_ACCOUNTING_KERNEL,
+        canonical_name="Debit note accounting",
+        supported_status=_STATUS_UNSUPPORTED,
+        description=(
+            "Debit-note documents have no supported deterministic "
+            "accounting treatment; the kernel refuses rather than "
+            "inventing one because the label exists."
+        ),
+        implementation_ref=_impl,
+        test_ref=_tests,
+        framework="FYJC Book-Keeping",
+        jurisdiction="IN",
+        limitations=(
+            "remains REVIEW_REQUIRED/UNSUPPORTED by design; no debit-"
+            "note authority is implemented"
+        ),
+    ))
+
+
 def _register_kernel_capabilities() -> None:
     # Delayed import avoids a circular import at module load time
     # (fyjc_orchestration pulls the reasoning engine).
@@ -404,4 +664,5 @@ def _register_knowledge_capabilities() -> None:
 
 _register_formula_capabilities()
 _register_kernel_capabilities()
+_register_invoice_capabilities()
 _register_knowledge_capabilities()

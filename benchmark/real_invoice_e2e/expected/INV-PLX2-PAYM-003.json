@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "PAYMENT",
+    "parties": [
+      "B-003-TEST-BUYER",
+      "S-003-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "11,500.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "CHEQUE",
+    "references": [
+      "BILL-PA-03",
+      "REF-PA-03",
+      "DOC-PA-03"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "PAYMENT",
+    "payment_method_enum": "CHEQUE",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-PA-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Payment paid in full settlement of bill\nDescription: Benchmark synthetic settlement of supplier bill\nAccount Code: 5000-00\nNet Amount: 11,500.00\nGST Amount: 0.00\nTotal Amount: 11,500.00\nCurrency: INR\nPayment Mode: CHEQUE\nPayment Terms: Full settlement\nReference No: REF-PA-03\nDoc Ref: DOC-PA-03"
+}

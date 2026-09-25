@@ -1,0 +1,54 @@
+{
+  "candidate_18": {
+    "transaction_type": "UNKNOWN",
+    "parties": [
+      "S-002-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "1,234.56",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "UNKNOWN",
+    "references": [
+      "BILL-AM-02",
+      "REF-AM-02",
+      "DOC-AM-02"
+    ],
+    "ambiguities": [
+      "MISSING_PAYMENT_MODE",
+      "MISSING_AMOUNT",
+      "MISSING_PARTY"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "UNKNOWN",
+    "payment_method_enum": "UNKNOWN",
+    "ambiguity_flags": [
+      "MISSING_PAYMENT_MODE",
+      "MISSING_AMOUNT",
+      "MISSING_PARTY"
+    ],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.50",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [
+      "MISSING_REQUIRED_FIELDS",
+      "UNRESOLVED_FIELDS"
+    ],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-AM-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): \nTo (Seller): S-002-TEST-SELLER\nTransaction: Service billed as per discussion\nDescription: Benchmark synthetic incomplete invoice\nAccount Code: TBD\nNet Amount: 0.00\nGST Amount: 0.00\nTotal Amount: 1,234.56\nCurrency: INR\nPayment Mode: not specified\nPayment Terms: TBD\nReference No: REF-AM-02\nDoc Ref: DOC-AM-02\nTotal Amount payable: 1,234.56"
+}

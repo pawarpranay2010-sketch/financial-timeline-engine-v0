@@ -295,6 +295,38 @@ def _extract_amounts(text: str) -> Tuple[List[Decimal], bool]:
         # trailing comma; drop trailing separators before the hard parse so
         # 9,800 parses as 9800 instead of being flagged ambiguous.
         token = token.rstrip(",.")
+        # Sprint INV-ROLE: a digit embedded in an alphanumeric/hyphenated
+        # document or reference identifier (BILL-SI-01, REF-SI-01,
+        # INV-2026-001, PO-0042, SI-001) is part of a CODE, never a stated
+        # money amount. The '-' inside such an identifier is a hyphen, not
+        # a minus sign, so 'BILL-SI-01' must never yield the phantom amount
+        # -1. Evidence, not substitution: the raw source span is re-read
+        # and the token is rejected only when the character immediately
+        # BEFORE the number (ignoring the whitespace the number regex
+        # swallowed) is a letter/digit/hyphen, or when the stripped token
+        # is a zero-padded '-0<pure digits>' form (a money value is never
+        # written '-01', but document codes are; '-0.50' keeps its valid
+        # decimal meaning). Legitimate standalone negatives ('-500',
+        # '(-500)', 'Rs.-500') are untouched: nothing precedes them except
+        # whitespace or opening punctuation, and their token starts with
+        # '-<1-9>' or a decimal point.
+        _match_start = match.start()
+        _span = str(text)[_match_start:match.end()]
+        _core = _span.lstrip().lstrip("(")
+        _core_start = _match_start + (len(_span) - len(_core))
+        _prev_ch = str(text)[_core_start - 1] if _core_start > 0 else ""
+        if _prev_ch.isalnum() or _prev_ch == "-":
+            continue
+        _next_ch = str(text)[match.end():match.end() + 1]
+        if (_next_ch == "-" and
+                str(text)[match.end() + 1:match.end() + 2].isalpha()):
+            # Sprint INV-ROLE (trailing side): a number followed by
+            # '-<letter>' is a hyphenated code or date segment
+            # ('01-May', 'Q1-2026x'), never a minus-signed amount - the
+            # hyphen belongs to the code, not to the number.
+            continue
+        if re.match(r"-0\d+$", token):
+            continue
         parsed = parse_numeric_text(token)
         if parsed.value is None or parsed.ambiguity:
             ambiguous = True

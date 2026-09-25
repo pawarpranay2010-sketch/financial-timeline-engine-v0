@@ -1,0 +1,13 @@
+{
+  "invoice_id": "INV-PLX2-PAYM-003",
+  "scenario": "payment_settlement",
+  "source_type": "digital",
+  "difficulty": "medium",
+  "expected_transaction_type": "PAYMENT",
+  "expected_status": "VERIFIED",
+  "expected_authority": "SETTLEMENT_AUTHORITY",
+  "expected_amount_total": "11,500.00",
+  "expected_party_payer": "B-003-TEST-BUYER",
+  "expected_party_payee": "S-003-TEST-SELLER",
+  "expected_payment_method": "CHEQUE"
+}

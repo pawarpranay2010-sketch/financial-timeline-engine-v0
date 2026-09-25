@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "RETURN_OUT",
+    "parties": [
+      "B-001-TEST-BUYER",
+      "S-001-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "10,500.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "CREDIT",
+    "references": [
+      "BILL-CR-01",
+      "REF-CR-01",
+      "DOC-CR-01"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "RETURN_OUT",
+    "payment_method_enum": "CREDIT",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-CR-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods returned to seller under purchase return\nDescription: Benchmark synthetic credit note for purchase return\nAccount Code: 4002-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: CREDIT\nPayment Terms: Return\nReference No: REF-CR-01\nDoc Ref: DOC-CR-01\nCredit Note against original purchase bill"
+}

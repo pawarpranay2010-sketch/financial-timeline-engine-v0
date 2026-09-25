@@ -172,8 +172,9 @@ rejects("unsupported without evidence",
         "UNSUPPORTED requires")
 check("C-6 registry unchanged after rejection probes",
       # 43 pre-Phase-F entries + KNOWLEDGE.AUTHORITY_ROOT flip (was counted)
-      # + KNOWLEDGE.FS_PURPOSE_ELEMENTS added in Phase F = 44.
-      len(CAPABILITIES) == 44, str(len(CAPABILITIES)))
+      # + KNOWLEDGE.FS_PURPOSE_ELEMENTS added in Phase F = 44, plus the
+      # 9 Sprint INV-ROLE (Phase 3) KERNEL.INVOICE_* entries = 53.
+      len(CAPABILITIES) == 53, str(len(CAPABILITIES)))
 
 # ---------------------------------------------------------------------------
 # PHASE E - formula authority test vectors (strict C++ authority)

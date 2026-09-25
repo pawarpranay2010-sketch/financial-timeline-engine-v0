@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "PURCHASE",
+    "parties": [
+      "B-004-TEST-BUYER",
+      "S-004-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "14,160.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "NEFT",
+    "references": [
+      "BILL-SI-04",
+      "REF-SI-04",
+      "DOC-SI-04"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "PURCHASE",
+    "payment_method_enum": "NEFT",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-SI-04\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-004-TEST-BUYER\nTo (Seller): S-004-TEST-SELLER\nTransaction: Goods purchased from seller as per purchase order\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 12,000.00\nGST Amount: 2,160.00\nTotal Amount: 14,160.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-SI-04\nDoc Ref: DOC-SI-04"
+}

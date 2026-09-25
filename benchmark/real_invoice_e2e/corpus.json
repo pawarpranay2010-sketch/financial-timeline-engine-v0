@@ -1,0 +1,1498 @@
+{
+  "manifest": {
+    "corpus": "platrixa_real_invoice_e2e",
+    "generation_seed": 20260901,
+    "creation_version": "2.0.0",
+    "total_cases": 30,
+    "scenario_counts": {
+      "simple_purchase": 4,
+      "multi_line_purchase": 4,
+      "gst_purchase": 4,
+      "sale": 3,
+      "payment_settlement": 3,
+      "credit_note_return": 3,
+      "expense_bank_fee": 2,
+      "refund": 2,
+      "multi_page_table_heavy": 2,
+      "ambiguous_incomplete": 2,
+      "defensive_conflicting": 1
+    },
+    "source_type_counts": {
+      "digital": 30
+    },
+    "expected_statuses": {
+      "VERIFIED": 27,
+      "REVIEW_REQUIRED": 3,
+      "UNSUPPORTED": 0
+    },
+    "note": "Spec-only corpus: PDFs/images are intentionally NOT rendered (no PDF writer available in this sandbox; pypdf is read-only and no OCR engine is installed). OCR/scanned paths are measured only in a GPU/OCR-enabled environment and reported NOT_MEASURED here."
+  },
+  "cases": [
+    {
+      "invoice_id": "INV-PLX2-SIMP-001",
+      "scenario": "simple_purchase",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SI-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller as per purchase order\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 10,500.00\nGST Amount: 1,890.00\nTotal Amount: 12,390.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-SI-01\nDoc Ref: DOC-SI-01",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,390.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-SI-01",
+          "REF-SI-01",
+          "DOC-SI-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,390.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SIMP-002",
+      "scenario": "simple_purchase",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SI-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods purchased from seller as per purchase order\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,000.00\nGST Amount: 1,980.00\nTotal Amount: 12,980.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-SI-02\nDoc Ref: DOC-SI-02",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,980.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-SI-02",
+          "REF-SI-02",
+          "DOC-SI-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,980.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SIMP-003",
+      "scenario": "simple_purchase",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SI-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Goods purchased from seller as per purchase order\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,500.00\nGST Amount: 2,070.00\nTotal Amount: 13,570.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-SI-03\nDoc Ref: DOC-SI-03",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "13,570.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-SI-03",
+          "REF-SI-03",
+          "DOC-SI-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "13,570.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SIMP-004",
+      "scenario": "simple_purchase",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SI-04\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-004-TEST-BUYER\nTo (Seller): S-004-TEST-SELLER\nTransaction: Goods purchased from seller as per purchase order\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 12,000.00\nGST Amount: 2,160.00\nTotal Amount: 14,160.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-SI-04\nDoc Ref: DOC-SI-04",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-004-TEST-BUYER",
+          "S-004-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "14,160.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-SI-04",
+          "REF-SI-04",
+          "DOC-SI-04"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "14,160.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MLIN-001",
+      "scenario": "multi_line_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-MU-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller, three line items\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 10,750.00\nGST Amount: 1,935.00\nTotal Amount: 12,685.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-01\nDoc Ref: DOC-MU-01",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,685.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-01",
+          "REF-MU-01",
+          "DOC-MU-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,685.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MLIN-002",
+      "scenario": "multi_line_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-MU-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods purchased from seller, three line items\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,250.00\nGST Amount: 2,025.00\nTotal Amount: 13,275.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-02\nDoc Ref: DOC-MU-02",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "13,275.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-02",
+          "REF-MU-02",
+          "DOC-MU-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "13,275.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MLIN-003",
+      "scenario": "multi_line_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-MU-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Goods purchased from seller, three line items\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,750.00\nGST Amount: 2,115.00\nTotal Amount: 13,865.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-03\nDoc Ref: DOC-MU-03",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "13,865.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-03",
+          "REF-MU-03",
+          "DOC-MU-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "13,865.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MLIN-004",
+      "scenario": "multi_line_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-MU-04\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-004-TEST-BUYER\nTo (Seller): S-004-TEST-SELLER\nTransaction: Goods purchased from seller, three line items\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 12,250.00\nGST Amount: 2,205.00\nTotal Amount: 14,455.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-04\nDoc Ref: DOC-MU-04",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-004-TEST-BUYER",
+          "S-004-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "14,455.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-04",
+          "REF-MU-04",
+          "DOC-MU-04"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "14,455.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-GST_-001",
+      "scenario": "gst_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-GS-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: GST taxable goods purchased from seller\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 10,750.00\nGST Amount: 1,935.00\nTotal Amount: 12,685.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-GS-01\nDoc Ref: DOC-GS-01",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,685.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-GS-01",
+          "REF-GS-01",
+          "DOC-GS-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": [
+          "GST_SPECIFIC"
+        ]
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "GST_AUTHORITY",
+      "expected_amount_total": "12,685.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-GST_-002",
+      "scenario": "gst_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-GS-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: GST taxable goods purchased from seller\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,250.00\nGST Amount: 2,025.00\nTotal Amount: 13,275.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-GS-02\nDoc Ref: DOC-GS-02",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "13,275.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-GS-02",
+          "REF-GS-02",
+          "DOC-GS-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": [
+          "GST_SPECIFIC"
+        ]
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "GST_AUTHORITY",
+      "expected_amount_total": "13,275.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-GST_-003",
+      "scenario": "gst_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-GS-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: GST taxable goods purchased from seller\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,750.00\nGST Amount: 2,115.00\nTotal Amount: 13,865.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-GS-03\nDoc Ref: DOC-GS-03",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "13,865.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-GS-03",
+          "REF-GS-03",
+          "DOC-GS-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": [
+          "GST_SPECIFIC"
+        ]
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "GST_AUTHORITY",
+      "expected_amount_total": "13,865.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-GST_-004",
+      "scenario": "gst_purchase",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-GS-04\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-004-TEST-BUYER\nTo (Seller): S-004-TEST-SELLER\nTransaction: GST taxable goods purchased from seller\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 12,250.00\nGST Amount: 2,205.00\nTotal Amount: 14,455.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-GS-04\nDoc Ref: DOC-GS-04",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-004-TEST-BUYER",
+          "S-004-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "14,455.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-GS-04",
+          "REF-GS-04",
+          "DOC-GS-04"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": [
+          "GST_SPECIFIC"
+        ]
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "GST_AUTHORITY",
+      "expected_amount_total": "14,455.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SALE-001",
+      "scenario": "sale",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SA-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods sold and delivered to buyer\nDescription: Benchmark synthetic sale invoice\nAccount Code: 4001-00\nNet Amount: 10,500.00\nGST Amount: 1,260.00\nTotal Amount: 11,760.00\nCurrency: INR\nPayment Mode: UPI\nPayment Terms: Net 15\nReference No: REF-SA-01\nDoc Ref: DOC-SA-01",
+      "candidate_18": {
+        "transaction_type": "SALE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,760.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UPI",
+        "references": [
+          "BILL-SA-01",
+          "REF-SA-01",
+          "DOC-SA-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "SALE",
+        "payment_method_enum": "UPI",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "SALE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "11,760.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SALE-002",
+      "scenario": "sale",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SA-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods sold and delivered to buyer\nDescription: Benchmark synthetic sale invoice\nAccount Code: 4001-00\nNet Amount: 11,000.00\nGST Amount: 1,320.00\nTotal Amount: 12,320.00\nCurrency: INR\nPayment Mode: UPI\nPayment Terms: Net 15\nReference No: REF-SA-02\nDoc Ref: DOC-SA-02",
+      "candidate_18": {
+        "transaction_type": "SALE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,320.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UPI",
+        "references": [
+          "BILL-SA-02",
+          "REF-SA-02",
+          "DOC-SA-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "SALE",
+        "payment_method_enum": "UPI",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "SALE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,320.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-SALE-003",
+      "scenario": "sale",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-SA-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Goods sold and delivered to buyer\nDescription: Benchmark synthetic sale invoice\nAccount Code: 4001-00\nNet Amount: 11,500.00\nGST Amount: 1,380.00\nTotal Amount: 12,880.00\nCurrency: INR\nPayment Mode: UPI\nPayment Terms: Net 15\nReference No: REF-SA-03\nDoc Ref: DOC-SA-03",
+      "candidate_18": {
+        "transaction_type": "SALE",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,880.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UPI",
+        "references": [
+          "BILL-SA-03",
+          "REF-SA-03",
+          "DOC-SA-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "SALE",
+        "payment_method_enum": "UPI",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "SALE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,880.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-PAYM-001",
+      "scenario": "payment_settlement",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-PA-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Payment paid in full settlement of bill\nDescription: Benchmark synthetic settlement of supplier bill\nAccount Code: 5000-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: CHEQUE\nPayment Terms: Full settlement\nReference No: REF-PA-01\nDoc Ref: DOC-PA-01",
+      "candidate_18": {
+        "transaction_type": "PAYMENT",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "10,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CHEQUE",
+        "references": [
+          "BILL-PA-01",
+          "REF-PA-01",
+          "DOC-PA-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PAYMENT",
+        "payment_method_enum": "CHEQUE",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PAYMENT",
+      "expected_authority": "SETTLEMENT_AUTHORITY",
+      "expected_amount_total": "10,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-PAYM-002",
+      "scenario": "payment_settlement",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-PA-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Payment paid in full settlement of bill\nDescription: Benchmark synthetic settlement of supplier bill\nAccount Code: 5000-00\nNet Amount: 11,000.00\nGST Amount: 0.00\nTotal Amount: 11,000.00\nCurrency: INR\nPayment Mode: CHEQUE\nPayment Terms: Full settlement\nReference No: REF-PA-02\nDoc Ref: DOC-PA-02",
+      "candidate_18": {
+        "transaction_type": "PAYMENT",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,000.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CHEQUE",
+        "references": [
+          "BILL-PA-02",
+          "REF-PA-02",
+          "DOC-PA-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PAYMENT",
+        "payment_method_enum": "CHEQUE",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PAYMENT",
+      "expected_authority": "SETTLEMENT_AUTHORITY",
+      "expected_amount_total": "11,000.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-PAYM-003",
+      "scenario": "payment_settlement",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-PA-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Payment paid in full settlement of bill\nDescription: Benchmark synthetic settlement of supplier bill\nAccount Code: 5000-00\nNet Amount: 11,500.00\nGST Amount: 0.00\nTotal Amount: 11,500.00\nCurrency: INR\nPayment Mode: CHEQUE\nPayment Terms: Full settlement\nReference No: REF-PA-03\nDoc Ref: DOC-PA-03",
+      "candidate_18": {
+        "transaction_type": "PAYMENT",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CHEQUE",
+        "references": [
+          "BILL-PA-03",
+          "REF-PA-03",
+          "DOC-PA-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PAYMENT",
+        "payment_method_enum": "CHEQUE",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PAYMENT",
+      "expected_authority": "SETTLEMENT_AUTHORITY",
+      "expected_amount_total": "11,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-CRED-001",
+      "scenario": "credit_note_return",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-CR-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods returned to seller under purchase return\nDescription: Benchmark synthetic credit note for purchase return\nAccount Code: 4002-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: CREDIT\nPayment Terms: Return\nReference No: REF-CR-01\nDoc Ref: DOC-CR-01\nCredit Note against original purchase bill",
+      "candidate_18": {
+        "transaction_type": "RETURN_OUT",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "10,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CREDIT",
+        "references": [
+          "BILL-CR-01",
+          "REF-CR-01",
+          "DOC-CR-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "RETURN_OUT",
+        "payment_method_enum": "CREDIT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "RETURN_OUT",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "10,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-CRED-002",
+      "scenario": "credit_note_return",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-CR-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods returned to seller under purchase return\nDescription: Benchmark synthetic credit note for purchase return\nAccount Code: 4002-00\nNet Amount: 11,000.00\nGST Amount: 0.00\nTotal Amount: 11,000.00\nCurrency: INR\nPayment Mode: CREDIT\nPayment Terms: Return\nReference No: REF-CR-02\nDoc Ref: DOC-CR-02\nCredit Note against original purchase bill",
+      "candidate_18": {
+        "transaction_type": "RETURN_OUT",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,000.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CREDIT",
+        "references": [
+          "BILL-CR-02",
+          "REF-CR-02",
+          "DOC-CR-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "RETURN_OUT",
+        "payment_method_enum": "CREDIT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "RETURN_OUT",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "11,000.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-CRED-003",
+      "scenario": "credit_note_return",
+      "source_type": "digital",
+      "difficulty": "medium",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-CR-03\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-003-TEST-BUYER\nTo (Seller): S-003-TEST-SELLER\nTransaction: Goods returned to seller under purchase return\nDescription: Benchmark synthetic credit note for purchase return\nAccount Code: 4002-00\nNet Amount: 11,500.00\nGST Amount: 0.00\nTotal Amount: 11,500.00\nCurrency: INR\nPayment Mode: CREDIT\nPayment Terms: Return\nReference No: REF-CR-03\nDoc Ref: DOC-CR-03\nCredit Note against original purchase bill",
+      "candidate_18": {
+        "transaction_type": "RETURN_OUT",
+        "parties": [
+          "B-003-TEST-BUYER",
+          "S-003-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CREDIT",
+        "references": [
+          "BILL-CR-03",
+          "REF-CR-03",
+          "DOC-CR-03"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "RETURN_OUT",
+        "payment_method_enum": "CREDIT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "RETURN_OUT",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "11,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-EXPE-001",
+      "scenario": "expense_bank_fee",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-EX-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Bank charges paid as debited by bank\nDescription: Benchmark synthetic bank fee expense\nAccount Code: 6000-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: BANK\nPayment Terms: Net 15\nReference No: REF-EX-01\nDoc Ref: DOC-EX-01\npaid rent equivalent period fee: none",
+      "candidate_18": {
+        "transaction_type": "EXPENSE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "10,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "BANK",
+        "references": [
+          "BILL-EX-01",
+          "REF-EX-01",
+          "DOC-EX-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "EXPENSE",
+        "payment_method_enum": "BANK",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "EXPENSE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "10,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-EXPE-002",
+      "scenario": "expense_bank_fee",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-EX-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Bank charges paid as debited by bank\nDescription: Benchmark synthetic bank fee expense\nAccount Code: 6000-00\nNet Amount: 11,000.00\nGST Amount: 0.00\nTotal Amount: 11,000.00\nCurrency: INR\nPayment Mode: BANK\nPayment Terms: Net 15\nReference No: REF-EX-02\nDoc Ref: DOC-EX-02\npaid rent equivalent period fee: none",
+      "candidate_18": {
+        "transaction_type": "EXPENSE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,000.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "BANK",
+        "references": [
+          "BILL-EX-02",
+          "REF-EX-02",
+          "DOC-EX-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "EXPENSE",
+        "payment_method_enum": "BANK",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "EXPENSE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "11,000.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-REFU-001",
+      "scenario": "refund",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-RE-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Purchase return processed and refunded by supplier\nDescription: Benchmark synthetic supplier refund after purchase return\nAccount Code: 4003-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-RE-01\nDoc Ref: DOC-RE-01\nOriginal purchase bill referenced for this return",
+      "candidate_18": {
+        "transaction_type": "RETURN_OUT",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "10,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-RE-01",
+          "REF-RE-01",
+          "DOC-RE-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "RETURN_OUT",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "RETURN_OUT",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "10,500.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-REFU-002",
+      "scenario": "refund",
+      "source_type": "digital",
+      "difficulty": "easy",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-RE-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Purchase return processed and refunded by supplier\nDescription: Benchmark synthetic supplier refund after purchase return\nAccount Code: 4003-00\nNet Amount: 11,000.00\nGST Amount: 0.00\nTotal Amount: 11,000.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-RE-02\nDoc Ref: DOC-RE-02\nOriginal purchase bill referenced for this return",
+      "candidate_18": {
+        "transaction_type": "RETURN_OUT",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "11,000.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-RE-02",
+          "REF-RE-02",
+          "DOC-RE-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "RETURN_OUT",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "RETURN_OUT",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "11,000.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MPAG-001",
+      "scenario": "multi_page_table_heavy",
+      "source_type": "digital",
+      "difficulty": "hard",
+      "page_count": 2,
+      "text_for_model": "TAX INVOICE BILL-MU-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller across attached pages\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 10,500.00\nGST Amount: 1,890.00\nTotal Amount: 12,390.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-01\nDoc Ref: DOC-MU-01\nPage 2: continuation of line items\nCarried-forward Total Amount on page 2: 12,390.00",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,390.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-01",
+          "REF-MU-01",
+          "DOC-MU-01"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,390.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-MPAG-002",
+      "scenario": "multi_page_table_heavy",
+      "source_type": "digital",
+      "difficulty": "hard",
+      "page_count": 2,
+      "text_for_model": "TAX INVOICE BILL-MU-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods purchased from seller across attached pages\nDescription: Benchmark synthetic purchase invoice\nAccount Code: 4000-00\nNet Amount: 11,000.00\nGST Amount: 1,980.00\nTotal Amount: 12,980.00\nCurrency: INR\nPayment Mode: NEFT\nPayment Terms: Net 15\nReference No: REF-MU-02\nDoc Ref: DOC-MU-02\nPage 2: continuation of line items\nCarried-forward Total Amount on page 2: 12,980.00",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-002-TEST-BUYER",
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "12,980.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "NEFT",
+        "references": [
+          "BILL-MU-02",
+          "REF-MU-02",
+          "DOC-MU-02"
+        ],
+        "ambiguities": [
+          "NONE"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "NEFT",
+        "ambiguity_flags": [],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.85",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "VERIFIED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "COMMERCIAL_CORE",
+      "expected_amount_total": "12,980.00"
+    },
+    {
+      "invoice_id": "INV-PLX2-AMBI-001",
+      "scenario": "ambiguous_incomplete",
+      "source_type": "digital",
+      "difficulty": "hard",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-AM-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): \nTo (Seller): S-001-TEST-SELLER\nTransaction: Service billed as per discussion\nDescription: Benchmark synthetic incomplete invoice\nAccount Code: TBD\nNet Amount: 0.00\nGST Amount: 0.00\nTotal Amount: 1,234.56\nCurrency: INR\nPayment Mode: not specified\nPayment Terms: TBD\nReference No: REF-AM-01\nDoc Ref: DOC-AM-01\nTotal Amount payable: 1,234.56",
+      "candidate_18": {
+        "transaction_type": "UNKNOWN",
+        "parties": [
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "1,234.56",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UNKNOWN",
+        "references": [
+          "BILL-AM-01",
+          "REF-AM-01",
+          "DOC-AM-01"
+        ],
+        "ambiguities": [
+          "MISSING_PAYMENT_MODE",
+          "MISSING_AMOUNT",
+          "MISSING_PARTY"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "UNKNOWN",
+        "payment_method_enum": "UNKNOWN",
+        "ambiguity_flags": [
+          "MISSING_PAYMENT_MODE",
+          "MISSING_AMOUNT",
+          "MISSING_PARTY"
+        ],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.50",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [
+          "MISSING_REQUIRED_FIELDS",
+          "UNRESOLVED_FIELDS"
+        ],
+        "scope_flags": []
+      },
+      "expected_status": "REVIEW_REQUIRED",
+      "expected_transaction_type": "UNKNOWN",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "1,234.56"
+    },
+    {
+      "invoice_id": "INV-PLX2-AMBI-002",
+      "scenario": "ambiguous_incomplete",
+      "source_type": "digital",
+      "difficulty": "hard",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-AM-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): \nTo (Seller): S-002-TEST-SELLER\nTransaction: Service billed as per discussion\nDescription: Benchmark synthetic incomplete invoice\nAccount Code: TBD\nNet Amount: 0.00\nGST Amount: 0.00\nTotal Amount: 1,234.56\nCurrency: INR\nPayment Mode: not specified\nPayment Terms: TBD\nReference No: REF-AM-02\nDoc Ref: DOC-AM-02\nTotal Amount payable: 1,234.56",
+      "candidate_18": {
+        "transaction_type": "UNKNOWN",
+        "parties": [
+          "S-002-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "1,234.56",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UNKNOWN",
+        "references": [
+          "BILL-AM-02",
+          "REF-AM-02",
+          "DOC-AM-02"
+        ],
+        "ambiguities": [
+          "MISSING_PAYMENT_MODE",
+          "MISSING_AMOUNT",
+          "MISSING_PARTY"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "UNKNOWN",
+        "payment_method_enum": "UNKNOWN",
+        "ambiguity_flags": [
+          "MISSING_PAYMENT_MODE",
+          "MISSING_AMOUNT",
+          "MISSING_PARTY"
+        ],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.50",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [
+          "MISSING_REQUIRED_FIELDS",
+          "UNRESOLVED_FIELDS"
+        ],
+        "scope_flags": []
+      },
+      "expected_status": "REVIEW_REQUIRED",
+      "expected_transaction_type": "UNKNOWN",
+      "expected_authority": "DISCREPANCY_AUTHORITY",
+      "expected_amount_total": "1,234.56"
+    },
+    {
+      "invoice_id": "INV-PLX2-DEFE-001",
+      "scenario": "defensive_conflicting",
+      "source_type": "digital",
+      "difficulty": "hard",
+      "page_count": 1,
+      "text_for_model": "TAX INVOICE BILL-DE-01\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-001-TEST-BUYER\nTo (Seller): S-001-TEST-SELLER\nTransaction: Goods purchased from seller under consignment terms\nDescription: Benchmark synthetic conflicting consignment invoice\nAccount Code: 4000-00\nNet Amount: 10,500.00\nGST Amount: 0.00\nTotal Amount: 10,500.00\nCurrency: INR\nPayment Mode: CASH\nPayment Terms: Net 15\nReference No: REF-DE-01\nDoc Ref: DOC-DE-01\nConsignor: S-001-TEST-SELLER (agent holds goods on our behalf)\nConsignee: B-001-TEST-BUYER\nOwnership has not transferred; this document is NOT a sale",
+      "candidate_18": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "B-001-TEST-BUYER",
+          "S-001-TEST-SELLER"
+        ],
+        "amounts": [
+          {
+            "value": "10,500.00",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "CASH",
+        "references": [
+          "BILL-DE-01",
+          "REF-DE-01",
+          "DOC-DE-01"
+        ],
+        "ambiguities": [
+          "CONFLICTING_INFORMATION"
+        ],
+        "grounding": {
+          "level": "GROUNDED"
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "CASH",
+        "ambiguity_flags": [
+          "CONFLICTING_INFORMATION"
+        ],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.50",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [],
+        "scope_flags": []
+      },
+      "expected_status": "REVIEW_REQUIRED",
+      "expected_transaction_type": "PURCHASE",
+      "expected_authority": "CONSIGNMENT_AUTHORITY",
+      "expected_amount_total": "10,500.00"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "corpus": "platrixa_real_invoice_e2e",
+  "generation_seed": 20260901,
+  "creation_version": "2.0.0",
+  "total_cases": 30,
+  "scenario_counts": {
+    "simple_purchase": 4,
+    "multi_line_purchase": 4,
+    "gst_purchase": 4,
+    "sale": 3,
+    "payment_settlement": 3,
+    "credit_note_return": 3,
+    "expense_bank_fee": 2,
+    "refund": 2,
+    "multi_page_table_heavy": 2,
+    "ambiguous_incomplete": 2,
+    "defensive_conflicting": 1
+  },
+  "source_type_counts": {
+    "digital": 30
+  },
+  "expected_statuses": {
+    "VERIFIED": 27,
+    "REVIEW_REQUIRED": 3,
+    "UNSUPPORTED": 0
+  },
+  "note": "Spec-only corpus: PDFs/images are intentionally NOT rendered (no PDF writer available in this sandbox; pypdf is read-only and no OCR engine is installed). OCR/scanned paths are measured only in a GPU/OCR-enabled environment and reported NOT_MEASURED here."
+}

@@ -1,0 +1,231 @@
+{
+  "captured_from": "live code at corpus build time",
+  "accounting_kernel_authorities": {
+    "COMMERCIAL_CORE": {
+      "implemented": true,
+      "name": "Commercial Core"
+    },
+    "ASSET_AUTHORITY": {
+      "implemented": true,
+      "name": "Asset Authority"
+    },
+    "GST_AUTHORITY": {
+      "implemented": true,
+      "name": "GST Authority"
+    },
+    "SETTLEMENT_AUTHORITY": {
+      "implemented": true,
+      "name": "Settlement/Payment Authority"
+    },
+    "DISCREPANCY_AUTHORITY": {
+      "implemented": true,
+      "name": "Discrepancy Authority"
+    },
+    "ADJUSTMENT_AUTHORITY": {
+      "implemented": false,
+      "name": "Adjustment Authority"
+    },
+    "CONSIGNMENT_AUTHORITY": {
+      "implemented": true,
+      "name": "Consignment Authority"
+    },
+    "JOINT_VENTURE_AUTHORITY": {
+      "implemented": true,
+      "name": "Joint Venture Authority"
+    },
+    "SINGLE_ENTRY_AUTHORITY": {
+      "implemented": true,
+      "name": "Single Entry Authority"
+    },
+    "BILLS_AUTHORITY": {
+      "implemented": true,
+      "name": "Bills Authority"
+    }
+  },
+  "formula_authority": {
+    "formula_ids": [
+      "PROFIT",
+      "LOSS",
+      "GROSS_PROFIT",
+      "WORKING_CAPITAL",
+      "ASSET_TURNOVER",
+      "EQUITY_MULTIPLIER",
+      "PROFIT_MARGIN"
+    ],
+    "targets": [
+      "Asset Turnover",
+      "Equity Multiplier",
+      "Gross Profit",
+      "Loss",
+      "Profit",
+      "Profit Margin",
+      "Working Capital"
+    ]
+  },
+  "finance_knowledge": {
+    "counts_by_status": {
+      "SUPPORTED": 27,
+      "UNVERIFIED": 1
+    }
+  },
+  "capability_registry_summary": {
+    "ACCOUNTING_KERNEL": {
+      "PARTIAL": 1,
+      "PLANNED": 1,
+      "SUPPORTED": 15,
+      "UNSUPPORTED": 4
+    },
+    "FINANCE_KNOWLEDGE": {
+      "PARTIAL": 0,
+      "PLANNED": 0,
+      "SUPPORTED": 2,
+      "UNSUPPORTED": 0
+    },
+    "FORMULA_AUTHORITY": {
+      "PARTIAL": 0,
+      "PLANNED": 0,
+      "SUPPORTED": 30,
+      "UNSUPPORTED": 0
+    }
+  },
+  "schema_contract": {
+    "legacy_fields": [
+      "ambiguities",
+      "amounts",
+      "grounding",
+      "parties",
+      "payment_method",
+      "references",
+      "transaction_type"
+    ],
+    "expanded_fields": [
+      "ambiguity_flags",
+      "field_confidences",
+      "overall_confidence",
+      "payment_method_enum",
+      "referenced_amount",
+      "referenced_party",
+      "referenced_transaction_index",
+      "safety_flags",
+      "scope_flags",
+      "suggested_status",
+      "transaction_type_enum"
+    ],
+    "all_valid_fields": [
+      "ambiguities",
+      "ambiguity_flags",
+      "amounts",
+      "field_confidences",
+      "grounding",
+      "overall_confidence",
+      "parties",
+      "payment_method",
+      "payment_method_enum",
+      "referenced_amount",
+      "referenced_party",
+      "referenced_transaction_index",
+      "references",
+      "safety_flags",
+      "scope_flags",
+      "suggested_status",
+      "transaction_type",
+      "transaction_type_enum"
+    ],
+    "valid_tx_enum": [
+      "CAPITAL",
+      "DEPRECIATION",
+      "DISCOUNT_CASH",
+      "DISCOUNT_TRADE",
+      "DRAWING",
+      "EXPENSE",
+      "GST",
+      "PAYMENT",
+      "PURCHASE",
+      "RECEIPT",
+      "RETURN_IN",
+      "RETURN_OUT",
+      "SALE",
+      "SETTLEMENT",
+      "UNKNOWN"
+    ],
+    "valid_pm_enum": [
+      "BANK",
+      "CASH",
+      "CHEQUE",
+      "CREDIT",
+      "NEFT",
+      "UNKNOWN",
+      "UPI"
+    ],
+    "valid_ambiguity_flags": [
+      "AMBIGUOUS_REFERENCE",
+      "CONFLICTING_INFORMATION",
+      "HISTORICAL_DEPENDENCY",
+      "MISSING_AMOUNT",
+      "MISSING_PARTY",
+      "MISSING_PAYMENT_MODE",
+      "MULTIPLE_INTERPRETATIONS",
+      "NONE",
+      "UNRESOLVED_PRONOUN"
+    ],
+    "valid_safety_flags": [
+      "AI_CLAIMED_VERIFIED",
+      "AMBIGUITY_DETECTED",
+      "EMPTY_PARTIES",
+      "JOURNAL_ENTRIES_PRODUCED",
+      "LEDGER_BALANCES_PRODUCED",
+      "LOW_CONFIDENCE",
+      "MISSING_REQUIRED_FIELDS",
+      "NONE",
+      "UNRESOLVED_FIELDS"
+    ],
+    "valid_scope_flags": [
+      "ADVERSARIAL",
+      "DISCOUNT_APPLICATION",
+      "EDGE_CASE",
+      "GST_SPECIFIC",
+      "MULTI_AUTHORITY",
+      "MULTI_TRANSACTION",
+      "RETURN_PROCESSING",
+      "SETTLEMENT_CALCULATION",
+      "SINGLE_AUTHORITY",
+      "SINGLE_TRANSACTION"
+    ],
+    "valid_transaction_types_fyjc": [
+      "CAPITAL",
+      "DEPRECIATION",
+      "DISCOUNT_CASH",
+      "DISCOUNT_TRADE",
+      "DRAWING",
+      "EXPENSE",
+      "GST",
+      "PAYMENT",
+      "PURCHASE",
+      "RECEIPT",
+      "RETURN_IN",
+      "RETURN_OUT",
+      "SALE",
+      "SETTLEMENT",
+      "UNKNOWN"
+    ],
+    "valid_payment_methods_fyjc": [
+      "BANK",
+      "CASH",
+      "CHEQUE",
+      "CREDIT",
+      "NEFT",
+      "UNKNOWN",
+      "UPI"
+    ]
+  },
+  "implementation_refs": {
+    "schema": "backend/maths/schema_verifier.py",
+    "contract": "backend/maths/fyjc_contract.py",
+    "grounding_gate": "backend/maths/fyjc_grounding_gate.py",
+    "kernel": "backend/kernel/kernel.py",
+    "authorities": "backend/maths/fyjc_orchestration.py",
+    "formulas": "backend/maths/formula_registry.py",
+    "knowledge": "backend/maths/finance_knowledge.py",
+    "capabilities": "backend/maths/capability_registry.py"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "candidate_18": {
+    "transaction_type": "SALE",
+    "parties": [
+      "B-002-TEST-BUYER",
+      "S-002-TEST-SELLER"
+    ],
+    "amounts": [
+      {
+        "value": "12,320.00",
+        "source": "explicit"
+      }
+    ],
+    "payment_method": "UPI",
+    "references": [
+      "BILL-SA-02",
+      "REF-SA-02",
+      "DOC-SA-02"
+    ],
+    "ambiguities": [
+      "NONE"
+    ],
+    "grounding": {
+      "level": "GROUNDED"
+    },
+    "transaction_type_enum": "SALE",
+    "payment_method_enum": "UPI",
+    "ambiguity_flags": [],
+    "referenced_transaction_index": null,
+    "referenced_party": null,
+    "referenced_amount": null,
+    "field_confidences": [],
+    "overall_confidence": "0.85",
+    "suggested_status": "REVIEW_REQUIRED",
+    "safety_flags": [],
+    "scope_flags": []
+  },
+  "contract_check": {
+    "schema_valid": true,
+    "schema_status": "VALID",
+    "schema_errors": [],
+    "grounding_safe_for_kernel": true,
+    "grounding_issues": []
+  },
+  "text_for_model": "TAX INVOICE BILL-SA-02\nInvoice Date: 2026-08-20\nDue Date: 2026-09-04\nFrom (Buyer): B-002-TEST-BUYER\nTo (Seller): S-002-TEST-SELLER\nTransaction: Goods sold and delivered to buyer\nDescription: Benchmark synthetic sale invoice\nAccount Code: 4001-00\nNet Amount: 11,000.00\nGST Amount: 1,320.00\nTotal Amount: 12,320.00\nCurrency: INR\nPayment Mode: UPI\nPayment Terms: Net 15\nReference No: REF-SA-02\nDoc Ref: DOC-SA-02"
+}

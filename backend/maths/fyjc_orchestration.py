@@ -301,6 +301,11 @@ class TransactionGraph:
     ownership: List[Dict[str, Any]] = field(default_factory=list)
     contradictions: List[Dict[str, Any]] = field(default_factory=list)
     violations: List[Dict[str, Any]] = field(default_factory=list)
+    # Sprint INV-ROLE: invoice label evidence (InvoiceRoleResult) resolved
+    # once from graph.raw during ownership assignment. Presentation
+    # evidence only — never an authority and never consumed instead of the
+    # deterministic role assignment.
+    invoice_roles: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +727,20 @@ def _build_dependencies(graph: TransactionGraph) -> None:
 # ownership conflict; an event fact with no implemented authority is an
 # unresolved fact. Both force REVIEW_REQUIRED with zero journal lines.
 
-def _assign_ownership(graph: TransactionGraph) -> None:
+def _assign_ownership(graph: TransactionGraph,
+                      _invoice_roles=None) -> None:
+    """Assign every stated amount exactly ONE deterministic role.
+
+    Sprint INV-ROLE: ``_invoice_roles`` carries the pre-resolved
+    invoice label evidence for the whole document (resolved ONCE by the
+    caller from ``graph.raw``). It is EVIDENCE for the role decision —
+    never an authority: it fills roles only where the narration detectors
+    found none, ahead of the generic transaction_value fallback.
+    """
+    from backend.maths.invoice_amount_roles import (
+        label_role_for_value as _invoice_roles_label_role,
+    )
+
     for node in graph.segments:
         text = node.text
         low = " " + text.lower() + " "
@@ -759,6 +777,22 @@ def _assign_ownership(graph: TransactionGraph) -> None:
         elif len(seen) > 1 and not payment_amounts:
             payment_single = _payment_amount(text)
 
+        # Sprint INV-ROLE: invoice LABEL evidence (label:value lines).
+        # Resolved once per graph and reused for every segment; the roles
+        # provide deterministic evidence for values that no narration
+        # detector claimed. NEVER overrides an earlier role: an existing
+        # supported role (GST component, discounts, balance, personal use,
+        # payment) stays authoritative where the narration evidence
+        # already matched; labels only fill the gaps BEFORE the generic
+        # transaction_value fallback.
+        if _invoice_roles is None:
+            from backend.maths.invoice_amount_roles import (
+                resolve_invoice_roles as _resolve_invoice_roles,
+            )
+
+            _invoice_roles = _resolve_invoice_roles(graph.raw)
+        graph.invoice_roles = _invoice_roles
+
         for value in seen:
             fact = next(f for f in node.facts if f.kind == "amount"
                         and f.value == value)
@@ -776,6 +810,28 @@ def _assign_ownership(graph: TransactionGraph) -> None:
                 role, authority = "payment", "SETTLEMENT_AUTHORITY"
             elif payment_single is not None and value == payment_single:
                 role, authority = "payment", "SETTLEMENT_AUTHORITY"
+            elif (_invoice_roles is not None
+                  and _invoice_roles_label_role(value, _invoice_roles)
+                  is not None):
+                # Sprint INV-ROLE: the value carries an explicit invoice
+                # label. Map it onto the EXISTING role vocabulary (never a
+                # new authority): labelled tax → gst_component under the
+                # GST authority; labelled payment → payment under the
+                # Settlement authority; discount → the existing trade/
+                # cash discount roles; every other label → the shared
+                # 'invoice_label' role (net/total/shipping/refund/credit
+                # note/outstanding), whose consumption is decided by the
+                # deterministic invoice capability layer — not by the
+                # label itself.
+                _label_role = _invoice_roles_label_role(value, _invoice_roles)
+                if _label_role == "tax":
+                    role, authority = "gst_component", "GST_AUTHORITY"
+                elif _label_role == "payment":
+                    role, authority = "payment", "SETTLEMENT_AUTHORITY"
+                elif _label_role == "discount":
+                    role, authority = "trade_discount", "COMMERCIAL_CORE"
+                else:
+                    role, authority = "invoice_label", node.base_authority
             else:
                 role, authority = "transaction_value", node.base_authority
             fact.role = role
@@ -1205,7 +1261,226 @@ def _validate_payment_totals(graph: TransactionGraph,
     return None
 
 
+# ---------------------------------------------------------------------------
+# Sprint INV-ROLE: invoice-labelled-facts deterministic outcome
+# ---------------------------------------------------------------------------
 
+def _invoice_labelled_facts_outcome(
+    raw: str,
+    amount: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Narrow deterministic path for invoice-style documents whose amounts
+    are explicit 'label: value' fields.
+
+    Fires ONLY when all of the following hold (anything else returns None
+    so the input takes the UNCHANGED narration path):
+
+      1. explicit invoice labels exist (no labels → None),
+      2. the 15I-VY normalization raises no safety concern and the global
+         math-contradiction validator is clean (same gates the narration
+         path runs — never weakened),
+      3. every label role is unambiguous (no conflicting values),
+      4. the present labels reconcile arithmetically where a composition
+         is mathematically justified,
+      5. the composed journal balances exactly against the labelled
+         evidence and the graph's own ownership/merge gates accept it.
+
+    The composed journal reuses generate_journal's own conventions and
+    routes under the SAME authorities (COMMERCIAL_CORE / ASSET_AUTHORITY
+    / GST_AUTHORITY / SETTLEMENT_AUTHORITY). No new authority, no new
+    accounting rule, no model involvement. Labels are EVIDENCE; the
+    deterministic rules decide.
+    """
+    from backend.maths.fyjc_bk_reasoning import (
+        INVALID_INPUT_MATH,
+        REVIEW_REQUIRED,
+        _refusal,
+        classify_bk_type,
+    )
+    from backend.maths.fyjc_normalization import (
+        math_contradiction,
+        normalize_fyjc_text,
+    )
+    from backend.maths.invoice_amount_roles import resolve_invoice_roles
+    from backend.maths.invoice_executor import compose_invoice_journal
+
+    raw = str(raw or "")
+    if not raw:
+        return None
+
+    roles = resolve_invoice_roles(raw)
+    if not roles.has_any_role:
+        return None  # not an invoice-labelled document
+
+    # -- gate 2: the narration path's own normalization gates -------------
+    norm = normalize_fyjc_text(raw)
+    if norm.concerns:
+        return None  # narration path owns this refusal verbatim
+    contradiction = math_contradiction(norm.text)
+    if contradiction is not None:
+        # Sprint INV-ROLE: the narration gate's recognized-but-unmerged
+        # digit payment/outstanding split is EXACTLY what the invoice
+        # settlement capability resolves deterministically. The invoice
+        # path may proceed ONLY when the labels form the payment+
+        # outstanding shape AND their arithmetic reconciled in the role
+        # layer — every other contradiction stays the narration path's
+        # refusal verbatim (never weakened).
+        _pay = roles.role_value("payment")
+        _out = roles.role_value("outstanding")
+        _reconciled = any(
+            r.get("kind") == "payment_outstanding"
+            and r.get("status") == "RECONCILED"
+            for r in roles.reconciliation)
+        if not (_pay is not None and _out is not None and _reconciled):
+            return None  # narration path owns this refusal verbatim
+
+    # -- gates 3-4: label evidence must be internally consistent ----------
+    if roles.conflicts:
+        refusal = _refusal(
+            REVIEW_REQUIRED,
+            roles.conflicts[0].get("reason")
+            or "Invoice labels state conflicting amounts.",
+            "Correct the conflicting amounts so each label states exactly "
+            "one value; Platrixa never chooses between conflicting stated "
+            "amounts.")
+        refusal["invoice_roles"] = roles.to_dict()
+        return refusal
+    bad_recon = [r for r in roles.reconciliation
+                 if r.get("status") in ("MISMATCH", "UNRESOLVED")]
+    if bad_recon:
+        refusal = _refusal(
+            REVIEW_REQUIRED,
+            bad_recon[0].get("detail")
+            or "Labelled invoice amounts do not reconcile.",
+            "Correct the amounts so the labelled arithmetic agrees; "
+            "Platrixa never modifies an amount to make totals reconcile.")
+        refusal["invoice_roles"] = roles.to_dict()
+        return refusal
+
+    # -- document classification (existing machinery, never invented) -----
+    classification = classify_bk_type(raw)
+    class_key = (classification or {}).get("key") or ""
+
+    # Asset/expense/return hints come from the document text itself, read
+    # deterministically (labelled keywords), never from a model.
+    low = " " + raw.lower() + " "
+    asset_hint = None
+    for kw in ("machinery", "furniture", "computer", "equipment",
+               "vehicle", "building", "land"):
+        if re.search(rf"\b{kw}\b", low):  # word-boundary: 'land' must not
+            asset_hint = kw                # match inside 'Landlord'
+            break
+    expense_hint = None
+    for kw in ("rent", "salary", "wages", "electricity", "insurance",
+               "advertising", "postage", "telephone"):
+        if re.search(rf"\b{kw}\b", low):
+            expense_hint = kw.capitalize()
+            break
+    return_hint = None
+
+    # -- capability gate: the composed journal must balance ----------------
+    composed = compose_invoice_journal(
+        raw, roles, class_key,
+        asset_hint=asset_hint,
+        expense_hint=expense_hint,
+        return_hint=return_hint,
+    )
+    if composed.get("status") != "VERIFIED":
+        # Deterministic refusal with the specific reason (fail closed).
+        composed.setdefault("invoice_roles", roles.to_dict())
+        return composed
+
+    # -- gate 5: the graph's own gates over the composed journal ----------
+    graph = build_transaction_graph(
+        raw, normalized=norm.text, normalization=norm.provenance)
+    _assign_ownership(graph, _invoice_roles=roles)
+    if graph.violations:
+        refusal = _refusal(
+            REVIEW_REQUIRED,
+            graph.violations[0].get("reason")
+            or "The transaction graph raised a violation.",
+            "Correct the document so every stated fact has one clear "
+            "accounting role.")
+        refusal["invoice_roles"] = roles.to_dict()
+        refusal["orchestration"] = {"violations": graph.violations}
+        return refusal
+
+    journal = {
+        "status": "VERIFIED",
+        "debit_lines": composed.get("debit_lines") or [],
+        "credit_lines": composed.get("credit_lines") or [],
+        "narration": composed.get("narration"),
+        "calculation_records": composed.get("calculation_records") or [],
+        "total_debit": composed.get("total_debit"),
+        "total_credit": composed.get("total_credit"),
+        "balanced": composed.get("balanced"),
+    }
+    debit_total = sum(
+        (Decimal(str(l.get("amount"))) for l in journal["debit_lines"]),
+        Decimal(0))
+    credit_total = sum(
+        (Decimal(str(l.get("amount"))) for l in journal["credit_lines"]),
+        Decimal(0))
+    if debit_total != credit_total or debit_total == 0:
+        return _refusal(
+            REVIEW_REQUIRED,
+            "The composed invoice journal does not balance; Platrixa "
+            "never reports an unbalanced entry as verified.",
+            "Check the labelled amounts on the document.")
+
+    # -- hard cross-check against the LABELLED total ----------------------
+    # The journal total must be exactly the labelled invoice total (or the
+    # settlement total when this is a payment document). This is the
+    # 'amount-role correctness' invariant: no composed line may smuggle in
+    # an amount the labels do not state.
+    # Per-capability expected total (no universal net+tax=total rule):
+    #   * net+total invoice shape → the labelled invoice total
+    #   * payment-settlement shape → the labelled PAYMENT (the only fact
+    #     posted; outstanding/total remain evidence that reconciled it)
+    #   * refund / credit-note shape → the labelled refund / credit-note
+    #     amount (the only fact posted)
+    expected_total = roles.role_value("total")
+    _shape_payment = (roles.role_value("payment") is not None
+                      and roles.role_value("outstanding") is not None
+                      and roles.role_value("net") is None)
+    _shape_refund = roles.role_value("refund") is not None
+    _shape_credit_note = roles.role_value("credit_note") is not None
+    if _shape_payment:
+        expected_total = roles.role_value("payment")
+    elif _shape_refund:
+        expected_total = roles.role_value("refund")
+    elif _shape_credit_note:
+        expected_total = roles.role_value("credit_note")
+    if expected_total is None or debit_total != expected_total:
+        return _refusal(
+            REVIEW_REQUIRED,
+            "The composed journal total does not equal the labelled "
+            "invoice total; Platrixa never posts an amount the document "
+            "does not state.",
+            "Check the labelled amounts on the document.")
+
+    result: Dict[str, Any] = {
+        "status": "VERIFIED",
+        "status_label": "Verified",
+        "debit_lines": journal["debit_lines"],
+        "credit_lines": journal["credit_lines"],
+        "journal": journal,
+        "journals": [journal],
+        "rule": None,
+        "rule_key": "invoice_labelled_facts",
+        "why_not": None,
+        "next_action": None,
+        "authority": composed.get("authority") or "COMMERCIAL_CORE",
+        "authority_state": "invoice_labelled_facts",
+        "single_entry": None,
+        "bills": None,
+        "consignment": None,
+        "joint_venture": None,
+        "discrepancy": None,
+        "calculation_records": journal["calculation_records"],
+        "invoice_roles": roles.to_dict(),
+    }
+    return result
 
 
 
@@ -1915,6 +2190,20 @@ def orchestrate(question: str, amount: Any = None) -> Dict[str, Any]:
         return _orchestrate_discrepancy(raw, amount, topic)
 
     hardened = vy_harden(raw, amount)
+
+    # -- Sprint INV-ROLE: narrow invoice-labelled-facts path --------------
+    # Invoice documents express amounts as explicit 'label: value' fields.
+    # The narration engine refuses them (its GST gate requires exactly one
+    # stated value amount); the invoice path composes the SAME journal
+    # conventions from the LABELLED facts instead, under the SAME
+    # authorities. Narrow by construction: it only fires when the raw
+    # document carries explicit invoice labels, every label role is
+    # unambiguous and internally reconciled, and the composed journal
+    # balances against the labelled total. Any violation falls through to
+    # the UNCHANGED narration path below, which keeps its own refusals.
+    _invoice = _invoice_labelled_facts_outcome(raw, amount)
+    if _invoice is not None:
+        return _invoice
 
     # -- Sprint 15I-CAPABILITY-CLOSURE: settlement resolver ---------------
     # When the hardened engine returns REVIEW_REQUIRED due to multi-amount

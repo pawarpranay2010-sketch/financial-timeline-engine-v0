@@ -1,0 +1,13 @@
+{
+  "invoice_id": "INV-PLX2-GST_-001",
+  "scenario": "gst_purchase",
+  "source_type": "digital",
+  "difficulty": "medium",
+  "expected_transaction_type": "PURCHASE",
+  "expected_status": "VERIFIED",
+  "expected_authority": "GST_AUTHORITY",
+  "expected_amount_total": "12,685.00",
+  "expected_party_payer": "B-001-TEST-BUYER",
+  "expected_party_payee": "S-001-TEST-SELLER",
+  "expected_payment_method": "NEFT"
+}
