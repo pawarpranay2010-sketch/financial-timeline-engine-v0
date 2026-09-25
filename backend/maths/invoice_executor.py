@@ -67,6 +67,18 @@ _PAYMENT_INSTRUMENTS = (
     ("bank transfer", "bank transfer"), ("cash", "cash"),
     ("credit", "credit"), ("card", "card"),
 )
+# Sprint 15I-VY reuses _SINGLE_LETTER_RE upstream; here the boundary that
+# matters is the GOODS surface: generate_journal refuses service wording
+# ('consulting services', 'software services') as outside the FYJC
+# goods-only transaction domain. The invoice path must NOT become a
+# wider classification standard than that machinery (no 'DR Purchases'
+# for services merely because the label exists).
+_SERVICE_WORDING_RE = re.compile(
+    r"\b(?:services?|consulting|consultancy|professional\s+fees|"
+    r"software\s+(?:services|license|licence)|subscriptions?)\b",
+    re.IGNORECASE,
+)
+
 # Party lines: document-style From/To/Buyer/Seller/Vendor/Supplier labels.
 # From/Vendor/Supplier → supplier side; To/Buyer/Customer → customer side.
 _PARTY_SUPPLIER_RE = re.compile(
@@ -295,6 +307,25 @@ def compose_invoice_journal(
             # deterministic fallback evidence: a document naming a
             # CUSTOMER ('To:') bills a customer, so it is a sale.
             is_sale = side == "customer"
+        # Account-classification boundary (Sprint INV-ROLE Phase 4):
+        # service wording is refused by the narration engine's goods
+        # surface. When the document establishes NO specific supported
+        # account (no asset/expense hint), composing the default goods
+        # account would invent a classification the existing machinery
+        # does not make - fail closed instead. The classification
+        # machinery (asset path via generate_journal, expense hints)
+        # still decides whenever it CAN.
+        if _SERVICE_WORDING_RE.search(raw_text or "") and not (
+                asset_hint or expense_hint):
+            return _refusal(
+                "The document describes services rather than goods, and "
+                "names no specific supported account; the deterministic "
+                "classification machinery refuses service transactions, "
+                "so the invoice path will not invent 'Purchases' or "
+                "'Sales' for them.",
+                "Record the service through a supported expense account "
+                "on the document (e.g. 'Rent', 'Salary') or keep it out "
+                "of the goods journal.")
         if is_sale:
             if shipping is not None:
                 return _refusal(

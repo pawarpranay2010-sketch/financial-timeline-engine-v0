@@ -1,0 +1,1908 @@
+{
+ "phase": "4",
+ "sprint": "INV-ROLE",
+ "generated": "2026-09-25",
+ "generator": "scripts/fte_invoice_integration_gate_test.py (live stage_trace)",
+ "total_cases": 30,
+ "verdict_counts": {
+  "INVALID_INPUT_MATH": 1,
+  "NOT_SUPPORTED": 2,
+  "REVIEW_REQUIRED": 7,
+  "VERIFIED": 20
+ },
+ "cases": [
+  {
+   "case_id": "P01",
+   "category": "PURCHASE",
+   "input": "Purchase Invoice IN-P01\nFrom: Ram & Sons\nNet Amount: 10500\nGST: 1890\nTotal: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "P02",
+   "category": "PURCHASE",
+   "input": "Purchase Invoice IN-P02\nFrom: Ram & Sons\nNet Amount: 10500\nGST: 1890\nTotal: 12390\nAmount Paid: 5000",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "payment",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ],
+      "payment": [
+       "5000"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Cash",
+       "5000"
+      ],
+      [
+       "Ram & Sons",
+       "7390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "P03",
+   "category": "PURCHASE",
+   "input": "Purchase Invoice IN-P03\nFrom: Ram & Sons\nNet Amount: 10000\nGST: 1800\nTotal: 11800\nBalance Due: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "outstanding",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "1800"
+      ],
+      "total": [
+       "11800"
+      ],
+      "outstanding": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1800",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Input CGST",
+       "900"
+      ],
+      [
+       "Input SGST",
+       "900"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "outstanding is evidence; composed as a full credit purchase"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "P04",
+   "category": "PURCHASE",
+   "input": "Purchase Invoice IN-P04\nFrom: Bharat Stores\nNet Amount: 10000\nDiscount: 500\nGST: 1710\nTotal: 11210",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "discount",
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "discount": [
+       "500"
+      ],
+      "tax": [
+       "1710"
+      ],
+      "total": [
+       "11210"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1710",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "9500"
+      ],
+      [
+       "Input CGST",
+       "855"
+      ],
+      [
+       "Input SGST",
+       "855"
+      ]
+     ],
+     "credit": [
+      [
+       "Bharat Stores",
+       "11210"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "P05",
+   "category": "PURCHASE",
+   "input": "Purchase Invoice IN-P05\nFrom: Vendor Lines\nNet Amount: 10000\nShipping: 500\nGST: 1890\nTotal: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "shipping",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "shipping": [
+       "500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Carriage Inward",
+       "500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Vendor Lines",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "shipping posts Carriage Inward, never folded into Purchases"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "S01",
+   "category": "SALE",
+   "input": "Sales Invoice IN-S01\nTo: Anil\nNet Amount: 5000\nGST: 900\nTotal: 5900",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "5000"
+      ],
+      "tax": [
+       "900"
+      ],
+      "total": [
+       "5900"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "900",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Anil",
+       "5900"
+      ]
+     ],
+     "credit": [
+      [
+       "Sales",
+       "5000"
+      ],
+      [
+       "Output CGST",
+       "450"
+      ],
+      [
+       "Output SGST",
+       "450"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "S02",
+   "category": "SALE",
+   "input": "Sales Invoice IN-S02\nTo: Anil\nNet Amount: 5000\nGST: 900\nTotal: 5900\nAmount Paid: 2000",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "payment",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "5000"
+      ],
+      "tax": [
+       "900"
+      ],
+      "total": [
+       "5900"
+      ],
+      "payment": [
+       "2000"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "900",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Anil",
+       "5900"
+      ]
+     ],
+     "credit": [
+      [
+       "Sales",
+       "5000"
+      ],
+      [
+       "Output CGST",
+       "450"
+      ],
+      [
+       "Output SGST",
+       "450"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "sale composes GROSS like the narration convention (party debit and revenue credit are never netted); the paid label is evidence, not a second posting - part-collection on a sale remains a Phase 5 candidate"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "S03",
+   "category": "SALE",
+   "input": "Sales Invoice IN-S03\nTo: Anil\nNet Amount: 5000\nGST: 900\nTotal: 5900\nBalance Due: 5900",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "outstanding",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "5000"
+      ],
+      "tax": [
+       "900"
+      ],
+      "total": [
+       "5900"
+      ],
+      "outstanding": [
+       "5900"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "900",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Anil",
+       "5900"
+      ]
+     ],
+     "credit": [
+      [
+       "Sales",
+       "5000"
+      ],
+      [
+       "Output CGST",
+       "450"
+      ],
+      [
+       "Output SGST",
+       "450"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "outstanding is evidence; credit sale composed in full"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "S04",
+   "category": "SALE",
+   "input": "Sales Invoice IN-S04\nTo: Anil\nNet Amount: 5000\nDiscount: 500\nGST: 810\nTotal: 5310",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "discount",
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "5000"
+      ],
+      "discount": [
+       "500"
+      ],
+      "tax": [
+       "810"
+      ],
+      "total": [
+       "5310"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "810",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Anil",
+       "5310"
+      ]
+     ],
+     "credit": [
+      [
+       "Sales",
+       "4500"
+      ],
+      [
+       "Output CGST",
+       "405"
+      ],
+      [
+       "Output SGST",
+       "405"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "S05",
+   "category": "SALE",
+   "input": "Sales Invoice IN-S05\nTo: Ramesh\nNet Amount: 8000\nShipping: 200\nTotal: 8200",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "shipping",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "8000"
+      ],
+      "shipping": [
+       "200"
+      ],
+      "total": [
+       "8200"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "invoice_capability",
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "shipping on a SALES invoice: no supported account"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G01",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G01\nFrom: Gupta & Sons\nNet Amount: 10000\nCGST: 900\nSGST: 900\nTotal: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "900",
+       "900"
+      ],
+      "total": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [
+      "tax"
+     ],
+     "tax_total": "1800",
+     "tax_total_basis": "component-sum"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Input CGST",
+       "900"
+      ],
+      [
+       "Input SGST",
+       "900"
+      ]
+     ],
+     "credit": [
+      [
+       "Gupta & Sons",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G02",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G02\nFrom: Sharma Traders\nNet Amount: 10000\nIGST: 1800\nTotal: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "1800"
+      ],
+      "total": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1800",
+     "tax_total_basis": "component-sum"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Input IGST",
+       "1800"
+      ]
+     ],
+     "credit": [
+      [
+       "Sharma Traders",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "IGST stays ONE line - never a CGST/SGST split"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G03",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G03\nFrom: Ram & Sons\nNet Amount: 10500\nGST Amount: 1890\nTotal Amount: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G04",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G04\nFrom: Gupta & Sons\nNet Amount: 10000\nCGST: 900\nSGST: 900\nTotal: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "900",
+       "900"
+      ],
+      "total": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [
+      "tax"
+     ],
+     "tax_total": "1800",
+     "tax_total_basis": "component-sum"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Input CGST",
+       "900"
+      ],
+      [
+       "Input SGST",
+       "900"
+      ]
+     ],
+     "credit": [
+      [
+       "Gupta & Sons",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "same arithmetic as G01; asserted at role-layer basis"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G05",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G05\nFrom: Gupta & Sons\nNet Amount: 10000\nCGST: 900\nSGST: 900\nGST: 2000\nTotal: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 5,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "900",
+       "900",
+       "2000"
+      ],
+      "total": [
+       "11800"
+      ]
+     },
+     "conflicts": [
+      "labelled_role_conflict"
+     ],
+     "duplicates": [],
+     "tax_total": "2000",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "MISMATCH"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "IGST/CGST-style component contradiction: a plain GST label conflicting with components refuses"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "G06",
+   "category": "GST",
+   "input": "Purchase Invoice IN-G06\nFrom: Ram & Sons\nNet Amount: 10000\nTotal: 10000",
+   "stages": {
+    "recognition": {
+     "labels_found": 2,
+     "roles": [
+      "net",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "total": [
+       "10000"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "10000"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "per-capability contract: tax is OPTIONAL; absence is not a refusal"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "M01",
+   "category": "PAYMENT",
+   "input": "Purchase Invoice IN-M01\nFrom: Shyam Traders\nNet Amount: 10000\nGST: 1800\nTotal: 11800\nAmount Paid: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "payment",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "1800"
+      ],
+      "total": [
+       "11800"
+      ],
+      "payment": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1800",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10000"
+      ],
+      [
+       "Input CGST",
+       "900"
+      ],
+      [
+       "Input SGST",
+       "900"
+      ]
+     ],
+     "credit": [
+      [
+       "Cash",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "paid == total"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "M02",
+   "category": "PAYMENT",
+   "input": "Invoice IN-M02\nFrom: Supplier Ltd\nTotal Amount: 12390\nAmount Paid: 5000\nBalance Due: 7390",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "outstanding",
+      "payment",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "total": [
+       "12390"
+      ],
+      "payment": [
+       "5000"
+      ],
+      "outstanding": [
+       "7390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": true
+    },
+    "authority_routing": "SETTLEMENT_AUTHORITY",
+    "execution": {
+     "debit": [
+      [
+       "Supplier Ltd",
+       "5000"
+      ]
+     ],
+     "credit": [
+      [
+       "Cash",
+       "5000"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "SETTLEMENT_AUTHORITY",
+    "note": "posts ONLY the payment; outstanding is evidence; the narration math-contradiction gate flags the digit split and the invoice path proceeds ONLY through the narrow payment+outstanding reconciled bypass"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "M03",
+   "category": "PAYMENT",
+   "input": "Invoice IN-M03\nFrom: Supplier Ltd\nTotal Amount: 12390\nAmount Paid: 11800\nBalance Due: 590",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "outstanding",
+      "payment",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "total": [
+       "12390"
+      ],
+      "payment": [
+       "11800"
+      ],
+      "outstanding": [
+       "590"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": true
+    },
+    "authority_routing": "SETTLEMENT_AUTHORITY",
+    "execution": {
+     "debit": [
+      [
+       "Supplier Ltd",
+       "11800"
+      ]
+     ],
+     "credit": [
+      [
+       "Cash",
+       "11800"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "SETTLEMENT_AUTHORITY"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "M04",
+   "category": "PAYMENT",
+   "input": "Invoice IN-M04\nFrom: Supplier Ltd\nTotal Amount: 12390\nAmount Paid: 5000\nBalance Due: 7000",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "outstanding",
+      "payment",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "total": [
+       "12390"
+      ],
+      "payment": [
+       "5000"
+      ],
+      "outstanding": [
+       "7000"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [
+     "MISMATCH"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": true
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "INVALID_INPUT_MATH",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "INVALID_INPUT_MATH",
+    "authority": null,
+    "note": "paid + outstanding != total: the narration path's own math-contradiction gate refuses (stricter than REVIEW_REQUIRED); fail-closed, never VERIFIED"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D01",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D01\nFrom: Ram & Sons\nNet Amount: 10500\nGST Amount: 1890\nTotal Amount: 12390\nTotal Amount: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390",
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [
+      "total"
+     ],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "same-value duplicate = one stated fact"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D02",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D02\nFrom: Ram & Sons\nNet Amount: 10500\nGST Amount: 1890\nTotal Amount: 1000\nTotal Amount: 1200",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "1000",
+       "1200"
+      ]
+     },
+     "conflicts": [
+      "labelled_role_conflict"
+     ],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "conflicting duplicates are never chosen between"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D03",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D03\nFrom: Ram & Sons\nNet Amount: 10500\nGST: 1890",
+   "stages": {
+    "recognition": {
+     "labels_found": 2,
+     "roles": [
+      "net",
+      "tax"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "invoice_capability",
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "missing total: required input absent"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D04",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D04\nFrom: Ram & Sons\nGST: 1800\nTotal: 11800",
+   "stages": {
+    "recognition": {
+     "labels_found": 2,
+     "roles": [
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "tax": [
+       "1800"
+      ],
+      "total": [
+       "11800"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1800",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "invoice_capability",
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "missing net: no net+total shape, no settlement shape"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D05",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D05\nFrom: Ram & Sons\nNet Amount: 10000\nGST: 1800\nTotal: 12000",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10000"
+      ],
+      "tax": [
+       "1800"
+      ],
+      "total": [
+       "12000"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1800",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "MISMATCH"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "mismatched reconciliation; amounts never modified"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D06",
+   "category": "DEFENSIVE",
+   "input": "TAX INVOICE BILL-SI-01\nFrom: Ram & Sons\nNet Amount: 10500\nGST: 1890\nTotal: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "document code digits never become amounts"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D07",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D07 dated 01-May-2026\nFrom: Ram & Sons\nNet Amount: 10500\nGST: 1890\nTotal: 12390",
+   "stages": {
+    "recognition": {
+     "labels_found": 3,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "10500"
+      ],
+      "tax": [
+       "1890"
+      ],
+      "total": [
+       "12390"
+      ]
+     },
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": "1890",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": "COMMERCIAL_CORE",
+    "execution": {
+     "debit": [
+      [
+       "Purchases",
+       "10500"
+      ],
+      [
+       "Input CGST",
+       "945"
+      ],
+      [
+       "Input SGST",
+       "945"
+      ]
+     ],
+     "credit": [
+      [
+       "Ram & Sons",
+       "12390"
+      ]
+     ]
+    },
+    "verdict": "VERIFIED",
+    "rule_key": "invoice_labelled_facts"
+   },
+   "expected": {
+    "verdict": "VERIFIED",
+    "authority": "COMMERCIAL_CORE",
+    "note": "hyphenated date segments never become amounts"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D08",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice IN-D08\nFrom: Gupta & Sons\nNet Amount: 1000\nGST: 180\nCGST: 90\nTotal: 1180",
+   "stages": {
+    "recognition": {
+     "labels_found": 4,
+     "roles": [
+      "net",
+      "tax",
+      "total"
+     ]
+    },
+    "role_resolution": {
+     "values": {
+      "net": [
+       "1000"
+      ],
+      "tax": [
+       "180",
+       "90"
+      ],
+      "total": [
+       "1180"
+      ]
+     },
+     "conflicts": [
+      "labelled_role_conflict"
+     ],
+     "duplicates": [],
+     "tax_total": "180",
+     "tax_total_basis": "explicit"
+    },
+    "reconciliation": [
+     "RECONCILED"
+    ],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "REVIEW_REQUIRED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "REVIEW_REQUIRED",
+    "authority": null,
+    "note": "ambiguous tax: plain GST + a component value refuse"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D09",
+   "category": "DEFENSIVE",
+   "input": "Purchase Invoice TI-2026-9\nFrom: Ram & Sons\nTotal: 11800 inclusive of GST",
+   "stages": {
+    "recognition": {
+     "labels_found": 0,
+     "roles": []
+    },
+    "role_resolution": {
+     "values": {},
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "NOT_SUPPORTED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "NOT_SUPPORTED",
+    "authority": null,
+    "note": "tax-inclusive pricing with no net evidence: outside the implemented surface (registry UNSUPPORTED)"
+   },
+   "matches_expected": true
+  },
+  {
+   "case_id": "D10",
+   "category": "DEFENSIVE",
+   "input": "Debit Note DNT-2026-4\nFrom: Mehra & Co\nDebit Note Amount: 500",
+   "stages": {
+    "recognition": {
+     "labels_found": 0,
+     "roles": []
+    },
+    "role_resolution": {
+     "values": {},
+     "conflicts": [],
+     "duplicates": [],
+     "tax_total": null,
+     "tax_total_basis": null
+    },
+    "reconciliation": [],
+    "grounding_normalization": {
+     "concerns": [],
+     "math_contradiction": false
+    },
+    "authority_routing": null,
+    "execution": {
+     "debit": [],
+     "credit": []
+    },
+    "verdict": "NOT_SUPPORTED",
+    "rule_key": null
+   },
+   "expected": {
+    "verdict": "NOT_SUPPORTED",
+    "authority": null,
+    "note": "debit-note accounting: registry UNSUPPORTED; the kernel refuses rather than inventing a treatment"
+   },
+   "matches_expected": true
+  }
+ ]
+}

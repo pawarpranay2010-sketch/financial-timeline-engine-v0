@@ -1,0 +1,303 @@
+{
+ "phase": "4",
+ "sprint": "INV-ROLE",
+ "generated": "2026-09-25",
+ "source": "live backend/maths/capability_registry.py export + integration-gate observed routing",
+ "registry_integrity": {
+  "total_capabilities": 53,
+  "invoice_capabilities": 9,
+  "string_limitations_guard": "register() rejects bare-string limitations (per-character iteration defect class)"
+ },
+ "spec_expected_architecture": {
+  "INVOICE_PURCHASE": "existing purchase/accounting machinery",
+  "INVOICE_SALE": "existing sale/accounting machinery",
+  "INVOICE_GST_AMOUNTS": "GST_AUTHORITY",
+  "INVOICE_PAYMENT_AGAINST": "SETTLEMENT_AUTHORITY",
+  "INVOICE_REFUND": "existing refund machinery",
+  "INVOICE_CREDIT_NOTE": "existing return/credit-note machinery",
+  "INVOICE_OUTSTANDING_EVIDENCE": "settlement evidence / review path",
+  "INVOICE_TAX_INCLUSIVE": "UNSUPPORTED",
+  "INVOICE_DEBIT_NOTE": "UNSUPPORTED"
+ },
+ "capabilities": [
+  {
+   "capability_id": "KERNEL.INVOICE_CREDIT_NOTE",
+   "canonical_name": "Credit note (purchase return)",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "credit note amount",
+    "supplier party"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "existing purchase-return machinery (DR party / CR Purchase Returns)",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "Phase 3 role gate M.1-M.2",
+   "limitations": [
+    "sales-return credit notes issued BY the business (RETURN_OUT direction) are out of scope; GST reversal on credit notes is out of scope"
+   ],
+   "expected_refusal_conditions": [
+    "customer-side document (counterparty unresolvable)",
+    "negative amount",
+    "missing supplier party"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "narration purchase-return convention"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_DEBIT_NOTE",
+   "canonical_name": "Debit note accounting",
+   "supported_status": "UNSUPPORTED",
+   "semantic_inputs": [],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "UNSUPPORTED - refused, no authority",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "D10 + false-verified gate case H",
+   "limitations": [
+    "remains REVIEW_REQUIRED/UNSUPPORTED by design; no debit-note authority is implemented"
+   ],
+   "expected_refusal_conditions": [
+    "any debit-note accounting treatment (none implemented)"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": ""
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_GST_AMOUNTS",
+   "canonical_name": "Invoice GST handling (amount form)",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "e",
+    "x",
+    "p",
+    "l",
+    "i",
+    "c",
+    "i",
+    "t",
+    " ",
+    "G",
+    "S",
+    "T",
+    "/",
+    "C",
+    "G",
+    "S",
+    "T",
+    "/",
+    "S",
+    "G",
+    "S",
+    "T",
+    "/",
+    "I",
+    "G",
+    "S",
+    "T",
+    " ",
+    "a",
+    "m",
+    "o",
+    "u",
+    "n",
+    "t",
+    " ",
+    "l",
+    "a",
+    "b",
+    "e",
+    "l",
+    "s"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "GST_AUTHORITY conventions (component scheme, Input/Output side, IGST single line); amount form posted under the invoice capability",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "G01-G05, X5 trace (integration gate)",
+   "limitations": [
+    "no rate computation from amounts (rate form stays with the narration path); IGST+CGST/SGST mixtures refuse; tax-inclusive pricing refuses"
+   ],
+   "expected_refusal_conditions": [
+    "IGST stated with CGST/SGST",
+    "conflicting tax labels",
+    "unresolvable component values",
+    "tax-inclusive totals"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "generate_journal GST treatment (component scheme, Input/Output side, IGST single-line posting)"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_OUTSTANDING_EVIDENCE",
+   "canonical_name": "Outstanding balance evidence",
+   "supported_status": "PARTIAL",
+   "semantic_inputs": [
+    "outstanding"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "settlement evidence / review path only (never posted standalone)",
+   "implementation_ref": "backend/maths/invoice_amount_roles.py:resolve_invoice_roles",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "K.1 reconciliation evidence + M02 bypass trace",
+   "limitations": [
+    "no standalone receivable/payable ledger posting; aging/valuation of outstanding balances out of scope"
+   ],
+   "expected_refusal_conditions": [
+    "never posted standalone; PARTIAL by contract"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "invoice role layer reconciliation"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_PAYMENT_AGAINST",
+   "canonical_name": "Payment against invoice (settlement)",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "payment",
+    "outstanding",
+    "total"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "SETTLEMENT_AUTHORITY (posts only the payment)",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "M02-M04, X4 trace (integration gate)",
+   "limitations": [
+    "instrument words in the Payment line are not used to pick a Bank account (narration convention posts Cash); part-settlement of GST components is out of scope"
+   ],
+   "expected_refusal_conditions": [
+    "paid + outstanding != total",
+    "negative payment/outstanding",
+    "missing any of payment/outstanding/total"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "SETTLEMENT_AUTHORITY narration conventions (payment direction from the document party side)"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_PURCHASE",
+   "canonical_name": "Purchase invoice from labelled facts",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "net",
+    "total",
+    "party side"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "existing purchase/accounting machinery (Purchases / asset path under ASSET_AUTHORITY / expense account) via compose_invoice_journal",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "P01-P05, G01-G06, M01, D01, D06, D07 (integration gate)",
+   "limitations": [
+    "amount-form GST follows the intra/inter-state treatment the labels state (CGST+SGST or IGST); tax-inclusive pricing and freight-forwarding composition are out of scope; mixed GST schemes are refused"
+   ],
+   "expected_refusal_conditions": [
+    "conflicting label values",
+    "reconciliation MISMATCH/UNRESOLVED",
+    "discount > net",
+    "service wording without a supported account",
+    "missing party",
+    "shipping with asset/expense debit",
+    "payment > invoice total"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "FYJC narration conventions (generate_journal) reused for account naming and GST treatment"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_REFUND",
+   "canonical_name": "Invoice refund",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "refund amount",
+    "customer party"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "existing narration refund machinery (DR Cash / CR party)",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "Phase 3 role gate L.1-L.3",
+   "limitations": [
+    "GST component effects of a refund are out of scope; supplier-side refund documents refuse (counterparty cannot be resolved)"
+   ],
+   "expected_refusal_conditions": [
+    "supplier-side document (counterparty unresolvable)",
+    "negative refund amount",
+    "missing customer party"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "narration refund convention"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_SALE",
+   "canonical_name": "Sales invoice from labelled facts",
+   "supported_status": "SUPPORTED",
+   "semantic_inputs": [
+    "net",
+    "total",
+    "customer party"
+   ],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "existing sale machinery convention (DR party / CR Sales + Output GST) via compose_invoice_journal",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "S01-S05 (integration gate)",
+   "limitations": [
+    "cash-sale POS documents (no customer named) are out of scope; shipping on a sales invoice is refused (no deterministic account); tax-inclusive pricing out of scope"
+   ],
+   "expected_refusal_conditions": [
+    "conflicting label values",
+    "reconciliation MISMATCH",
+    "shipping on a sales invoice",
+    "service wording without a supported account",
+    "missing customer party"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": "FYJC narration conventions (generate_journal) reused for account naming and GST treatment"
+   }
+  },
+  {
+   "capability_id": "KERNEL.INVOICE_TAX_INCLUSIVE",
+   "canonical_name": "Tax-inclusive invoice pricing",
+   "supported_status": "UNSUPPORTED",
+   "semantic_inputs": [],
+   "required_evidence": "explicit label:value amounts with spans; unambiguous roles; evidence-gated reconciliation",
+   "authority_routing": "UNSUPPORTED - refused, no authority",
+   "implementation_ref": "backend/maths/fyjc_orchestration.py:_invoice_labelled_facts_outcome; backend/maths/invoice_executor.py:compose_invoice_journal",
+   "test_ref": "scripts/fte_invoice_role_gate_test.py",
+   "test_evidence": "D09 + false-verified gate case G",
+   "limitations": [
+    "REVIEW_REQUIRED whenever only a tax-inclusive total is labelled; the narration GST suite covers the rate-form inclusive wording ('inclusive of GST') separately"
+   ],
+   "expected_refusal_conditions": [
+    "any tax-inclusive total without net/rate evidence"
+   ],
+   "provenance": {
+    "framework": "FYJC Book-Keeping",
+    "jurisdiction": "IN",
+    "source_ref": ""
+   }
+  }
+ ]
+}

@@ -1,0 +1,127 @@
+{
+ "phase": "4",
+ "sprint": "INV-ROLE",
+ "generated": "2026-09-25",
+ "gate": "scripts/fte_invoice_false_verified_gate_test.py",
+ "hard_invariant": "false_VERIFIED == 0",
+ "false_verified_count": 0,
+ "invariants": [
+  "unsupported capability cannot become VERIFIED: VERIFIED via registry UNSUPPORTED entries D09/D10 + swept",
+  "conflicting evidence cannot become VERIFIED: swept (INV2)",
+  "insufficient evidence cannot become VERIFIED: swept (INV3)",
+  "invoice labels cannot bypass grounding: normalization concern refuses before invoice code (INV4, executor-only compose proves the gate is above)",
+  "invoice executor cannot bypass existing authorities: every VERIFIED routes under COMMERCIAL_CORE/ASSET_AUTHORITY/GST_AUTHORITY/SETTLEMENT_AUTHORITY (INV5) and journals balance with evidence (INV6)"
+ ],
+ "cases": [
+  {
+   "case": "A",
+   "name": "valid reconciliation",
+   "input": "Purchase Invoice AT-101\nFrom: Ram & Sons\nNet Amount: 10,500\nGST: 1,890\nTotal: 12,390",
+   "expected": "VERIFIED",
+   "observed_status": "VERIFIED",
+   "observed_authority": "COMMERCIAL_CORE",
+   "observed_rule_key": "invoice_labelled_facts",
+   "journal_lines": true,
+   "attack_successful": false
+  },
+  {
+   "case": "B",
+   "name": "incorrect reconciliation",
+   "input": "Purchase Invoice BT-102\nFrom: Ram & Sons\nNet Amount: 10,500\nGST: 2,890\nTotal: 12,390",
+   "expected": "REVIEW_REQUIRED",
+   "observed_status": "REVIEW_REQUIRED",
+   "observed_authority": null,
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "C",
+   "name": "conflicting duplicate GST",
+   "input": "Purchase Invoice CT-103\nFrom: Ram & Sons\nTotal: 12,390\nNet Amount: 10,500\nGST: 1,890\nGST: 2,000",
+   "expected": "REVIEW_REQUIRED",
+   "observed_status": "REVIEW_REQUIRED",
+   "observed_authority": null,
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "D",
+   "name": "paid/outstanding mismatch",
+   "input": "Invoice DT-104\nFrom: Supplier Ltd\nTotal: 12,390\nAmount Paid: 5,000\nBalance Due: 7,000",
+   "expected": "never VERIFIED",
+   "observed_status": "REVIEW_REQUIRED",
+   "observed_authority": null,
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "E",
+   "name": "document reference BILL-SI-01",
+   "input": "TAX INVOICE BILL-SI-01\nFrom: Ram & Sons\nNet Amount: 10000\nGST: 1800\nTotal: 11800",
+   "expected": "VERIFIED with no amount 01/-1/1",
+   "observed_status": "VERIFIED",
+   "observed_authority": "COMMERCIAL_CORE",
+   "observed_rule_key": "invoice_labelled_facts",
+   "journal_lines": true,
+   "attack_successful": false
+  },
+  {
+   "case": "F",
+   "name": "date/code boundary 01-May",
+   "input": "Purchase Invoice IN-F09 dated 01-May\nFrom: Ram & Sons\nNet Amount: 10000\nGST: 1800\nTotal: 11800",
+   "expected": "VERIFIED with no amount 1/5/2026",
+   "observed_status": "VERIFIED",
+   "observed_authority": "COMMERCIAL_CORE",
+   "observed_rule_key": "invoice_labelled_facts",
+   "journal_lines": true,
+   "attack_successful": false
+  },
+  {
+   "case": "G",
+   "name": "tax-inclusive pricing",
+   "input": "Purchase Invoice TI-105\nFrom: Ram & Sons\nTotal: 11800 inclusive of GST",
+   "expected": "NOT_SUPPORTED/REVIEW_REQUIRED",
+   "observed_status": "NOT_SUPPORTED",
+   "observed_authority": null,
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "H",
+   "name": "debit note",
+   "input": "Debit Note DNT-104\nFrom: Mehra & Co\nDebit Note Amount: 500",
+   "expected": "NOT_SUPPORTED/REVIEW_REQUIRED",
+   "observed_status": "NOT_SUPPORTED",
+   "observed_authority": null,
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "I",
+   "name": "invented account (services)",
+   "input": "Purchase Invoice CI-106\nFrom: Advisory Corp\nTransaction: Consulting services\nNet Amount: 5000\nTotal: 5000",
+   "expected": "REVIEW_REQUIRED (no invented account)",
+   "observed_status": "REVIEW_REQUIRED",
+   "observed_authority": "invoice_capability",
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  },
+  {
+   "case": "J",
+   "name": "conflicting party evidence",
+   "input": "Purchase Invoice JT-109\nFrom: Global Suppliers\nTo: Retail Buyer\nNet Amount: 10000\nGST: 1800\nTotal: 11800",
+   "expected": "REVIEW_REQUIRED",
+   "observed_status": "REVIEW_REQUIRED",
+   "observed_authority": "invoice_capability",
+   "observed_rule_key": null,
+   "journal_lines": [],
+   "attack_successful": false
+  }
+ ]
+}

@@ -1,0 +1,40 @@
+{
+  "phase": "4",
+  "sprint": "INV-ROLE",
+  "generated": "2026-09-25",
+  "question": "Why does the real-invoice E2E benchmark return 30/30 REVIEW_REQUIRED, and which layer owns the refusal?",
+  "trigger_fixture": "B-001-TEST-BUYER (and S-001-TEST-SELLER) in the corpus party fields",
+  "probe_matrix": [
+    {"form": "B-001-TEST-BUYER", "normalization_concerns": 1, "orchestrate": "REVIEW_REQUIRED", "concern": "single-letter abbreviation ('B')"},
+    {"form": "S-001-TEST-SELLER", "normalization_concerns": 1, "orchestrate": "REVIEW_REQUIRED", "conclusion": "same rule"},
+    {"form": "B-001", "normalization_concerns": 1, "orchestrate": "REVIEW_REQUIRED", "conclusion": "same rule"},
+    {"form": "BUYER", "normalization_concerns": 0, "orchestrate": "VERIFIED", "route": "invoice_labelled_facts"},
+    {"form": "ABC LTD", "normalization_concerns": 0, "orchestrate": "VERIFIED", "route": "invoice_labelled_facts"},
+    {"form": "ABC PVT LTD", "normalization_concerns": 0, "orchestrate": "VERIFIED", "route": "invoice_labelled_facts"},
+    {"form": "A", "normalization_concerns": 0, "orchestrate": "VERIFIED", "route": "invoice_labelled_facts"},
+    {"form": "A BUYER", "normalization_concerns": 0, "orchestrate": "VERIFIED", "route": "invoice_labelled_facts"}
+  ],
+  "refusal_layer_localization": {
+    "document_parsing_invoice_roles": "clean - roles resolve, reconciliation RECONCILED, no conflicts",
+    "semantic_interpretation_stub": "corpus candidate is schema-valid and grounding-safe at build time",
+    "normalization": "TRIGGER - normalize_fyjc_text._SINGLE_LETTER_RE sweep flags the isolated 'B'/'S' before a hyphen as a single-letter initial",
+    "schema": "not reached while a concern is present",
+    "grounding": "not reached while a concern is present",
+    "transaction_graph": "built after the gate; not involved",
+    "party_validation": "no separate party validator exists; the concern IS the party validation",
+    "invoice_executor": "no party-ID rule; called ungated it composes (proving the refusal is upstream)",
+    "accounting_authority": "not involved; refusal carries no authority and no journal lines"
+  },
+  "history": "The single-letter rule predates Phase 3 (normalization safety sweep 15I-VY) and is pinned as INTENTIONAL by multiple pre-existing suites: fte_fyjc_15bills_bills_authority_test.py ('single-letter party refuses - 15I-VY safety preserved'), fte_fyjc_15cover_grade11_torture_test.py ('X is a single-letter party - refused, 15I-COVER boundary'), fte_fyjc_15boundary_resolve_test.py, fte_fyjc_15chaos_* suites.",
+  "conclusion": {
+    "A_benchmark_fixture_invalid": "partially - the fixture places identifier-shaped values in party NAME fields; the corpus remains valid as a conservative-refusal fixture but its VERIFIED gold labels are unreachable without violating a pinned safety rule",
+    "B_existing_party_validation_intentionally_correct": "TRUE - adopted; the rule is pinned, uniform across input domains, and identity-ambiguous input is exactly what it exists for",
+    "C_invoice_documents_need_document_specific_party_representation": "not required - real document-style party names compose through the existing path; no invoice-specific representation is needed",
+    "D_existing_validation_over_restrictive": "REJECTED - no change justified; loosening letter-adjacency for identifier-shaped values would be a benchmark-shaped bypass"
+  },
+  "action_taken": "NO production change. The party rule is untouched; the refusal stays owned by normalization; the invoice layer is proven unable to rescue a concerned document (no invoice evidence in the result, rule_key None). Regression coverage added in scripts/fte_invoice_party_boundary_test.py (27 checks).",
+  "safety": {
+    "false_verified": 0,
+    "invoice_bypass_attempts": "none possible - orchestrator hands concerned documents to the narration path before any invoice code runs"
+  }
+}

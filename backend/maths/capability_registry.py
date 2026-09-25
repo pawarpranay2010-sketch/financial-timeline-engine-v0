@@ -164,6 +164,15 @@ def register(capability: Capability) -> Capability:
             f"Capability {capability.capability_id!r}: UNSUPPORTED requires "
             "at least one documented limitation/refusal evidence."
         )
+    # Sprint INV-ROLE Phase 4: a string passed where a Tuple[str, ...] is
+    # contracted silently iterates CHARACTER BY CHARACTER ('limitations='
+    # '"..."' without a trailing comma) and destroys the refusal evidence.
+    # Fail registration instead of storing per-character shards.
+    if isinstance(capability.limitations, str):
+        raise RegistrationError(
+            f"Capability {capability.capability_id!r}: limitations must be "
+            "a Tuple[str, ...], not a bare string."
+        )
     CAPABILITIES[capability.capability_id] = capability
     return capability
 
@@ -309,7 +318,7 @@ def _register_invoice_capabilities() -> None:
             "amount-form GST follows the intra/inter-state treatment "
             "the labels state (CGST+SGST or IGST); tax-inclusive "
             "pricing and freight-forwarding composition are out of "
-            "scope; mixed GST schemes are refused"
+            "scope; mixed GST schemes are refused",
         ),
     ))
     register(Capability(
@@ -338,7 +347,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "cash-sale POS documents (no customer named) are out of "
             "scope; shipping on a sales invoice is refused (no "
-            "deterministic account); tax-inclusive pricing out of scope"
+            "deterministic account); tax-inclusive pricing out of scope",
         ),
     ))
     register(Capability(
@@ -368,7 +377,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "no rate computation from amounts (rate form stays with "
             "the narration path); IGST+CGST/SGST mixtures refuse; "
-            "tax-inclusive pricing refuses"
+            "tax-inclusive pricing refuses",
         ),
     ))
     register(Capability(
@@ -397,7 +406,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "instrument words in the Payment line are not used to pick "
             "a Bank account (narration convention posts Cash); "
-            "part-settlement of GST components is out of scope"
+            "part-settlement of GST components is out of scope",
         ),
     ))
     register(Capability(
@@ -421,7 +430,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "GST component effects of a refund are out of scope; "
             "supplier-side refund documents refuse (counterparty "
-            "cannot be resolved)"
+            "cannot be resolved)",
         ),
     ))
     register(Capability(
@@ -445,7 +454,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "sales-return credit notes issued BY the business (RETURN_"
             "OUT direction) are out of scope; GST reversal on credit "
-            "notes is out of scope"
+            "notes is out of scope",
         ),
     ))
     register(Capability(
@@ -469,7 +478,7 @@ def _register_invoice_capabilities() -> None:
         jurisdiction="IN",
         limitations=(
             "no standalone receivable/payable ledger posting; "
-            "aging/valuation of outstanding balances out of scope"
+            "aging/valuation of outstanding balances out of scope",
         ),
     ))
 
@@ -491,7 +500,7 @@ def _register_invoice_capabilities() -> None:
         limitations=(
             "REVIEW_REQUIRED whenever only a tax-inclusive total is "
             "labelled; the narration GST suite covers the rate-form "
-            "inclusive wording ('inclusive of GST') separately"
+            "inclusive wording ('inclusive of GST') separately",
         ),
     ))
     register(Capability(
@@ -510,7 +519,7 @@ def _register_invoice_capabilities() -> None:
         jurisdiction="IN",
         limitations=(
             "remains REVIEW_REQUIRED/UNSUPPORTED by design; no debit-"
-            "note authority is implemented"
+            "note authority is implemented",
         ),
     ))
 
@@ -539,7 +548,7 @@ def _register_kernel_capabilities() -> None:
             jurisdiction="IN",
             limitations=() if implemented
             else ("declared in the orchestrator registry, not implemented "
-                  "- routing to it fails closed"),
+                  "- routing to it fails closed",),
         ))
 
     # Explicit UNSUPPORTED records: topics the kernel provably refuses
