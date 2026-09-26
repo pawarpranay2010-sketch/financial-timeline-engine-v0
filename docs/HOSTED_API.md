@@ -110,6 +110,9 @@ the HTTP layer can never create or upgrade a state:
 | `VALIDATION_FAILED` / `GROUNDING_FAILED` / `FORBIDDEN_OUTPUT` / `UNSUPPORTED_TRANSACTION` | processing rejected, reason in `issues` | 422 |
 | `MODEL_UNAVAILABLE` | provider unavailable — retry later | 503 |
 
+(Each engine state also carries its six-state `api_status` mapping — see
+"Public API status" below.)
+
 `success` is `true` only for `VERIFIED`.
 
 Example:
@@ -143,6 +146,40 @@ Example:
 carry the schema-validated candidate and deterministic accounting result
 minus internal model metadata.)
 
+## Public API status (six states — Phase 5A)
+
+Every success and error response carries `api_status`, a **transport-layer
+mapping** of the outcome onto a closed six-state vocabulary. It is derived
+deterministically from the engine's terminal state (or the transport error
+code); the HTTP layer never creates, upgrades, or softens an outcome, and
+the engine's own state is always carried beside it verbatim in
+`engine_status` (or `status` for engine results), so no information is
+lost by relabeling.
+
+| `api_status` | Meaning | Retryable | Engine states |
+|---|---|---|---|
+| `PROCESSING` | admitted, authoritative result not available (provider/runtime unavailable) | yes | `MODEL_UNAVAILABLE` |
+| `VERIFIED` | deterministic execution passed | no | `VERIFIED` (only source) |
+| `REVIEW_REQUIRED` | valid but flagged for human review (incl. rule downgrades) | no | `REVIEW_REQUIRED` |
+| `UNSUPPORTED` | no deterministic authority accepted the input | no | `BLOCKED`, `UNSUPPORTED_TRANSACTION`, `FORBIDDEN_OUTPUT` |
+| `INVALID_INPUT` | malformed transport request or input rejected by the public contract | no | (400/401/413/422 error paths) |
+| `FAILED` | deterministic rejection with the reason in `issues`/`grounding_issues`, or unexpected server failure | no | `VALIDATION_FAILED`, `GROUNDING_FAILED`, unknown states (fail-closed) |
+
+Contract guarantees:
+
+- The vocabulary is closed (exactly these six values, never extended at
+  runtime); an unmapped engine state fails closed to `FAILED`.
+- No engine state maps to `VERIFIED` except `VERIFIED` itself.
+- `retryable` is `true` only for `PROCESSING`; it is advisory.
+- `reason_code` is a stable public name for recorded evidence on
+  fail-closed states (`SAFETY_BOUNDARY`, `NO_SUPPORTED_CAPABILITY`,
+  `FORBIDDEN_STRUCTURE`, `VALIDATION_REJECTED`, `GROUNDING_REJECTED`,
+  `RESULT_PENDING`, `EVIDENCE_RECORDED`); `null` otherwise.
+- `api_status_label` is a human-readable label for UIs. It carries no
+  authority — integrate on `api_status`, never on the label.
+- The mapping adds no accounting, grounding, or schema semantics: the
+  engine terminal state remains the single status authority.
+
 ## Error responses
 
 Machine-readable envelope; no stack traces, filesystem paths, or secrets:
@@ -153,10 +190,17 @@ Machine-readable envelope; no stack traces, filesystem paths, or secrets:
   "error": {
     "code": "INPUT_INVALID",
     "message": "input must be a non-empty transaction string",
-    "request_id": "bc-1"
+    "request_id": "bc-1",
+    "api_status": "INVALID_INPUT",
+    "api_status_label": "Invalid input",
+    "retryable": false
   }
 }
 ```
+
+`error.api_status` maps the transport rejection onto the same six-state
+contract (see above); `code` itself is unchanged and remains the
+fine-grained machine-readable reason.
 
 | Condition | Code | HTTP |
 |---|---|---|

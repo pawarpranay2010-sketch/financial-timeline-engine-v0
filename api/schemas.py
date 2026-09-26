@@ -143,6 +143,14 @@ class DeveloperProcessResponse(BaseModel):
 
     The HTTP layer can never create or upgrade states — the ``status``
     field is a verbatim copy of the Kernel's terminal state.
+
+    Phase 5A adds the six-state PUBLIC API status alongside it (additive,
+    back-compatible): ``api_status`` is the deterministic transport-layer
+    mapping of the engine state onto the closed six-state contract
+    (PROCESSING / VERIFIED / REVIEW_REQUIRED / UNSUPPORTED /
+    INVALID_INPUT / FAILED). The engine ``status`` remains authoritative;
+    ``api_status`` is derived from it by ``api.status`` and adds no
+    financial semantics.
     """
 
     api_version: str = "v1"
@@ -156,6 +164,15 @@ class DeveloperProcessResponse(BaseModel):
     rule_evidence: List[Dict[str, Any]] = Field(default_factory=list)
     interpretation: Optional[Dict[str, Any]] = None
     accounting: Optional[Dict[str, Any]] = None
+    # --- Phase 5A: six-state public API status (mapping only) ---
+    api_status: str = ""
+    api_status_label: str = ""
+    retryable: bool = False
+    reason_code: Optional[str] = None
+    # Verbatim engine terminal state, carried beside the public mapping
+    # so relabeling never loses information (None for pure transport
+    # errors, which never reached the engine).
+    engine_status: Optional[str] = None
 
 
 class DeveloperDocumentProcessResponse(BaseModel):
@@ -182,6 +199,15 @@ class DeveloperDocumentProcessResponse(BaseModel):
     rule_evidence: List[Dict[str, Any]] = Field(default_factory=list)
     interpretation: Optional[Dict[str, Any]] = None
     accounting: Optional[Dict[str, Any]] = None
+    # --- Phase 5A: six-state public API status (mapping only) ---
+    api_status: str = ""
+    api_status_label: str = ""
+    retryable: bool = False
+    reason_code: Optional[str] = None
+    # Verbatim engine terminal state, carried beside the public mapping
+    # so relabeling never loses information (None for pure transport
+    # errors, which never reached the engine).
+    engine_status: Optional[str] = None
 
     # --- document provenance (never a financial claim) ---
     document: Dict[str, Any] = Field(default_factory=dict)

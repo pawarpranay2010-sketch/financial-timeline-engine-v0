@@ -38,6 +38,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# The workspace .env may configure the Phase 16 metered gate; this suite
+# exercises the zero-config hosted-API security boundary, so gate
+# activation variables are neutralized in-process BEFORE the API is
+# imported. Gate state is re-read at request time, so this is effective
+# (same convention as fte_fyjc_77). Assertions are unchanged.
+for _var in ("PLATRIXA_METERING_DATABASE_URL", "PLATRIXA_DEV_API_KEY"):
+    os.environ.pop(_var, None)
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 from api.main import create_app  # noqa: E402

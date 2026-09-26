@@ -93,6 +93,18 @@ from api.schemas import (
     KernelProcessRequest,
 )
 
+# Phase 5A: deterministic six-state public-status mapping (transport-only;
+# no status literals in this module — see the E1 discipline below).
+from api.status import (
+    LABEL_BY_PUBLIC_STATUS,
+    RETRYABLE_BY_PUBLIC_STATUS,
+    engine_status_verbatim,
+    public_status_for_engine,
+    public_status_for_error_code,
+    reason_code_for_engine,
+)
+from api.status import STATUS_FAILED as _FAILED_PUBLIC
+
 # Phase 16 metered gate — HTTP-agnostic admission control. Imported at
 # module scope is SAFE here (unlike the public interface): the auth
 # package touches no provider/model/persistence code at import time and
@@ -288,10 +300,20 @@ def _error_response(
     message: str,
     request_id: Optional[str] = None,
 ) -> JSONResponse:
-    """Machine-readable error envelope: no stack traces, no internals."""
+    """Machine-readable error envelope: no stack traces, no internals.
+
+    Phase 5A: the envelope additionally carries the six-state public API
+    status (``api_status``), its label, and retryability — derived from
+    the error code by the deterministic mapping in ``api.status``. The
+    code itself is unchanged, preserving the documented contract.
+    """
+    api_status = public_status_for_error_code(code)
     error: dict[str, Any] = {"code": code, "message": message}
     if request_id:
         error["request_id"] = request_id
+    error["api_status"] = api_status
+    error["api_status_label"] = LABEL_BY_PUBLIC_STATUS.get(api_status, "")
+    error["retryable"] = RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False)
     return JSONResponse(
         status_code=status_code, content={"api_version": API_VERSION, "error": error}
     )
@@ -317,6 +339,9 @@ def developer_validation_handler(request: Request, exc: RequestValidationError):
          "reason": err.get("type", "invalid")}
         for err in exc.errors()
     ]
+    # Phase 5A: the 400 envelope also carries the six-state public API
+    # status trio, mapped from the error code like every other /v1 error.
+    api_status = public_status_for_error_code("REQUEST_MALFORMED")
     return JSONResponse(
         status_code=400,
         content={
@@ -325,6 +350,9 @@ def developer_validation_handler(request: Request, exc: RequestValidationError):
                 "code": "REQUEST_MALFORMED",
                 "message": "request body could not be parsed as a valid process request",
                 "fields": fields,
+                "api_status": api_status,
+                "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+                "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
             },
         },
     )
@@ -416,8 +444,40 @@ def _log(
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Phase 5A — six-state public API status (mapping layer only)
 # ---------------------------------------------------------------------------
+
+
+def _api_status_fields(
+        engine_status: str,
+        *,
+        issues: Optional[list] = None,
+        grounding_issues: Optional[list] = None,
+    ) -> Dict[str, Any]:
+        """Derive the six-state public fields from an engine state.
+
+        Pure mapping via ``api.status``; carries no status literals in
+        this module (the engine taxonomy stays owned by the Kernel) and
+        adds no financial semantics. ``reason_code`` is only emitted for
+        engine states that have a documented public reason (fail-closed
+        rejections); otherwise it stays None.
+        """
+        api_status = public_status_for_engine(engine_status)
+        fields: Dict[str, Any] = {
+            "api_status": api_status,
+            "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+            "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
+            "reason_code": reason_code_for_engine(engine_status),
+            # The engine state is carried verbatim next to the public
+            # mapping so no information is lost by the relabeling.
+            "engine_status": engine_status_verbatim(engine_status),
+        }
+        if (
+            api_status == _FAILED_PUBLIC
+            and (issues or grounding_issues)
+        ):
+            fields["reason_code"] = "EVIDENCE_RECORDED"
+        return fields
 
 
 @router.get("/v1/health", response_model=DeveloperHealthResponse)
@@ -584,6 +644,11 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
         rule_evidence=list(getattr(result, "rule_evidence", None) or []),
         interpretation=_safe_candidate(getattr(result, "interpretation", None)),
         accounting=_safe_accounting(getattr(result, "accounting", None)),
+        **_api_status_fields(
+            status,
+            issues=list(getattr(result, "issues", None) or []),
+            grounding_issues=list(getattr(result, "grounding_issues", None) or []),
+        ),
     )
 
     _log(
@@ -733,6 +798,13 @@ async def process_document_v1(request: Request) -> "DeveloperDocumentProcessResp
         evidence=evidence,
         timings_ms=result.timings_ms,
         notes=result.notes,
+        **_api_status_fields(
+            status,
+            issues=list(getattr(kernel_result, "issues", None) or []),
+            grounding_issues=list(
+                getattr(kernel_result, "grounding_issues", None) or []
+            ),
+        ),
     )
 
     _log("/v1/process/document", request_id=rid, status=status,

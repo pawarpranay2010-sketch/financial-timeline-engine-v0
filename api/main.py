@@ -23,6 +23,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api import __version__
+from api.status import (
+    LABEL_BY_PUBLIC_STATUS,
+    RETRYABLE_BY_PUBLIC_STATUS,
+    public_status_for_error_code,
+)
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -73,6 +78,10 @@ def create_app() -> FastAPI:
         if request.url.path.startswith("/v1/"):
             content_length = request.headers.get("content-length", "")
             if content_length.isdigit() and int(content_length) > _MAX_DEV_BODY_BYTES:
+                # Phase 5A: the 413 envelope carries the six-state public
+                # API status trio, mapped from the error code (same mapping
+                # as every other /v1 error envelope).
+                api_status = public_status_for_error_code("REQUEST_TOO_LARGE")
                 return JSONResponse(
                     status_code=413,
                     content={
@@ -80,6 +89,9 @@ def create_app() -> FastAPI:
                         "error": {
                             "code": "REQUEST_TOO_LARGE",
                             "message": "request body too large",
+                            "api_status": api_status,
+                            "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+                            "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
                         },
                     },
                 )
