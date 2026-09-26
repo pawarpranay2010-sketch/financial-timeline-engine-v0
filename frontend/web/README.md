@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Platrixa — Next.js developer frontend
 
-## Getting Started
+`frontend/web` is a Next.js 16 + TypeScript + Tailwind CSS 4 app that talks
+to the **real** Platrixa FastAPI backend through a same-origin server-side
+proxy during local development. The legacy static app (`frontend/`) and the
+backend are untouched.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Browser (same-origin /api/*, /v1/*)
+   ↓
+Next.js route handlers (server-side proxy, lib/platrixa-proxy.ts)
+   ↓
+FastAPI  (PLATRIXA_API_BASE_URL, e.g. http://127.0.0.1:8000)
+   ↓
+Platrixa deterministic authorities
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Running locally with the real backend
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Start FastAPI (repository root):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   ```bash
+   uvicorn api.main:app --host 127.0.0.1 --port 8000
+   ```
 
-## Learn More
+   (FastAPI reads `PORT`, default 5000 — any port works; point the proxy at it.)
 
-To learn more about Next.js, take a look at the following resources:
+2. Point the proxy at it — create `frontend/web/.env.local` (git-ignored):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   ```
+   PLATRIXA_API_BASE_URL=http://127.0.0.1:8000
+   # Optional: only when the backend sets PLATRIXA_DEV_API_KEY or the
+   # Phase 16 metering gate. Never use NEXT_PUBLIC_* for this.
+   # PLATRIXA_API_KEY=<server-side key>
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+3. Start the frontend:
 
-## Deploy on Vercel
+   ```bash
+   npm run dev        # or: npm run build && npm run start
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The browser only ever calls same-origin `/api/*` and `/v1/*`; the proxy
+forwards them verbatim (method, JSON body, `Content-Type`, `X-Request-Id`)
+and returns the upstream status/body unchanged. Only the `/api/` and `/v1/`
+namespaces are forwarded — this is not a generic proxy. With no backend
+configured the proxy fails closed with a structured
+`503 BACKEND_NOT_CONFIGURED` envelope, and the UI shows a connection state —
+it never substitutes mock data for a live failure.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Environment variables
+
+| Variable | Side | Purpose |
+|---|---|---|
+| `PLATRIXA_API_BASE_URL` | server | FastAPI base URL the proxy targets (fixed destination) |
+| `PLATRIXA_API_KEY` | server | Optional; attached as `X-Platrixa-API-Key` when the backend gates `/v1/*` (Phase 15/16). Never logged, never sent to the browser, never `NEXT_PUBLIC_*` |
+
+No secrets appear in the client bundle: both variables are read exclusively
+inside Node route handlers.
+
+## Status semantics
+
+The UI renders the backend's statuses verbatim (`VERIFIED`,
+`REVIEW_REQUIRED`, `BLOCKED`, `UNSUPPORTED_TRANSACTION`, … plus the Phase 5A
+six-state transport mapping where present). Transport status is not
+financial authority — the frontend never upgrades, downgrades, or invents
+results.

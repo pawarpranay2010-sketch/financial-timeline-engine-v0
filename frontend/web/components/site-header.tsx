@@ -1,12 +1,21 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Link001, Link003 } from "@/components/ui/skiper-ui/skiper40";
+import { Link001 } from "@/components/skiper-links";
 import { fetchHealth } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-/** Header — brand, Skiper UI animated links, live API connection pill. */
+const NAV = [
+  { href: "/console", label: "Console" },
+  { href: "/capabilities", label: "Capabilities" },
+  { href: "/developer", label: "Developer" },
+] as const;
+
+/** Header — brand, route nav (Skiper animated links), live API pill. */
 export function SiteHeader() {
+  const pathname = usePathname();
   const [apiUp, setApiUp] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -24,31 +33,35 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-20 border-b border-border/70 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <div className="flex items-center gap-3">
+        <Link href="/" className="flex items-center gap-3" aria-label="Platrixa home">
           <span
             className="grid size-8 place-items-center rounded-md border border-accent/40 bg-accent-soft font-mono text-xs font-bold tracking-tight text-accent"
             aria-hidden
           >
             PLX
           </span>
-          <div className="leading-tight">
-            <p className="text-sm font-semibold tracking-tight">Platrixa</p>
-            <p className="text-[11px] text-muted-foreground">
+          <span className="leading-tight">
+            <span className="block text-sm font-semibold tracking-tight">Platrixa</span>
+            <span className="block text-[11px] text-muted-foreground">
               Financial semantic validation
-            </p>
-          </div>
-        </div>
+            </span>
+          </span>
+        </Link>
 
-        <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex" aria-label="Primary">
-          <Link001 href="#console" className="hover:text-foreground">
-            Console
-          </Link001>
-          <Link003 href="#capabilities" className="hover:text-foreground">
-            Capabilities
-          </Link003>
-          <Link001 href="#api" className="hover:text-foreground">
-            API
-          </Link001>
+        <nav
+          className="hidden items-center gap-6 text-sm text-muted-foreground md:flex"
+          aria-label="Primary"
+        >
+          {NAV.map((item) => {
+            const active = pathname === item.href;
+            return (
+              <span key={item.href} className={cn(active && "text-foreground")}>
+                <Link001 href={item.href} className={cn("hover:text-foreground", active && "text-accent")}>
+                  {item.label}
+                </Link001>
+              </span>
+            );
+          })}
         </nav>
 
         <div
@@ -70,9 +83,28 @@ export function SiteHeader() {
             )}
             aria-hidden
           />
-          {apiUp === null ? "checking API…" : apiUp ? "API connected" : "API offline — demo data"}
+          {apiUp === null ? "checking API…" : apiUp ? "LIVE API" : "API offline"}
         </div>
       </div>
+
+      {/* Mobile nav row */}
+      <nav
+        className="flex items-center gap-5 border-t border-border/60 px-4 py-2 text-sm text-muted-foreground md:hidden"
+        aria-label="Primary mobile"
+      >
+        {NAV.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              "transition-colors hover:text-foreground",
+              pathname === item.href && "text-accent",
+            )}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </nav>
     </header>
   );
 }
