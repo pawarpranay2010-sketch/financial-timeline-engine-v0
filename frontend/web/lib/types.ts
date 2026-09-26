@@ -73,6 +73,48 @@ export interface KernelProcessResponse {
   persistence_error?: { kind: string; reason: string } | null;
 }
 
+/** Document provenance block returned by POST /v1/process/document. */
+export interface DocumentProvenance {
+  source_name?: string;
+  source_type?: string;
+  content_type?: string;
+  size_bytes?: number;
+  page_count?: number;
+  [key: string]: unknown;
+}
+
+/** One evidence record (page/span provenance) from the document path. */
+export interface DocumentEvidence {
+  page?: number;
+  source_id?: string;
+  text_span?: string;
+  [key: string]: unknown;
+}
+
+/** POST /v1/process/document response (DeveloperDocumentProcessResponse). */
+export interface DeveloperDocumentProcessResponse {
+  api_version: string;
+  request_id?: string | null;
+  status: EngineStatus;
+  status_label?: string;
+  success: boolean;
+  next_action?: string | null;
+  issues: string[];
+  grounding_issues: string[];
+  rule_evidence?: Array<Record<string, unknown>>;
+  interpretation: InterpretationCandidate | null;
+  accounting: AccountingResult | null;
+  api_status?: string;
+  api_status_label?: string;
+  retryable?: boolean;
+  reason_code?: string | null;
+  engine_status?: string | null;
+  document: DocumentProvenance;
+  evidence: DocumentEvidence[];
+  timings_ms?: Record<string, unknown>;
+  notes?: string[];
+}
+
 /** GET /v1/capabilities response (DeveloperCapabilitiesResponse). */
 export interface CapabilityEntry {
   capability_id: string;

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
+import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useEffect, useState } from "react";
@@ -57,8 +58,8 @@ function PipelineFlow() {
   );
 }
 
-/** Quiet, real-data strip: live registry counts (no fabricated stats). */
-function RegistryStrip() {
+/** Live registry metrics — computed from GET /v1/capabilities, nothing invented. */
+function RegistryMetrics() {
   const [data, setData] = useState<CapabilitiesResponse | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -69,15 +70,39 @@ function RegistryStrip() {
   }, []);
 
   if (!data) return null;
-  const kernel = data.registry_summary["ACCOUNTING_KERNEL"];
+  const byAuthority = new Map<string, { total: number; supported: number }>();
+  for (const cap of data.capabilities) {
+    const entry = byAuthority.get(cap.authority) ?? { total: 0, supported: 0 };
+    entry.total += 1;
+    if (cap.supported_status === "SUPPORTED") entry.supported += 1;
+    byAuthority.set(cap.authority, entry);
+  }
   const supported = data.capabilities.filter((c) => c.supported_status === "SUPPORTED").length;
+  const partial = data.capabilities.filter((c) => c.supported_status === "PARTIAL").length;
   const unsupported = data.capabilities.filter((c) => c.supported_status === "UNSUPPORTED").length;
+  const planned = data.count - supported - partial - unsupported;
+
   return (
-    <p className="mt-6 font-mono text-xs text-muted-foreground">
-      live registry — {data.count} capabilities · {supported} supported · {unsupported} documented
-      refusals
-      {kernel ? ` · kernel: ${kernel.SUPPORTED ?? 0} supported / ${kernel.UNSUPPORTED ?? 0} refused` : ""}
-    </p>
+    <div className="mt-10">
+      <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+        live registry · GET /v1/capabilities
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {[
+          ["capabilities", data.count],
+          ["supported", supported],
+          ["partial", partial],
+          ["documented refusals", unsupported],
+          ["planned", planned],
+          ["authorities", byAuthority.size],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-lg border border-border/70 bg-card px-3.5 py-3">
+            <p className="font-mono text-xl font-semibold tracking-tight">{value}</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -114,7 +139,7 @@ export default function LandingPage() {
 
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <Button asChild size="lg">
-                <Link href="/console">Process financial input</Link>
+                <Link href="/validate">Validate input</Link>
               </Button>
               <Button asChild size="lg" variant="outline">
                 <Link href="/capabilities">Explore capabilities</Link>
@@ -127,7 +152,12 @@ export default function LandingPage() {
               </Link>
             </div>
 
-            <div className="mt-10 grid gap-3 sm:grid-cols-3">
+            <RegistryMetrics />
+          </section>
+
+          {/* ---------- Status words ---------- */}
+          <section className="pb-14">
+            <div className="grid gap-3 sm:grid-cols-3">
               {STATUS_WORDS.map((s) => (
                 <div key={s.word} className={`rounded-xl border px-4 py-3.5 ${s.tone}`}>
                   <p className="font-mono text-sm font-semibold tracking-tight">{s.word}</p>
@@ -135,8 +165,6 @@ export default function LandingPage() {
                 </div>
               ))}
             </div>
-
-            <RegistryStrip />
           </section>
 
           {/* ---------- Pipeline ---------- */}
@@ -151,44 +179,88 @@ export default function LandingPage() {
             <PipelineFlow />
           </section>
 
-          {/* ---------- Routes ---------- */}
+          {/* ---------- Authorities ---------- */}
+          <section className="pb-14">
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold tracking-tight">Three deterministic authorities</h2>
+              <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">
+                Every journal entry and formula comes from a registry-registered authority. The
+                counts below are the live registry, not marketing.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {[
+                {
+                  title: "Accounting Kernel",
+                  body: "The deterministic journal-entry engine for FYJC book-keeping transactions — executes only what validated semantics and grounding support.",
+                },
+                {
+                  title: "Formula Authority",
+                  body: "Deterministic financial ratios and formulas — each a registered capability with an implementation reference and a proving test.",
+                },
+                {
+                  title: "Finance Knowledge",
+                  body: "Versioned finance-knowledge records with explicit sources — terminology served from records, not generated.",
+                },
+              ].map((a) => (
+                <Card key={a.title} className="border-border/70 transition-colors hover:border-accent/30">
+                  <CardContent className="pt-5">
+                    <h3 className="text-sm font-semibold">{a.title}</h3>
+                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{a.body}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </section>
+
+          {/* ---------- Workflows + trust ---------- */}
           <section className="pb-16">
             <div className="grid gap-3 md:grid-cols-3">
               {[
                 {
-                  href: "/console",
-                  title: "Validation console",
-                  body: "Submit a narration and see the interpretation, the validation journey, the evidence, and the decision — with the reason.",
+                  href: "/validate",
+                  title: "Validation workspace",
+                  body: "Text and document ingestion (PDF/image), grouped interpretation, validation journey, evidence, and the reason behind the decision.",
+                  badge: "LIVE",
                 },
                 {
-                  href: "/capabilities",
-                  title: "Capability explorer",
-                  body: "The live registry: what is supported, what is partial, and what is refused — with the refusal evidence.",
+                  href: "/validate",
+                  title: "Bulk validation",
+                  body: "CSV / JSON batches with a review queue — designed, awaiting a backend batch endpoint.",
+                  badge: "COMING SOON",
                 },
                 {
                   href: "/developer",
                   title: "Developer API",
                   body: "The versioned /v1 contract: request/response shapes, the six-state public status, and structured errors.",
+                  badge: "LIVE",
                 },
               ].map((card) => (
-                <Card
-                  key={card.href}
-                  className="border-border/70 transition-colors hover:border-accent/30"
-                >
+                <Card key={card.title} className="border-border/70 transition-colors hover:border-accent/30">
                   <CardContent className="pt-5">
-                    <h3 className="text-sm font-semibold">{card.title}</h3>
-                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                      {card.body}
-                    </p>
-                    <Link
-                      href={card.href}
-                      className="mt-3 inline-block text-sm font-medium text-accent hover:underline"
-                    >
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold">{card.title}</h3>
+                      <span className="font-mono text-[10px] font-semibold tracking-wide text-muted-foreground">{card.badge}</span>
+                    </div>
+                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{card.body}</p>
+                    <Link href={card.href} className="mt-3 inline-block text-sm font-medium text-accent hover:underline">
                       Open →
                     </Link>
                   </CardContent>
                 </Card>
               ))}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card px-4 py-3.5">
+              <ShieldCheck className="size-4 shrink-0 text-status-verified" aria-hidden />
+              <p className="text-sm text-muted-foreground">
+                Platrixa is a validation assistant — not financial, tax, legal, or investment advice,
+                and{" "}
+                <Link href="/trust" className="text-accent hover:underline">
+                  VERIFIED is not a guarantee
+                </Link>
+                .
+              </p>
             </div>
           </section>
         </div>

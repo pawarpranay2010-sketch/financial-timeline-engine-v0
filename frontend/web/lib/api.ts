@@ -22,6 +22,7 @@
 import type {
   ApiErrorEnvelope,
   CapabilitiesResponse,
+  DeveloperDocumentProcessResponse,
   KernelProcessResponse,
 } from "./types";
 
@@ -81,6 +82,28 @@ export async function fetchCapabilities(signal?: AbortSignal): Promise<Capabilit
   const response = await fetch(`${API_BASE}/v1/capabilities`, { signal });
   if (!response.ok) await parseError(response);
   return (await response.json()) as CapabilitiesResponse;
+}
+
+/**
+ * Document processing (POST /v1/process/document) — text OR one PDF/image
+ * file, exactly as the endpoint accepts (multipart field `document`).
+ * The file is forwarded verbatim; this client never extracts or interprets
+ * document content — that is the backend document-understanding layer's job.
+ */
+export async function processDocument(
+  input: { text?: string; file?: File },
+  signal?: AbortSignal,
+): Promise<DeveloperDocumentProcessResponse> {
+  const form = new FormData();
+  if (input.file) form.append("document", input.file);
+  if (input.text) form.append("raw_input", input.text);
+  const response = await fetch(`${API_BASE}/v1/process/document`, {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  if (!response.ok) await parseError(response);
+  return (await response.json()) as DeveloperDocumentProcessResponse;
 }
 
 /** Liveness probe (GET /v1/health) — touches nothing server-side. */
