@@ -55,6 +55,42 @@ class DocumentInputError(ValueError):
         self.message = message
 
 
+def validate_document_input(
+    data: bytes,
+    source_name: str,
+    *,
+    content_type: Optional[str] = None,
+) -> None:
+    """Validate raw document bytes + name against the same rules the
+    multipart path enforces (extension allowlist, content-type allowlist,
+    size limit). Raises DocumentInputError with the SAME codes — used by
+    the async submission path (Phase 5E), which receives bytes rather
+    than an upload object. Adds no new validation semantics."""
+    filename = os.path.basename(source_name or "")
+    if not filename:
+        raise DocumentInputError("FILE_NAME_MISSING", "Document has no name.")
+    extension = os.path.splitext(filename)[1].lower()
+    if extension not in ALLOWED_EXTENSIONS:
+        raise DocumentInputError(
+            "FILE_TYPE_UNSUPPORTED",
+            f"Unsupported document type {extension or '(none)'}. "
+            f"Accepted: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+    ct = (content_type or "").lower()
+    if ct and not ct.startswith(ALLOWED_CONTENT_TYPES):
+        raise DocumentInputError(
+            "CONTENT_TYPE_UNSUPPORTED",
+            f"Unsupported content type {ct}.",
+        )
+    if not data:
+        raise DocumentInputError("FILE_EMPTY", "Uploaded document is empty.")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise DocumentInputError(
+            "FILE_TOO_LARGE",
+            f"Document exceeds the {MAX_DOCUMENT_BYTES // (1024 * 1024)} MiB limit.",
+        )
+
+
 def resolve_document_input(
     raw_input: Optional[str],
     upload: Any,

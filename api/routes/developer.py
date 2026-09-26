@@ -17,7 +17,8 @@ The hosted developer boundary for the deterministic Platrixa runtime:
         ↓
     PlatrixaResult                (public result projection)
         ↓
-    DeveloperProcessResponse      (stable versioned JSON)
+    DeveloperProcessResponse      (stable versioned JSON; Phase 5D adds the
+                                   canonical envelope fields additively)
         ↓
     HTTP response
 
@@ -76,7 +77,6 @@ import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -88,24 +88,23 @@ from api.routes.kernel import (
 from api.schemas import (
     DeveloperCapabilitiesResponse,
     DeveloperCapabilityEntry,
-    DeveloperDocumentProcessResponse,
     DeveloperHealthResponse,
-    DeveloperProcessResponse,
     DeveloperReadyResponse,
+    DeveloperResultEnvelope,
     KernelProcessRequest,
 )
+
+# Phase 5D: canonical result envelope builder — transport serialization
+# of engine truth only (no status authority, no financial semantics).
+from api.results import build_process_result
 
 # Phase 5A: deterministic six-state public-status mapping (transport-only;
 # no status literals in this module — see the E1 discipline below).
 from api.status import (
     LABEL_BY_PUBLIC_STATUS,
     RETRYABLE_BY_PUBLIC_STATUS,
-    engine_status_verbatim,
-    public_status_for_engine,
     public_status_for_error_code,
-    reason_code_for_engine,
 )
-from api.status import STATUS_FAILED as _FAILED_PUBLIC
 from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 
 # Phase 16 metered gate — HTTP-agnostic admission control. Imported at
@@ -473,38 +472,6 @@ def _log(
 # ---------------------------------------------------------------------------
 
 
-def _api_status_fields(
-        engine_status: str,
-        *,
-        issues: Optional[list] = None,
-        grounding_issues: Optional[list] = None,
-    ) -> Dict[str, Any]:
-        """Derive the six-state public fields from an engine state.
-
-        Pure mapping via ``api.status``; carries no status literals in
-        this module (the engine taxonomy stays owned by the Kernel) and
-        adds no financial semantics. ``reason_code`` is only emitted for
-        engine states that have a documented public reason (fail-closed
-        rejections); otherwise it stays None.
-        """
-        api_status = public_status_for_engine(engine_status)
-        fields: Dict[str, Any] = {
-            "api_status": api_status,
-            "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
-            "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
-            "reason_code": reason_code_for_engine(engine_status),
-            # The engine state is carried verbatim next to the public
-            # mapping so no information is lost by the relabeling.
-            "engine_status": engine_status_verbatim(engine_status),
-        }
-        if (
-            api_status == _FAILED_PUBLIC
-            and (issues or grounding_issues)
-        ):
-            fields["reason_code"] = "EVIDENCE_RECORDED"
-        return fields
-
-
 # ---------------------------------------------------------------------------
 # Phase 5B — capability discovery (read-only adapter over the registry)
 # ---------------------------------------------------------------------------
@@ -659,7 +626,7 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
 
 @router.post(
     "/v1/process",
-    response_model=DeveloperProcessResponse,
+    response_model=DeveloperResultEnvelope,
     dependencies=[Depends(_metered_api_key_guard)],
     responses={
         409: {
@@ -695,14 +662,14 @@ def process_v1(
             "durable idempotent replay semantics for this endpoint."
         ),
     ),
-) -> "DeveloperProcessResponse":
+) -> "DeveloperResultEnvelope":
     # Phase 5C: idempotency-aware admission + processing.
     return _process_v1_idempotent(payload, request, idempotency_key)
 
 
 def _process_v1_idempotent(
     payload: KernelProcessRequest, request: Request, idem_key_raw: Optional[str]
-) -> "DeveloperProcessResponse":
+) -> "DeveloperResultEnvelope":
     """
     Process one financial transaction through the public developer
     interface (which forwards to the Kernel exactly once).
@@ -905,23 +872,20 @@ def _process_v1_idempotent(
     status = result.status
     transport_status = _HTTP_STATUS_BY_KERNEL_STATUS.get(status, 500)
 
-    response = DeveloperProcessResponse(
-        api_version=API_VERSION,
+    # Phase 5D: canonical result envelope — a serialization of the engine
+    # result (all Phase 5A fields preserved verbatim, additive evidence /
+    # reason_codes / metadata fields added). Same values, one contract.
+    content = build_process_result(
         request_id=getattr(result, "request_id", None),
-        status=status,
-        status_label=getattr(result, "status_label", "") or status,
-        success=bool(getattr(result, "success", False)),
+        engine_status=status,
+        engine_status_label=getattr(result, "status_label", "") or status,
         next_action=getattr(result, "next_action", None),
         issues=list(getattr(result, "issues", None) or []),
         grounding_issues=list(getattr(result, "grounding_issues", None) or []),
         rule_evidence=list(getattr(result, "rule_evidence", None) or []),
         interpretation=_safe_candidate(getattr(result, "interpretation", None)),
         accounting=_safe_accounting(getattr(result, "accounting", None)),
-        **_api_status_fields(
-            status,
-            issues=list(getattr(result, "issues", None) or []),
-            grounding_issues=list(getattr(result, "grounding_issues", None) or []),
-        ),
+        duration_ms=duration_ms,
     )
 
     _log(
@@ -931,7 +895,6 @@ def _process_v1_idempotent(
         duration_ms=duration_ms,
         error=None,
     )
-    content = jsonable_encoder(response.model_dump())
 
     # Phase 5C: record the terminal envelope for future replays.
     if idem_key:
@@ -997,9 +960,9 @@ def _resolve_idempotency_tenant(request: Request) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/v1/process/document", response_model=DeveloperDocumentProcessResponse,
+@router.post("/v1/process/document", response_model=DeveloperResultEnvelope,
              dependencies=[Depends(_metered_api_key_guard)])
-async def process_document_v1(request: Request) -> "DeveloperDocumentProcessResponse":
+async def process_document_v1(request: Request) -> "DeveloperResultEnvelope":
     """Process a text, PDF, or image financial document.
 
     Transport rules (identical in spirit to ``/v1/process``):
@@ -1087,43 +1050,32 @@ async def process_document_v1(request: Request) -> "DeveloperDocumentProcessResp
     status = result.status
     transport_status = _HTTP_STATUS_BY_KERNEL_STATUS.get(status, 500)
 
-    document_dict = result.document.to_dict()
-    # Bound the response: full evidence is returned, but page text is not
-    # duplicated inside the per-page summary.
-    evidence = [
-        e.to_dict() for e in result.document.evidence
-    ][:500]
-
-    response = DeveloperDocumentProcessResponse(
-        api_version=API_VERSION,
+    # Phase 5D: canonical result envelope with document provenance — the
+    # deterministic document representation, its evidence refs (thin
+    # serialization, capped at 500), and the field→evidence lineage.
+    content = build_process_result(
         request_id=getattr(kernel_result, "request_id", None),
-        status=status,
-        status_label=getattr(kernel_result, "status_label", "") or status,
-        success=bool(getattr(kernel_result, "success", False)),
+        engine_status=status,
+        engine_status_label=getattr(kernel_result, "status_label", "") or status,
         next_action=getattr(kernel_result, "next_action", None),
         issues=list(getattr(kernel_result, "issues", None) or []),
         grounding_issues=list(getattr(kernel_result, "grounding_issues", None) or []),
         rule_evidence=list(getattr(kernel_result, "rule_evidence", None) or []),
         interpretation=_safe_candidate(getattr(kernel_result, "interpretation", None)),
         accounting=_safe_accounting(getattr(kernel_result, "accounting", None)),
-        document=document_dict,
-        evidence=evidence,
+        document=result.document.to_dict(),
+        evidence_refs=result.document.evidence,
+        lineage=result.lineage,
         timings_ms=result.timings_ms,
         notes=result.notes,
-        **_api_status_fields(
-            status,
-            issues=list(getattr(kernel_result, "issues", None) or []),
-            grounding_issues=list(
-                getattr(kernel_result, "grounding_issues", None) or []
-            ),
-        ),
+        duration_ms=int((time.perf_counter() - started) * 1000),
     )
 
     _log("/v1/process/document", request_id=rid, status=status,
          duration_ms=int((time.perf_counter() - started) * 1000), error=None)
     return JSONResponse(
         status_code=transport_status,
-        content=jsonable_encoder(response.model_dump()),
+        content=content,
     )
 
 

@@ -464,6 +464,278 @@ If the first attempt is still running, the retry returns the
 in-progress acknowledgement instead — poll with the same key; the final
 poll replays the terminal result.
 
+## Result contract (Phase 5D)
+
+Every processing result — synchronous or asynchronous — is one canonical,
+typed, machine-consumable envelope. The HTTP layer serializes engine
+truth; it never re-computes, upgrades, or softens a verdict.
+
+```
+existing pipeline → engine terminal state (authoritative)
+                        ↓ transport mapping (api/status.py, Phase 5A)
+                  canonical result envelope (Phase 5D)
+```
+
+### Status fields
+
+| Field | Meaning |
+|---|---|
+| `status` | The ENGINE terminal state, verbatim (e.g. `UNSUPPORTED_TRANSACTION`). Authoritative. |
+| `api_status` | The deterministic six-state public mapping (`PROCESSING` / `VERIFIED` / `REVIEW_REQUIRED` / `UNSUPPORTED` / `INVALID_INPUT` / `FAILED`). |
+| `engine_status` | The verbatim engine state again, explicit — relabeling never loses information. |
+| `success` | `true` only for VERIFIED. |
+| `retryable` | Advisory: true only for PROCESSING (outcome unknown; retry/poll later). |
+| `reason_code` / `reason_codes` | Stable machine-readable reasons (see below). |
+
+Status meanings (unchanged from Phase 5A):
+
+- **VERIFIED** — the request satisfied the implemented schema, grounding,
+  capability, and deterministic-authority requirements for that operation.
+  It does NOT mean legally/tax compliant, factually guaranteed, or advice.
+- **REVIEW_REQUIRED** — possibly understandable, but sufficient
+  evidence/capability conditions were not met; queue for human review.
+- **UNSUPPORTED** — outside the supported implementation boundary.
+- **INVALID_INPUT** — the request itself is invalid (400/413/415/422 error
+  envelopes; `error.api_status` carries the same vocabulary).
+- **FAILED** — deterministic rejection (reasons in `issues` /
+  `grounding_issues`) or an unexpected server-side failure.
+- **PROCESSING** — admitted but not authoritative yet (provider down, or
+  an async job/idempotent in-flight acknowledgement).
+
+### Reason codes (central vocabulary)
+
+| Code | When |
+|---|---|
+| `NO_SUPPORTED_CAPABILITY` | engine `UNSUPPORTED_TRANSACTION` |
+| `SAFETY_BOUNDARY` | engine `BLOCKED` |
+| `FORBIDDEN_STRUCTURE` | engine `FORBIDDEN_OUTPUT` |
+| `VALIDATION_REJECTED` | engine `VALIDATION_FAILED` |
+| `GROUNDING_REJECTED` | engine `GROUNDING_FAILED` |
+| `RESULT_PENDING` | engine `MODEL_UNAVAILABLE` (outcome unknown) |
+| `EVIDENCE_RECORDED` | FAILED with recorded `issues`/`grounding_issues` |
+| `INPUT_INVALID`, `IDEMPOTENCY_*`, `PROVIDER_UNAVAILABLE`, … | transport error envelopes (`error.code`) |
+
+Transport rejections keep the existing error envelope:
+`{"api_version":"v1","error":{"code":…,"api_status":…}}`.
+
+### Envelope example (VERIFIED transaction)
+
+```json
+{
+  "api_version": "v1",
+  "request_id": "req-123",
+  "status": "VERIFIED",
+  "status_label": "Verified",
+  "api_status": "VERIFIED",
+  "api_status_label": "Verified",
+  "success": true,
+  "retryable": false,
+  "engine_status": "VERIFIED",
+  "next_action": null,
+  "reason_code": null,
+  "reason_codes": [],
+  "interpretation": {
+    "transaction_type": "PURCHASE",
+    "amounts": [{"value": "15000", "source": "explicit", "value_origin": "EXTRACTED"}]
+  },
+  "accounting": {"debit_lines": [{"account": "Furniture", "amount": 15000}]},
+  "accounting_result": {"debit_lines": [{"account": "Furniture", "amount": 15000}]},
+  "issues": [], "grounding_issues": [], "rule_evidence": [],
+  "evidence": [], "document": null, "lineage": null,
+  "metadata": {"engine_status": "VERIFIED", "processing_time_ms": 42, "timings_ms": null, "notes": []}
+}
+```
+
+### Evidence model (never fabricated)
+
+`evidence` is populated ONLY for document inputs — a thin serialization of
+the document layer's deterministic evidence refs. Fields the engine did
+not provide stay `null`; evidence is never manufactured for fields that
+have none:
+
+```json
+{
+  "evidence_id": "doc_invoice_p1_e0003",
+  "document_id": "doc_invoice_ab12cd34",
+  "page": 1,
+  "text": "Total: Rs. 15,000",
+  "bbox": [12.0, 300.5, 200.0, 318.25],
+  "extraction_confidence": 0.98,
+  "source_type": "pypdf",
+  "engine": null,
+  "engine_version": null
+}
+```
+
+- `bbox` / `extraction_confidence` are `null` unless the extraction engine
+  provided them (plain-text documents never have them).
+- `lineage` maps semantic fields to the evidence ids that support them,
+  e.g. `{"amounts": ["doc_invoice_p1_e0003"]}`.
+- `document` carries deterministic page accounting (page statuses,
+  `pages_needing_ocr`, engine identity) — diagnostic only, never a claim.
+
+### Derived vs extracted
+
+- `interpretation` is the MODEL's schema-validated suggestion. Its
+  `amounts` entries carry `"value_origin": "EXTRACTED"` — model-extracted,
+  not deterministic.
+- `accounting` / `accounting_result` (same value, both names supported) is
+  the DETERMINISTIC authority output. It is `null` whenever no authority
+  ran (REVIEW_REQUIRED, UNSUPPORTED, INVALID_INPUT, FAILED).
+- Never treat an extracted amount as deterministic because it appears in
+  the result — act on `api_status`/`status`.
+
+### Null vs unavailable
+
+- `accounting_result: null` — no authority produced a result (real "none").
+- `evidence: []` — no document evidence exists for this input.
+- `metadata.processing_time_ms: null` — not measured.
+- `metadata.timings_ms` — document-layer timings when a document ran.
+
+### Replay & immutability
+
+Phase 5C replays return the stored canonical envelope byte-for-byte:
+original `request_id`, original HTTP status, `Idempotent-Replayed: true`.
+The envelope's deterministic serialization (same engine state → same JSON)
+is what makes this stable.
+
+### Developer handling recommendations
+
+1. Branch on `api_status` only (`status` for engine detail).
+2. VERIFIED → you may post the deterministic `accounting_result`.
+3. REVIEW_REQUIRED → queue for human review; never auto-post.
+4. UNSUPPORTED → not in the supported boundary; do not retry.
+5. FAILED → inspect `reason_codes` + `issues`/`grounding_issues`.
+6. PROCESSING (retryable) → back off, then retry or poll.
+7. For documents, audit `evidence`/`lineage` before trusting amounts.
+
+## Async documents (Phase 5E)
+
+Asynchronous document processing reuses the ENTIRE existing document
+pipeline — the async layer adds scheduling, not semantics, and converges
+on the same 5D result contract.
+
+### POST /v1/documents — submit (202)
+
+```bash
+curl -s -X POST "$HOST/v1/documents" \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $KEY" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"document_b64": "<base64 pdf/image>", "source_name": "invoice.pdf"}'
+```
+
+- JSON body: `document_b64` (base64 of a PDF/image/txt ≤10 MiB) or
+  `raw_input` text — never both.
+- Response `202`:
+
+```json
+{
+  "api_version": "v1",
+  "request_id": "req-9",
+  "job_id": "job_…",
+  "result_id": "res_…",
+  "status": "PROCESSING",
+  "status_label": "Processing",
+  "status_url": "/v1/jobs/job_…",
+  "result_url": "/v1/results/res_…",
+  "created_at": "2026-09-26T12:00:00+00:00"
+}
+```
+
+**202 means admitted — never that the result will be VERIFIED.** One
+quota unit is reserved at submission. Rejections: `400 ASYNC_NOT_CONFIGURED`
+(zero-config deployment — use the synchronous document endpoint), `413`,
+`415`, `429`, `503` (fail closed).
+
+### GET /v1/jobs/{job_id} — poll
+
+```json
+{
+  "api_version": "v1",
+  "job_id": "job_…", "request_id": "req-9",
+  "status": "REVIEW_REQUIRED",
+  "status_label": "Review required",
+  "retryable": false,
+  "reason_codes": [],
+  "result_url": "/v1/results/res_…",
+  "created_at": "…", "updated_at": "…"
+}
+```
+
+`status` is `PROCESSING` while queued/running, then the REAL engine
+outcome (`VERIFIED` / `REVIEW_REQUIRED` / `UNSUPPORTED_TRANSACTION`) or
+`FAILED`. **Completion is not VERIFIED** — completion only means the
+pipeline finished. For FAILED jobs `retryable` is `true` only for
+infrastructure conditions (provider down, worker restart), with the
+deterministic `code` in `reason_codes` (`PROVIDER_UNAVAILABLE`,
+`INPUT_INVALID`, `JOB_FAILED`).
+
+### GET /v1/results/{result_id} — fetch the 5D envelope
+
+Returns the same canonical envelope as synchronous `POST /v1/process`
+(status block, `reason_codes`, `evidence`, `accounting_result`,
+`metadata`) with the document's `evidence`/`lineage`/`document`
+provenance populated. Unknown id → `404 RESULT_NOT_FOUND`; not yet
+complete → `404 RESULT_NOT_READY` (keep polling the job).
+
+### Durability & restarts
+
+Jobs live in the SAME PostgreSQL store as metering and idempotency — a
+process restart never erases a submitted job. QUEUED jobs are picked up
+by the worker; a job whose worker died mid-flight is recovered after a
+short lease expires and reprocessed. There is no in-memory job state.
+
+### Idempotency on document creation
+
+`Idempotency-Key` identifies the CREATION request (same Phase 5C key
+contract and store; the key is not the `job_id`):
+
+- same key + same request → `202` with the ORIGINAL `job_id`/`result_id`
+  and `Idempotent-Replayed: true` — no duplicate job, no extra quota.
+- same key + different request → deterministic `409`
+  `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST`.
+- concurrent duplicates → exactly one job.
+
+No exactly-once execution is promised (worker crash may reprocess a job;
+the recovered run replaces the result deterministically).
+
+### Webhooks (best-effort foundation — honest limits)
+
+`POST /v1/webhook-endpoints` (201) registers a subscribed endpoint:
+
+```json
+{
+  "api_version": "v1", "webhook_id": "wh_…",
+  "url": "https://example.com/hooks/platrixa",
+  "events": ["document.completed", "document.failed"],
+  "secret": "whsec_…",
+  "created_at": "…",
+  "delivery": {"semantics": "best-effort single attempt (not at-least-once)", …}
+}
+```
+
+- Events (closed vocabulary): `document.processing`, `document.completed`,
+  `document.review_required`, `document.unsupported`, `document.failed`.
+- The signing `secret` is returned EXACTLY ONCE; only a server-keyed seal
+  is stored (never plaintext, never shown again). Requires the operator
+  to configure `PLATRIXA_WEBHOOK_SIGNING_KEY`.
+- Payloads are signed `Platrixa-Signature: t=<unix>,v1=<hex>` where the
+  HMAC-SHA256 covers `"{t}.{body}"`; verify with a ±300 s timestamp
+  window (replay protection). Event ids are deterministic per
+  `(job_id, event)` — deduplicate on `id`.
+- **Delivery is best-effort, single-attempt in this deployment — NOT an
+  at-least-once guarantee.** Polling `GET /v1/jobs/{job_id}` is the
+  reliable path; use webhooks only as a convenience signal.
+
+### File security (unchanged)
+
+The existing MIME/extension allowlist, 10 MiB limit, extraction rules,
+OCR boundary, and fail-closed behavior are enforced for async submissions
+exactly as for synchronous uploads. No arbitrary URL fetching, no
+user-controlled filesystem paths, no public file exposure, no raw
+financial document contents in logs.
+
 ## Known limits (launch posture)
 
 - Per-developer authentication and monthly quota metering are implemented
@@ -471,9 +743,15 @@ poll replays the terminal result.
   key issuance are not — tenants are provisioned by the operator.
 - No application-level rate limiting; platform-level controls only.
 - `X-Request-Id` is a best-effort correlation id, not an idempotency key.
-- Idempotent replay (Phase 5C) covers `POST /v1/process` with a valid
-  `Idempotency-Key` on metering-enabled deployments, with a 72-hour
-  replayable window; see the Phase 5C section above.
+- Idempotent replay (Phase 5C) covers `POST /v1/process` and async
+  document creation (`POST /v1/documents`) with a valid `Idempotency-Key`
+  on metering-enabled deployments, with a 72-hour replayable window.
+- Async documents and webhooks (Phase 5E) require the durable metering
+  store; async job processing uses an in-process worker — a multi-process
+  deployment shares durable state, but webhook delivery remains
+  best-effort single-attempt (see the Phase 5E section above).
+- Webhook signing requires `PLATRIXA_WEBHOOK_SIGNING_KEY` server-side;
+  without it registration is refused honestly (400 ASYNC_NOT_CONFIGURED).
 - The API is a transport boundary: it cannot be used to alter rule
   packs, hooks, provider configuration, or the runtime's authority model.
 

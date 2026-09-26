@@ -129,6 +129,16 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     "IDEMPOTENCY_NOT_CONFIGURED": STATUS_INVALID_INPUT,
     # transient store failure while metering IS configured → fail closed
     "IDEMPOTENCY_UNAVAILABLE": STATUS_PROCESSING,
+    # Phase 5E async documents / jobs (the job store is the metering store):
+    #   async features on a zero-config deployment are a client-side config
+    #   issue (no point retrying); a transient store failure is retryable;
+    #   a referenced-but-absent job/result is a client error; a result
+    #   polled before completion is retryable-by-design.
+    "ASYNC_NOT_CONFIGURED": STATUS_INVALID_INPUT,
+    "ASYNC_UNAVAILABLE": STATUS_PROCESSING,
+    "JOB_NOT_FOUND": STATUS_INVALID_INPUT,
+    "RESULT_NOT_FOUND": STATUS_INVALID_INPUT,
+    "RESULT_NOT_READY": STATUS_PROCESSING,
 }
 
 # Human-readable labels for the six public states.

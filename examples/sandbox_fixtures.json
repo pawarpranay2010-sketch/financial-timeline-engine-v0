@@ -1,0 +1,76 @@
+{
+  "_readme": [
+    "EXAMPLE/TEST DATA ONLY — deterministic sandbox fixtures for the",
+    "Platrixa developer API (Phase 5F). Not production statistics, not",
+    "real documents, not real customers. Each case is labeled with the",
+    "api_status it is INTENDED to elicit; the runtime's verdict for a",
+    "live submission is always authoritative and may legitimately differ."
+  ],
+  "fixtures": [
+    {
+      "case_id": "supported_purchase_cash",
+      "label": "SUPPORTED (expected VERIFIED)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": "Purchased furniture for cash Rs. 15,000"
+      },
+      "expected_api_status": "VERIFIED"
+    },
+    {
+      "case_id": "supported_payment_cheque",
+      "label": "SUPPORTED (expected VERIFIED)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": "Paid office rent Rs. 25,000 by cheque to Sharma Estates"
+      },
+      "expected_api_status": "VERIFIED"
+    },
+    {
+      "case_id": "review_required_ambiguous_party",
+      "label": "REVIEW-REQUIRED (expected REVIEW_REQUIRED)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": "Paid some money to someone for something"
+      },
+      "expected_api_status": "REVIEW_REQUIRED"
+    },
+    {
+      "case_id": "unsupported_non_financial",
+      "label": "UNSUPPORTED (expected UNSUPPORTED)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": "Blog about blockchain synergies for Q3"
+      },
+      "expected_api_status": "UNSUPPORTED"
+    },
+    {
+      "case_id": "conflicting_evidence",
+      "label": "CONFLICTING EVIDENCE (expected REVIEW_REQUIRED or FAILED — engine decides)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": "Paid Rs. 15,000 cash and also paid Rs. 15,000 by bank transfer for the same furniture"
+      },
+      "expected_api_status": "REVIEW_REQUIRED_OR_FAILED"
+    },
+    {
+      "case_id": "invalid_input_empty",
+      "label": "INVALID INPUT (expected INPUT_INVALID)",
+      "endpoint": "/v1/process",
+      "request": {
+        "raw_input": ""
+      },
+      "expected_api_status": "INVALID_INPUT",
+      "expected_error_code": "REQUEST_MALFORMED"
+    },
+    {
+      "case_id": "sandbox_document_text",
+      "label": "SANDBOX DOCUMENT (async; any terminal status is instructive)",
+      "endpoint": "/v1/documents",
+      "request": {
+        "document_b64_base64_of": "INVOICE\nVendor: Sharma Traders\nTotal: Rs. 4,500\nDate: 2026-09-01\n",
+        "source_name": "invoice.txt"
+      },
+      "expected_api_status": "ANY_REAL_ENGINE_STATE"
+    }
+  ]
+}

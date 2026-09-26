@@ -272,6 +272,115 @@ class DeveloperCapabilitiesResponse(BaseModel):
     capabilities: List[DeveloperCapabilityEntry] = Field(default_factory=list)
 
 
+class DeveloperResultEnvelope(BaseModel):
+    """Phase 5D — the canonical developer result envelope.
+
+    One typed result contract shared by synchronous ``/v1/process`` and
+    every asynchronous result (``GET /v1/results/{result_id}``). It is a
+    projection of existing engine truth — never a re-computation:
+
+    * ``status`` is the ENGINE terminal state verbatim (authoritative);
+      ``api_status`` is its deterministic six-state public mapping, and
+      ``engine_status`` carries the verbatim state again explicitly.
+    * ``reason_codes`` reuse the central deterministic vocabulary.
+    * ``evidence`` is a thin serialization of the document layer's
+      deterministic evidence refs — bbox/confidence are null when the
+      engine did not provide them and are NEVER fabricated.
+    * ``accounting`` / ``accounting_result`` are the deterministic
+      authority output (null whenever no authority ran — e.g.
+      REVIEW_REQUIRED / UNSUPPORTED); both names carry the same value.
+    * ``interpretation`` is the model's schema-validated suggestion;
+      its ``amounts`` entries carry ``value_origin: EXTRACTED`` so a
+      model-extracted amount is never blurred with a deterministic one.
+
+    ``api_status`` semantics — VERIFIED (schema/grounding/capability/
+    deterministic-authority requirements satisfied; never a claim of
+    legal/tax compliance or advice), REVIEW_REQUIRED (insufficient
+    evidence/capability; queue for human review), UNSUPPORTED (outside
+    the supported boundary), INVALID_INPUT, FAILED, PROCESSING.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    # --- status block (engine verbatim + six-state mapping) ---
+    status: str
+    status_label: str = ""
+    api_status: str = ""
+    api_status_label: str = ""
+    success: bool = False
+    retryable: bool = False
+    engine_status: Optional[str] = None
+    next_action: Optional[str] = None
+    reason_code: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+    # --- substance (verbatim engine truth) ---
+    interpretation: Optional[Dict[str, Any]] = None
+    accounting: Optional[Dict[str, Any]] = None
+    accounting_result: Optional[Dict[str, Any]] = None
+    issues: List[str] = Field(default_factory=list)
+    grounding_issues: List[str] = Field(default_factory=list)
+    rule_evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    # --- evidence / provenance (never fabricated) ---
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    document: Optional[Dict[str, Any]] = None
+    lineage: Optional[Dict[str, Any]] = None
+    # --- metadata ---
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DeveloperJobAcceptedResponse(BaseModel):
+    """Phase 5E — 202 Accepted for an asynchronously processed document.
+
+    The idempotency key identifies the creation request (replays return
+    the same job reference); the ``job_id`` is the handle for polling.
+    Acceptance means admitted — never that the result will be VERIFIED.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    job_id: str
+    result_id: str
+    status: str = "PROCESSING"
+    status_label: str = "Processing"
+    status_url: str
+    result_url: str
+    created_at: str
+
+
+class DeveloperJobStatusResponse(BaseModel):
+    """Phase 5E — job status. Completion is not VERIFIED: a completed job
+    carries whichever real engine state the document produced (including
+    REVIEW_REQUIRED / UNSUPPORTED / FAILED)."""
+
+    api_version: str = "v1"
+    job_id: str
+    request_id: Optional[str] = None
+    status: str
+    status_label: str = ""
+    retryable: bool = False
+    reason_codes: List[str] = Field(default_factory=list)
+    result_url: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class DeveloperWebhookEndpointResponse(BaseModel):
+    """Phase 5E — webhook endpoint registration.
+
+    ``secret`` is returned EXACTLY ONCE at creation (the caller-supplied
+    signing secret is accepted, or one is generated). It is never stored
+    in plaintext (SHA-256 hash only) and never shown again.
+    """
+
+    api_version: str = "v1"
+    webhook_id: str
+    url: str
+    events: List[str] = Field(default_factory=list)
+    secret: Optional[str] = None
+    created_at: str
+    delivery: Dict[str, Any] = Field(default_factory=dict)
+
+
 class DeveloperHealthResponse(BaseModel):
     """Liveness — the API process is alive. Touches nothing."""
 

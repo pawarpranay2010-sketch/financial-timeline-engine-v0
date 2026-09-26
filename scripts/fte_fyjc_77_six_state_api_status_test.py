@@ -392,7 +392,18 @@ def section_h(client: TestClient) -> None:
             "interpretation", "accounting",
         ]
         check("H1 all pre-existing fields still present", all(k in body for k in preexisting), str([k for k in preexisting if k not in body]))
-        check("H2 new fields are additive only", set(body) - set(preexisting) == {"api_status", "api_status_label", "retryable", "reason_code", "engine_status"}, str(set(body) - set(preexisting)))
+        # Phase 5A pinned the exact additive set; Phase 5D (result contract)
+        # deliberately extends the canonical envelope with six documented
+        # fields (reason_codes, accounting_result, evidence, document,
+        # lineage, metadata) on the SAME response — all Phase 5A fields
+        # keep their names and semantics (H1). The pin now covers 5A + 5D.
+        check("H2 new fields are additive only (Phase 5A + Phase 5D envelope)",
+              set(body) - set(preexisting) == {
+                  "api_status", "api_status_label", "retryable", "reason_code", "engine_status",
+                  # Phase 5D canonical result envelope (additive):
+                  "reason_codes", "accounting_result", "evidence", "document", "lineage", "metadata",
+              },
+              str(set(body) - set(preexisting)))
     finally:
         developer.reset_client()
 

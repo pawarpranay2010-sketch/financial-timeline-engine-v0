@@ -71,13 +71,21 @@ def create_app() -> FastAPI:
     # Phase 13: app-level body-size cap for the versioned developer API.
     # Enforced BEFORE request-body parsing so oversized payloads are
     # rejected with 413 instead of being read and schema-validated.
+    # Phase 5E: /v1/documents carries base64 document payloads for the
+    # durable async store, so it gets its own (larger, still bounded) cap.
     _MAX_DEV_BODY_BYTES = 64 * 1024
+    _MAX_ASYNC_DOCUMENT_BODY_BYTES = 16 * 1024 * 1024 + 64 * 1024
 
     @app.middleware("http")
     async def _developer_body_size_guard(request, call_next):
         if request.url.path.startswith("/v1/"):
+            max_body = (
+                _MAX_ASYNC_DOCUMENT_BODY_BYTES
+                if request.url.path == "/v1/documents"
+                else _MAX_DEV_BODY_BYTES
+            )
             content_length = request.headers.get("content-length", "")
-            if content_length.isdigit() and int(content_length) > _MAX_DEV_BODY_BYTES:
+            if content_length.isdigit() and int(content_length) > max_body:
                 # Phase 5A: the 413 envelope carries the six-state public
                 # API status trio, mapped from the error code (same mapping
                 # as every other /v1 error envelope).
@@ -109,6 +117,12 @@ def create_app() -> FastAPI:
     # public developer interface (platrixa), mounted at top-level /v1 so
     # the public contract is versioned independently of /api/v1.
     app.include_router(developer.router)
+    # Phase 5E: async document jobs, results, and webhook endpoints —
+    # same admission boundary, same 5D result contract, durable job store
+    # over the metering PostgreSQL (activated only when configured).
+    from api.routes import async_api
+
+    app.include_router(async_api.router)
     # Phase 15: deterministic malformed-request normalization for /v1 only
     # (400 instead of the framework-default 422 for parsing/validation
     # failures). Browser-facing /api/v1 keeps its documented behavior.
