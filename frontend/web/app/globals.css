@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+/*
+  Platrixa visual identity — serious developer infrastructure.
+  Dark-first with automatic light support. The component libraries
+  (Vengeance UI, Skiper UI) supply building blocks; the identity
+  below is Platrixa's own.
+*/
+
+:root {
+  --background: #f7f8fa;
+  --foreground: #0e1116;
+  --card: #ffffff;
+  --card-foreground: #0e1116;
+  --muted: #eef1f5;
+  --muted-foreground: #5b6472;
+  --border: #e2e6ec;
+  --accent: #0e7490;
+  --accent-foreground: #ffffff;
+  --accent-soft: rgba(14, 116, 144, 0.08);
+  --status-verified: #047857;
+  --status-review: #b45309;
+  --status-unsupported: #be123c;
+  --status-processing: #1d4ed8;
+  --status-failed: #b91c1c;
+  --ring: rgba(14, 116, 144, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0d12;
+    --foreground: #e7ecf3;
+    --card: #10151d;
+    --card-foreground: #e7ecf3;
+    --muted: #131a23;
+    --muted-foreground: #8b94a3;
+    --border: #1e2630;
+    --accent: #22d3ee;
+    --accent-foreground: #06202a;
+    --accent-soft: rgba(34, 211, 238, 0.08);
+    --status-verified: #34d399;
+    --status-review: #fbbf24;
+    --status-unsupported: #fb7185;
+    --status-processing: #60a5fa;
+    --status-failed: #f87171;
+    --ring: rgba(34, 211, 238, 0.35);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-status-verified: var(--status-verified);
+  --color-status-review: var(--status-review);
+  --color-status-unsupported: var(--status-unsupported);
+  --color-status-processing: var(--status-processing);
+  --color-status-failed: var(--status-failed);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Subtle engineering-grid backdrop (the identity motif, kept quiet) */
+.platrixa-grid {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 30%, transparent 75%);
+  opacity: 0.35;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
