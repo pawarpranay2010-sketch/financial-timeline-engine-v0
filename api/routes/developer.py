@@ -86,6 +86,8 @@ from api.routes.kernel import (
     _safe_candidate,
 )
 from api.schemas import (
+    DeveloperCapabilitiesResponse,
+    DeveloperCapabilityEntry,
     DeveloperDocumentProcessResponse,
     DeveloperHealthResponse,
     DeveloperProcessResponse,
@@ -104,6 +106,7 @@ from api.status import (
     reason_code_for_engine,
 )
 from api.status import STATUS_FAILED as _FAILED_PUBLIC
+from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 
 # Phase 16 metered gate — HTTP-agnostic admission control. Imported at
 # module scope is SAFE here (unlike the public interface): the auth
@@ -478,6 +481,95 @@ def _api_status_fields(
         ):
             fields["reason_code"] = "EVIDENCE_RECORDED"
         return fields
+
+
+# ---------------------------------------------------------------------------
+# Phase 5B — capability discovery (read-only adapter over the registry)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/v1/capabilities",
+    response_model=DeveloperCapabilitiesResponse,
+    dependencies=[Depends(_metered_api_key_guard)],
+    summary="Discover what the runtime can currently prove and execute",
+    description=(
+        "Read-only, deterministic capability discovery derived from the live "
+        "capability registry (backend/maths/capability_registry.py), which is "
+        "the single source of truth. Returns every registered capability with "
+        "its registry field names and values verbatim, ordered by capability_id. "
+        "supported_status preserves the registry's four-state vocabulary "
+        "(SUPPORTED / PARTIAL / UNSUPPORTED / PLANNED); UNSUPPORTED and PLANNED "
+        "are capability metadata, not API failures. This endpoint performs no "
+        "model inference, no grounding, and no authority execution, and it "
+        "maintains no capability list of its own."
+    ),
+)
+def capabilities_v1(request: Request) -> "DeveloperCapabilitiesResponse":
+    """GET /v1/capabilities — read-only registry adapter.
+
+    Architecture (hard rule): the existing capability registry is the
+    single source of truth. This handler is a thin serializer over its
+    own ``to_metadata()`` projection — no second capability list is kept
+    here, nothing is renamed, reinterpreted, upgraded, or collapsed.
+    UNSUPPORTED and PLANNED entries are returned as the metadata they
+    are, never converted to errors.
+
+    Determinism: the registry is a pure module (no I/O, no network, no
+    DB) and the output is ordered by ``capability_id``; the same registry
+    state always yields the same response.
+
+    JSON safety: serialization goes through the registry's own explicit
+    ``to_metadata()`` boundary (str / list-of-str / int only) — no
+    ``__dict__`` dumps, no internal objects, no secrets, no environment.
+
+    Import hygiene: the registry import is deliberately LAZY (inside the
+    handler). The registry module transitively imports the accounting
+    orchestrator, which must never load at API import time — the boundary
+    suite pins 'no heavy modules at API import'. A registry import
+    failure fails closed through the existing structured error mechanism
+    (no traceback ever reaches the client).
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    started = time.monotonic()
+    try:
+        from backend.maths.capability_registry import CAPABILITIES, summary
+
+        capabilities = [
+            DeveloperCapabilityEntry(**cap.to_metadata())
+            for cap in sorted(CAPABILITIES.values(), key=lambda c: c.capability_id)
+        ]
+        summary_out = summary()
+    except Exception as exc:  # fail closed, structured envelope, no internals
+        _log(
+            "/v1/capabilities",
+            request_id=rid,
+            status=None,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error="registry read failed",
+        )
+        return _error_response(
+            503,
+            "PROVIDER_UNAVAILABLE",
+            "capability registry is temporarily unavailable",
+            request_id=rid,
+        )  # noqa: B901 — exc deliberately unused; never serialized
+    _log(
+        "/v1/capabilities",
+        request_id=rid,
+        status="OK",
+        duration_ms=int((time.monotonic() - started) * 1000),
+        error=None,
+    )
+    return DeveloperCapabilitiesResponse(
+        api_status=STATUS_VERIFIED_PUBLIC,
+        api_status_label=LABEL_BY_PUBLIC_STATUS.get(STATUS_VERIFIED_PUBLIC, ""),
+        retryable=RETRYABLE_BY_PUBLIC_STATUS.get(STATUS_VERIFIED_PUBLIC, False),
+        request_id=rid,
+        registry_summary=summary_out,
+        count=len(capabilities),
+        capabilities=capabilities,
+    )
 
 
 @router.get("/v1/health", response_model=DeveloperHealthResponse)

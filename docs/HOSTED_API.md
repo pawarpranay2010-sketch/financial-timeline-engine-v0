@@ -180,6 +180,77 @@ Contract guarantees:
 - The mapping adds no accounting, grounding, or schema semantics: the
   engine terminal state remains the single status authority.
 
+## Capability discovery (Phase 5B)
+
+`GET /v1/capabilities` — read-only, deterministic discovery of what the
+runtime can currently prove and execute. The response is derived at
+request time from the live capability registry
+(`backend/maths/capability_registry.py`), which is the single source of
+truth; the API maintains no capability list of its own.
+
+Authentication is the same `X-Platrixa-API-Key` gate as every other `/v1`
+endpoint (fail-closed 401; zero-config open when no key is configured).
+
+Response (abridged):
+
+```json
+{
+  "api_version": "v1",
+  "request_id": "cap-1",
+  "api_status": "VERIFIED",
+  "api_status_label": "Verified",
+  "retryable": false,
+  "engine_status": null,
+  "registry_summary": {
+    "ACCOUNTING_KERNEL": {"SUPPORTED": 15, "PARTIAL": 1, "UNSUPPORTED": 4, "PLANNED": 1},
+    "FORMULA_AUTHORITY": {"SUPPORTED": 30, "PARTIAL": 0, "UNSUPPORTED": 0, "PLANNED": 0},
+    "FINANCE_KNOWLEDGE": {"SUPPORTED": 2, "PARTIAL": 0, "UNSUPPORTED": 0, "PLANNED": 0}
+  },
+  "count": 53,
+  "capabilities": [
+    {
+      "capability_id": "KERNEL.INVOICE_PURCHASE",
+      "authority": "ACCOUNTING_KERNEL",
+      "canonical_name": "Purchase invoice from labelled facts",
+      "supported_status": "SUPPORTED",
+      "description": "…",
+      "required_inputs": ["net", "total", "party side"],
+      "deterministic_op": "…",
+      "implementation_ref": "…",
+      "test_ref": "…",
+      "source_ref": "…",
+      "jurisdiction": "IN",
+      "framework": "FYJC Book-Keeping",
+      "version": "1.0",
+      "limitations": ["…"]
+    }
+  ]
+}
+```
+
+Contract:
+
+- Fields are the registry's own `Capability.to_metadata()` projection,
+  verbatim — names, types, and empty values included. No field is
+  invented, renamed, or filled in when the registry leaves it empty.
+- `supported_status` preserves the registry's four-state vocabulary.
+  **`UNSUPPORTED` and `PLANNED` are legitimate capability metadata, not
+  API failures** — they are returned in the same 200 response:
+  - `SUPPORTED` — implemented and proven by a deterministic gate.
+  - `PARTIAL` — implemented with a documented boundary.
+  - `UNSUPPORTED` — provably refused, with the refusal evidence in
+    `limitations`.
+  - `PLANNED` — declared in the registry, not implemented; routing to
+    it fails closed. Never executable.
+- Ordering is deterministic: sorted by `capability_id`; the same
+  registry state always yields the same response.
+- Discovery is a read operation: no model inference, no grounding, no
+  authority execution, no financial processing. `api_status` is the
+  six-state public status of the read itself (`VERIFIED` when the
+  registry read succeeded); `engine_status` is always `null` here.
+- Registry unavailability fails closed through the standard error
+  envelope (`503 PROVIDER_UNAVAILABLE`, `api_status: PROCESSING`).
+
 ## Error responses
 
 Machine-readable envelope; no stack traces, filesystem paths, or secrets:

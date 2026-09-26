@@ -216,6 +216,62 @@ class DeveloperDocumentProcessResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class DeveloperCapabilityEntry(BaseModel):
+    """One capability record, EXACTLY as the registry serializes it.
+
+    Phase 5B: this is a verbatim projection of
+    ``backend.maths.capability_registry.Capability.to_metadata()`` —
+    the registry's own field names, types, and semantics. The API layer
+    renames nothing, reinterprets nothing, and invents nothing: a field
+    the registry leaves empty stays empty here.
+    """
+
+    capability_id: str
+    authority: str
+    canonical_name: str
+    supported_status: str
+    description: str = ""
+    required_inputs: List[str] = Field(default_factory=list)
+    deterministic_op: str = ""
+    implementation_ref: str = ""
+    test_ref: str = ""
+    source_ref: str = ""
+    jurisdiction: str = "general"
+    framework: str = ""
+    version: str = "1.0"
+    limitations: List[str] = Field(default_factory=list)
+
+
+class DeveloperCapabilitiesResponse(BaseModel):
+    """Phase 5B capability discovery — a READ-ONLY adapter over the live
+    capability registry (``backend/maths/capability_registry.py``).
+
+    The registry is the single source of truth: this response is derived
+    from it at request time (deterministic, ``capability_id``-ordered).
+    The API layer maintains no capability list of its own and never
+    collapses, renames, or upgrades registry statuses — UNSUPPORTED and
+    PLANNED are legitimate capability metadata, not API failures.
+
+    Discovery is a read operation: no model inference, no grounding, no
+    authority execution. ``api_status`` is the six-state public transport
+    status of THIS read (VERIFIED = the deterministic registry read
+    succeeded); ``engine_status`` stays None because no engine ran.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    # --- Phase 5A public status trio (transport read outcome only) ---
+    api_status: str = ""
+    api_status_label: str = ""
+    retryable: bool = False
+    # No engine participates in discovery — always None here.
+    engine_status: Optional[str] = None
+    # Derived live from registry.summary(): authority x status counts.
+    registry_summary: Dict[str, Dict[str, int]] = Field(default_factory=dict)
+    count: int = 0
+    capabilities: List[DeveloperCapabilityEntry] = Field(default_factory=list)
+
+
 class DeveloperHealthResponse(BaseModel):
     """Liveness — the API process is alive. Touches nothing."""
 
