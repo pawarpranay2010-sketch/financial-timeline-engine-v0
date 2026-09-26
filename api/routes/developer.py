@@ -75,7 +75,7 @@ import re
 import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -113,6 +113,7 @@ from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 # package touches no provider/model/persistence code at import time and
 # reads its env-var configuration lazily at request time.
 from backend.auth import gate as metered_gate
+from backend.auth import idempotency as idempotency_store
 
 # Gate reason → HTTP mapping (single source of truth for /v1):
 #   missing/unknown/inactive key → 401 (externally indistinguishable)
@@ -191,7 +192,16 @@ def _metered_api_key_guard(request: Request) -> None:
         return  # metering not configured → Phase 15 boundary only
 
     provided = request.headers.get("x-platrixa-api-key", "")
-    reason, _ctx = metered_gate.authorize_request(provided)
+    # Phase 5C: authenticate WITHOUT reserving — the reservation moves
+    # inside the idempotency-aware handler so a replay never consumes a
+    # second unit. All other endpoints keep the original guard
+    # (authenticate + reserve) unchanged. Store unavailability stays
+    # fail-closed exactly as before (503, never admitted).
+    try:
+        reason, _ctx = metered_gate.resolve_tenant(provided)
+    except metered_gate.MeteredGateError:
+        logger.warning("metering gate unavailable: %s", type(metered_gate.MeteredGateError).__name__)
+        raise _gate_http_exception(metered_gate.REASON_METERING_UNAVAILABLE)
     if reason != metered_gate.REASON_OK:
         raise _gate_http_exception(reason)
 
@@ -297,6 +307,27 @@ def _check_api_key(request: Request) -> Optional[JSONResponse]:
     return None
 
 
+def _error_envelope(
+    code: str,
+    message: str,
+    request_id: Optional[str] = None,
+) -> dict:
+    """The deterministic /v1 error envelope as a plain dict.
+
+    Used by :func:`_error_response` (HTTP layer) and by the Phase 5C
+    idempotency failure store (which must persist the same envelope that
+    would be returned).
+    """
+    api_status = public_status_for_error_code(code)
+    error: dict[str, Any] = {"code": code, "message": message}
+    if request_id:
+        error["request_id"] = request_id
+    error["api_status"] = api_status
+    error["api_status_label"] = LABEL_BY_PUBLIC_STATUS.get(api_status, "")
+    error["retryable"] = RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False)
+    return {"api_version": API_VERSION, "error": error}
+
+
 def _error_response(
     status_code: int,
     code: str,
@@ -310,16 +341,7 @@ def _error_response(
     the error code by the deterministic mapping in ``api.status``. The
     code itself is unchanged, preserving the documented contract.
     """
-    api_status = public_status_for_error_code(code)
-    error: dict[str, Any] = {"code": code, "message": message}
-    if request_id:
-        error["request_id"] = request_id
-    error["api_status"] = api_status
-    error["api_status_label"] = LABEL_BY_PUBLIC_STATUS.get(api_status, "")
-    error["retryable"] = RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False)
-    return JSONResponse(
-        status_code=status_code, content={"api_version": API_VERSION, "error": error}
-    )
+    return JSONResponse(status_code=status_code, content=_error_envelope(code, message, request_id))
 
 
 # ---------------------------------------------------------------------------
@@ -635,9 +657,52 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
     )
 
 
-@router.post("/v1/process", response_model=DeveloperProcessResponse,
-             dependencies=[Depends(_metered_api_key_guard)])
-def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperProcessResponse":
+@router.post(
+    "/v1/process",
+    response_model=DeveloperProcessResponse,
+    dependencies=[Depends(_metered_api_key_guard)],
+    responses={
+        409: {
+            "description": (
+                "Idempotency conflict — the Idempotency-Key was already used "
+                "with a different request body (IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST)."
+            )
+        },
+        200: {
+            "description": (
+                "Processing result, idempotent replay of a previous result, or an "
+                "in-progress acknowledgement (reason_code IDEMPOTENCY_REQUEST_IN_PROGRESS). "
+                "Replays carry the Idempotent-Replayed: true response header and the "
+                "original request_id."
+            )
+        },
+    },
+)
+def process_v1(
+    payload: KernelProcessRequest,
+    request: Request,
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        title="Idempotency-Key",
+        description=(
+            "Optional. Makes this request replay-safe per tenant: repeating the same key "
+            "with the same request returns the originally recorded result instead of "
+            "processing again and without consuming additional quota. Same key with a "
+            "different request is rejected (409). 16-200 chars of [A-Za-z0-9._~-]. "
+            "Requires a metering-enabled deployment; returns 400 IDEMPOTENCY_NOT_CONFIGURED "
+            "otherwise. Platrixa does NOT promise exactly-once execution — it provides "
+            "durable idempotent replay semantics for this endpoint."
+        ),
+    ),
+) -> "DeveloperProcessResponse":
+    # Phase 5C: idempotency-aware admission + processing.
+    return _process_v1_idempotent(payload, request, idempotency_key)
+
+
+def _process_v1_idempotent(
+    payload: KernelProcessRequest, request: Request, idem_key_raw: Optional[str]
+) -> "DeveloperProcessResponse":
     """
     Process one financial transaction through the public developer
     interface (which forwards to the Kernel exactly once).
@@ -672,13 +737,116 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
     rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
     started = time.perf_counter()
 
+    # -----------------------------------------------------------------
+    # Phase 5C admission order (idempotency-aware):
+    #   1. authentication (dependency — no quota consumed on failure)
+    #   2. key validation (400-class transport rejection, no quota)
+    #   3. atomic idempotency claim (replay/conflict decided here —
+    #      BEFORE the reservation, so replays never consume quota)
+    #   4. atomic quota reservation (canonical attempts only)
+    #   5. processing
+    # The claim is deleted on any reservation refusal so a later retry
+    # is never blocked by a claim that never got to process.
+    # -----------------------------------------------------------------
+    idem_key_raw = idem_key_raw if idem_key_raw is not None else request.headers.get("idempotency-key")
+    idem_active = idem_key_raw is not None
+    idem_tenant: Optional[str] = None
+    idem_key: Optional[str] = None
+    if idem_active:
+        ok, key_code = idempotency_store.validate_key(idem_key_raw)
+        if not ok:
+            return _error_response(400, key_code, idempotency_store.KEY_FORMAT_MESSAGE, request_id=rid)
+        idem_key = (idem_key_raw or "").strip()
+        if not metered_gate._metering_configured():
+            # Zero-config deployments have no durable store to back the
+            # replay contract — fail explicitly rather than silently
+            # ignoring the key (which would fake the guarantee).
+            return _error_response(
+                400,
+                "IDEMPOTENCY_NOT_CONFIGURED",
+                "this deployment has no durable idempotency store configured; omit the Idempotency-Key header",
+                request_id=rid,
+            )
+        idem_tenant = _resolve_idempotency_tenant(request)
+        if idem_tenant is None:
+            # Fail closed: cannot establish the tenant scope for the key.
+            return _error_response(
+                503,
+                "IDEMPOTENCY_UNAVAILABLE",
+                "idempotency store unavailable; request not admitted",
+                request_id=rid,
+            )
+        try:
+            outcome = idempotency_store.claim(
+                idem_key, idem_tenant, "/v1/process", {"raw_input": payload.raw_input}
+            )
+        except idempotency_store.IdempotencyUnavailableError:
+            return _error_response(
+                503,
+                "IDEMPOTENCY_UNAVAILABLE",
+                "idempotency store unavailable; request not admitted",
+                request_id=rid,
+            )
+        if outcome.replay:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            _log(
+                "/v1/process",
+                request_id=outcome.request_id or rid,
+                status=None,
+                duration_ms=duration_ms,
+                error="IDEMPOTENT_REPLAY",
+            )
+            return JSONResponse(
+                status_code=outcome.http_status or 200,
+                content=outcome.envelope or {},
+                headers={
+                    "Idempotent-Replayed": "true",
+                    "Idempotency-Key": idempotency_store.idempotency_key_hash(idem_key)[:8],
+                },
+            )
+        if outcome.conflict:
+            return _error_response(
+                409,
+                idempotency_store.CONFLICT_CODE,
+                "this Idempotency-Key was already used with a different request",
+                request_id=rid,
+            )
+        if outcome.processing:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "api_version": API_VERSION,
+                    "request_id": outcome.request_id,
+                    "status": "PROCESSING",
+                    "status_label": "Processing",
+                    "success": False,
+                    "api_status": "PROCESSING",
+                    "api_status_label": "Processing",
+                    "retryable": True,
+                    "reason_code": idempotency_store.IN_PROGRESS_CODE,
+                },
+                headers={"Idempotent-Replayed": "false", "Retry-After": "2"},
+            )
+
     try:
         client = _get_client(request)
     except Exception as exc:  # server configuration problem — fail closed
+        if idem_key:
+            idempotency_store.release(idem_key, idem_tenant)
         logger.error("developer client construction failed: %s", type(exc).__name__)
         raise HTTPException(
             status_code=503, detail="service configuration invalid"
         ) from exc
+
+    # Atomic quota reservation — canonical attempts only (replays never
+    # reach this line). On refusal the claim is released.
+    if metered_gate._metering_configured():
+        provided = request.headers.get("x-platrixa-api-key", "")
+        reason, _ctx = metered_gate.authorize_request(provided)
+        if reason != metered_gate.REASON_OK:
+            if idem_key:
+                idempotency_store.release(idem_key, idem_tenant)
+            raise _gate_http_exception(reason)
 
     # Imported lazily: importing the platrixa package pulls the backend
     # kernel graph, which must never happen at api.main import time
@@ -696,7 +864,16 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
             duration_ms=duration_ms,
             error="INPUT_INVALID",
         )
-        return _error_response(422, "INPUT_INVALID", str(exc), request_id=rid)
+        envelope_dict = _error_envelope("INPUT_INVALID", str(exc), request_id=rid)
+        if idem_key:
+            idempotency_store.fail(
+                idem_key, idem_tenant, "/v1/process", {"raw_input": payload.raw_input},
+                code="INPUT_INVALID",
+                envelope=envelope_dict,
+                http_status=422,
+                request_id=rid,
+            )
+        return JSONResponse(status_code=422, content=envelope_dict)
     except PlatrixaError as exc:
         # Runtime failure (provider unavailable/failed). Never converted
         # into a success; details logged server-side, generic message out.
@@ -711,6 +888,10 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
             duration_ms=duration_ms,
             error="PROVIDER_UNAVAILABLE",
         )
+        # Phase 5C: transient infrastructure failure — release the claim
+        # so a retry (same key, same request) genuinely retries.
+        if idem_key:
+            idempotency_store.release(idem_key, idem_tenant)
         return _error_response(
             503,
             "PROVIDER_UNAVAILABLE",
@@ -750,10 +931,49 @@ def process_v1(payload: KernelProcessRequest, request: Request) -> "DeveloperPro
         duration_ms=duration_ms,
         error=None,
     )
+    content = jsonable_encoder(response.model_dump())
+
+    # Phase 5C: record the terminal envelope for future replays.
+    if idem_key:
+        try:
+            idempotency_store.complete(
+                idem_key,
+                idem_tenant,
+                "/v1/process",
+                {"raw_input": payload.raw_input},
+                request_id=content.get("request_id") or rid or None,
+                envelope=content,
+                http_status=transport_status,
+            )
+        except idempotency_store.IdempotencyUnavailableError:
+            logger.warning("idempotency record completion failed (non-fatal)")
+
+    headers = {"Idempotent-Replayed": "false"} if idem_active else None
     return JSONResponse(
         status_code=transport_status,
-        content=jsonable_encoder(response.model_dump()),
+        content=content,
+        headers=headers,
     )
+
+
+def _resolve_idempotency_tenant(request: Request) -> Optional[str]:
+    """The tenant scope for idempotency (Phase 5C).
+
+    Metering configured → tenant_id resolved from the authenticated key
+    (never client-supplied). Zero-config mode → a single anonymous local
+    namespace. Returns None when the tenant cannot be established, which
+    the caller maps to a fail-closed 503.
+    """
+    if not metered_gate._metering_configured():
+        return idempotency_store.ANONYMOUS_TENANT_ID
+    provided = request.headers.get("x-platrixa-api-key", "")
+    try:
+        reason, ctx = metered_gate.resolve_tenant(provided)
+    except metered_gate.MeteredGateError:
+        return None
+    if reason != metered_gate.REASON_OK or ctx is None:
+        return None
+    return ctx.tenant_id
 
 
 # ---------------------------------------------------------------------------

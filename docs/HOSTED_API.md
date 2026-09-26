@@ -326,12 +326,143 @@ Requests are logged as safe metadata only: endpoint, request id, duration,
 resulting state, coarse error category. Financial content, credentials,
 and secrets are never logged.
 
-## Idempotency & duplicate requests
+## Idempotency & replay-safe requests (Phase 5C)
 
-Duplicate submissions are **not** guaranteed to collapse into one
-processing operation. The API performs no deduplication and no retries;
-each accepted request runs the Kernel once and returns its own result.
-Distributed exactly-once semantics are future work.
+`POST /v1/process` supports an optional `Idempotency-Key` header that
+makes retries safe: repeating the same key with the same request returns
+the originally recorded result instead of creating another processing
+attempt — without consuming additional quota.
+
+> **Platrixa does NOT promise exactly-once execution.** It provides
+> **durable idempotent replay semantics** for the scope documented here:
+> the replayed response reproduces the original result; the engine ran
+> once for the canonical attempt.
+
+### When it applies
+
+- **Scope:** `POST /v1/process` only. `POST /v1/process/document`, the
+  kernel route, GET endpoints, health/readiness, and capability
+  discovery are deliberately not idempotency-scoped.
+- **Optional:** omitting the header keeps the previous behavior exactly
+  (each request is its own processing attempt).
+- **Requires metering:** keys are honored only when the deployment has a
+  durable store configured (`PLATRIXA_METERING_DATABASE_URL`). Sending a
+  key to a zero-config deployment returns `400
+  IDEMPOTENCY_NOT_CONFIGURED` rather than silently ignoring the key.
+
+### Scope and key format
+
+- Keys are **tenant-scoped**: the same key string used by two different
+  tenants is two independent namespaces. A tenant can never retrieve,
+  conflict with, or even detect another tenant's record by reusing a
+  key. Uniqueness is enforced by a database constraint on
+  `(tenant_id, idempotency key hash)`.
+- Format: **16–200 characters** of `[A-Za-z0-9._~-]`, no surrounding
+  whitespace. Violations return `400 IDEMPOTENCY_KEY_INVALID` or
+  `400 IDEMPOTENCY_KEY_TOO_LONG` — these are transport rejections before
+  any processing and consume no quota.
+- Keys are stored **hashed** (SHA-256) and never logged in plaintext.
+
+### Request fingerprint and replay decision
+
+The replay decision is **key + fingerprint**, never the key alone. The
+fingerprint is the SHA-256 of a canonical serialization of everything
+that materially affects processing:
+
+    tenant_id + endpoint + canonical JSON body  →  SHA-256
+
+Server-generated request IDs, timestamps, and transport metadata are
+excluded by construction. The canonical form uses sorted keys and
+compact separators.
+
+### Behavior matrix
+
+| Scenario | Response |
+|---|---|
+| First request with a key | Normal response; `Idempotent-Replayed: false`; claim recorded durably |
+| Same key + same body, attempt finished | **Replay**: original envelope + original HTTP status verbatim; `Idempotent-Replayed: true`; original `request_id` preserved |
+| Same key + same body, attempt still PROCESSING | `200` in-progress acknowledgement (`status: "PROCESSING"`, `reason_code: IDEMPOTENCY_REQUEST_IN_PROGRESS`, `Retry-After: 2`); no rerun; no extra quota. Poll with the same key until the terminal result replays |
+| Same key + different body | **409** `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST` — never silently processed |
+| Deterministic failure (`INPUT_INVALID`) | Failure envelope stored; the identical retry replays the same 422 (deterministic: it would fail identically) |
+| Transient failure (`PROVIDER_UNAVAILABLE` / `MODEL_UNAVAILABLE` / 503) | Claim **released**; the retry genuinely re-attempts processing |
+| Auth failure (401) / quota exhaustion (429) | No idempotency record is kept; nothing blocks a later retry |
+| Key older than retention | Record's result is deleted (audit metadata persists); the key becomes reusable for a new attempt |
+
+Engine terminal states replay exactly as produced: `VERIFIED`,
+`REVIEW_REQUIRED`, and `UNSUPPORTED`/`FAILED`-family responses (including
+their 422 transport statuses) are all stored and reproduced verbatim —
+replay never upgrades, downgrades, or reinterprets a status.
+
+### request_id stability
+
+Replays return the **original canonical `request_id`**, so every retry
+can be traced to the same processing record. A replay never fabricates a
+new processing request ID.
+
+### Response headers
+
+- `Idempotent-Replayed: true` — this response is a stored replay.
+- `Idempotent-Replayed: false` — this response is from a live attempt
+  (canonical or in-progress acknowledgement). Sent only when a key was
+  supplied.
+
+### Retention
+
+Replayable window: **72 hours** from completion (configurable constant
+`IDEMPOTENCY_RETENTION_HOURS` in `backend/auth/idempotency.py`). After
+expiry the stored result is deleted on next sight while the audit
+metadata (tenant, key hash, fingerprint, state timeline) persists, and
+the key may be reused for a genuinely new attempt. Expired records are
+reclaimed atomically — expiry can never produce two concurrent live
+attempts.
+
+### Quota interaction
+
+Quota invariants are preserved exactly:
+
+- A replay consumes **no** additional quota.
+- A conflict (409) consumes **no** quota.
+- Only the canonical attempt reserves one unit, and it reserves it
+  before processing begins (after the idempotency claim).
+- A replay is never a quota bypass: the original attempt paid for
+  admission, and new attempts always reserve.
+
+### Security
+
+- Raw keys are never stored (SHA-256 hash only) and never logged; logs
+  use an 8-hex prefix of the digest.
+- Records are tenant-keyed; authentication happens before any replay
+  lookup can expose result data.
+- Keys do not belong in URLs, query strings, frontend bundles, or error
+  messages, and are never echoed back in full.
+
+### Example
+
+First submission:
+
+```bash
+curl -X POST "$PLATRIXA_HOST/v1/process" \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  -H "Idempotency-Key: order-import-2026-09-00042" \
+  -d '{"raw_input": "Purchased furniture for cash Rs. 15,000"}'
+```
+
+A network timeout on the response, retried with the same key and body:
+
+```bash
+curl -X POST "$PLATRIXA_HOST/v1/process" \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  -H "Idempotency-Key: order-import-2026-09-00042" \
+  -d '{"raw_input": "Purchased furniture for cash Rs. 15,000"}'
+# → same response body, original request_id, and:
+#   Idempotent-Replayed: true
+```
+
+If the first attempt is still running, the retry returns the
+in-progress acknowledgement instead — poll with the same key; the final
+poll replays the terminal result.
 
 ## Known limits (launch posture)
 
@@ -340,6 +471,9 @@ Distributed exactly-once semantics are future work.
   key issuance are not — tenants are provisioned by the operator.
 - No application-level rate limiting; platform-level controls only.
 - `X-Request-Id` is a best-effort correlation id, not an idempotency key.
+- Idempotent replay (Phase 5C) covers `POST /v1/process` with a valid
+  `Idempotency-Key` on metering-enabled deployments, with a 72-hour
+  replayable window; see the Phase 5C section above.
 - The API is a transport boundary: it cannot be used to alter rule
   packs, hooks, provider configuration, or the runtime's authority model.
 

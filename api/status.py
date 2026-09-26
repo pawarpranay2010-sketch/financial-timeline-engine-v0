@@ -117,6 +117,18 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     "METERING_UNAVAILABLE": STATUS_PROCESSING,
     "PROVIDER_UNAVAILABLE": STATUS_PROCESSING,
     "INPUT_INVALID": STATUS_INVALID_INPUT,
+    # Phase 5C idempotency transport codes:
+    #   key format/size problems and key-reuse conflicts are client
+    #   errors (INVALID_INPUT); an unavailable idempotency store fails
+    #   closed like metering (PROCESSING = retryable, not yet admitted).
+    "IDEMPOTENCY_KEY_INVALID": STATUS_INVALID_INPUT,
+    "IDEMPOTENCY_KEY_TOO_LONG": STATUS_INVALID_INPUT,
+    "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST": STATUS_INVALID_INPUT,
+    # deployment lacks the durable store entirely → client-side config
+    # issue, not a transient outage (no point retrying)
+    "IDEMPOTENCY_NOT_CONFIGURED": STATUS_INVALID_INPUT,
+    # transient store failure while metering IS configured → fail closed
+    "IDEMPOTENCY_UNAVAILABLE": STATUS_PROCESSING,
 }
 
 # Human-readable labels for the six public states.
