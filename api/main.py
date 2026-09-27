@@ -123,6 +123,12 @@ def create_app() -> FastAPI:
     from api.routes import async_api
 
     app.include_router(async_api.router)
+    # Phase 5G: developer API-key lifecycle (management plane — separate
+    # credential from the data-plane key; same metering PostgreSQL,
+    # same error envelope, raw keys shown exactly once).
+    from api.routes import developer_keys
+
+    app.include_router(developer_keys.router)
     # Phase 15: deterministic malformed-request normalization for /v1 only
     # (400 instead of the framework-default 422 for parsing/validation
     # failures). Browser-facing /api/v1 keeps its documented behavior.

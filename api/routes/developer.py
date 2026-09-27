@@ -148,6 +148,18 @@ _GATE_ERROR_MESSAGES = {
     "UNAUTHORIZED": "missing or invalid API key",
     "QUOTA_EXHAUSTED": "monthly quota exhausted for this API key",
     "METERING_UNAVAILABLE": "metering service unavailable; request not admitted",
+    # Phase 5G key-management plane (raised as HTTPException by the
+    # developer_keys routes; the same scoped handler renders them as the
+    # deterministic /v1 envelope). Additive — no existing entry changed.
+    "API_KEY_MANAGEMENT_NOT_CONFIGURED": (
+        "key management is not configured on this deployment"
+    ),
+    "API_KEY_MANAGEMENT_UNAUTHORIZED": (
+        "management token missing, invalid, or not authorized for key management"
+    ),
+    "API_KEY_MANAGEMENT_UNAVAILABLE": (
+        "key management store unavailable; operation not performed"
+    ),
 }
 
 

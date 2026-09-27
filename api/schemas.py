@@ -29,6 +29,77 @@ class TickerRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=20, examples=["AAPL"])
 
 
+# ---
+# Phase 5G — developer API-key lifecycle (management plane)
+# ---
+
+
+class ApiKeyCreateRequest(BaseModel):
+    """Create one developer API key. Length/set validation happens in the
+    store so failures carry the specific machine-readable codes."""
+
+    name: str = Field(
+        ...,
+        description="Developer-chosen label for the key (1-120 chars after trim).",
+        examples=["Local development"],
+    )
+    environment: str = Field(
+        default="test",
+        description="Closed set: 'test' or 'live'.",
+        examples=["test"],
+    )
+
+
+class ApiKeyCreatedResponse(BaseModel):
+    """Creation response. The raw ``key`` appears HERE AND ONLY HERE —
+    it is never stored, never logged, and never returned again."""
+
+    id: str = Field(..., description="Public key identifier (UUID v4)")
+    name: str
+    environment: str
+    key: str = Field(
+        ...,
+        description="The raw API key — shown EXACTLY ONCE at creation/rotation. Store it now; it cannot be recovered.",
+        examples=["plx_test_EXAMPLE_ONLY_NOT_A_REAL_KEY"],
+    )
+    key_prefix: str = Field(..., description="Masked identification prefix")
+    status: str = Field(..., description="ACTIVE")
+    created_at: str
+
+
+class ApiKeyView(BaseModel):
+    """Masked key metadata — never contains key material (raw or hashed)."""
+
+    id: str
+    name: str
+    environment: str
+    key_prefix: str
+    status: str = Field(..., description="ACTIVE | REVOKED")
+    created_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+
+
+class ApiKeyListResponse(BaseModel):
+    """All keys owned by the authenticated management tenant,
+    deterministic order (created_at DESC, id DESC)."""
+
+    keys: List[ApiKeyView]
+
+
+class ApiKeyRevokedResponse(BaseModel):
+    """Revocation result — idempotent; a repeat returns the same view."""
+
+    id: str
+    name: str
+    environment: str
+    key_prefix: str
+    status: str
+    created_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Responses
 # ---------------------------------------------------------------------------

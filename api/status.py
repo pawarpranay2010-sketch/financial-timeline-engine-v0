@@ -139,6 +139,20 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     "JOB_NOT_FOUND": STATUS_INVALID_INPUT,
     "RESULT_NOT_FOUND": STATUS_INVALID_INPUT,
     "RESULT_NOT_READY": STATUS_PROCESSING,
+    # Phase 5G developer API-key lifecycle (management plane — separate
+    # from the data-plane admission gate):
+    #   invalid create payloads and unknown/revoked key references are
+    #   client errors; a deployment without the management credential is
+    #   a client-side configuration issue (no point retrying); a
+    #   misconfigured or unavailable management store fails closed like
+    #   every other store dependency (retryable, not yet admitted).
+    "API_KEY_NAME_INVALID": STATUS_INVALID_INPUT,
+    "API_KEY_ENVIRONMENT_INVALID": STATUS_INVALID_INPUT,
+    "API_KEY_NOT_FOUND": STATUS_INVALID_INPUT,
+    "API_KEY_REVOKED": STATUS_INVALID_INPUT,
+    "API_KEY_MANAGEMENT_UNAUTHORIZED": STATUS_INVALID_INPUT,
+    "API_KEY_MANAGEMENT_NOT_CONFIGURED": STATUS_INVALID_INPUT,
+    "API_KEY_MANAGEMENT_UNAVAILABLE": STATUS_PROCESSING,
 }
 
 # Human-readable labels for the six public states.

@@ -609,6 +609,76 @@ is what makes this stable.
 6. PROCESSING (retryable) → back off, then retry or poll.
 7. For documents, audit `evidence`/`lineage` before trusting amounts.
 
+## Developer API-key lifecycle (Phase 5G)
+
+Developer-facing key management over the same metering PostgreSQL. This is a
+**management plane** — deliberately separate from the data plane:
+
+| Credential | Header | Powers |
+|---|---|---|
+| Data-plane key (`plx_test_…` / `plx_live_…`) | `X-Platrixa-API-Key` | `POST /v1/process`, documents, idempotency — nothing else |
+| Management token (operator-issued) | `X-Platrixa-Management-Token` | create / list / revoke / rotate keys for its ONE bound tenant |
+
+A runtime API key can **never** manage keys — presenting one as the management
+header is a deterministic 403 `API_KEY_MANAGEMENT_UNAUTHORIZED`.
+
+### Endpoints
+
+- `POST /v1/developer/api-keys` — `{"name": "Local development", "environment": "test"}` → 201.
+  **The raw `key` is returned EXACTLY ONCE, here.** It is stored only as a SHA-256
+  hash, is unrecoverable after this response, and never appears again in any
+  listing, revocation, rotation, or error response. Copy it now.
+- `GET /v1/developer/api-keys` — masked metadata only (`key_prefix`, status,
+  timestamps, derived `last_used_at`). Never contains key material. Deterministic
+  order: `created_at DESC, id DESC`.
+- `POST /v1/developer/api-keys/{key_id}/revoke` — durable, idempotent, tenant-scoped.
+  Repeating a revoke returns the same deterministic `REVOKED` view. The key stops
+  authenticating the moment the revocation commits.
+- `POST /v1/developer/api-keys/{key_id}/rotate` — atomic credential switch in one
+  transaction: the old secret stops authenticating at commit, the new raw key is
+  returned once, monthly usage resets (a new credential starts a fresh bucket).
+  Revoked keys cannot rotate (`API_KEY_REVOKED`).
+
+### Model
+
+- Format: `plx_<test|live>_<43-char URL-safe secret>` — 32 bytes of entropy from
+  the OS CSPRNG (`secrets`). Never `random()`, timestamps, UUIDs-as-secrets, or
+  counters.
+- Storage: **hash only** (`key_hash`, UNIQUE, 64-char SHA-256 hex) + a masked
+  `key_prefix` for identification. There is no raw-key column and no plaintext
+  path; database dumps cannot yield usable credentials cheaply.
+- The public `id` is a UUID — deliberately NOT the hash, so hashes never appear
+  in URLs or listings.
+- Creation provisions a companion admission row (100 requests/month, the same
+  default as the existing convention) so lifecycle and runtime stay one system.
+- Revocation/rotation atomically update both rows: the registry (`status`) and
+  the runtime admission row (`is_active`). There is no window where a revoked
+  key still authenticates, and no overlap window during rotation.
+- `expires_at` is intentionally absent — no expiry semantics exist in the
+  runtime today; inventing them here would be dishonest.
+
+### Errors (existing envelope + codes)
+
+`400 API_KEY_NAME_INVALID` · `400 API_KEY_ENVIRONMENT_INVALID` ·
+`404 API_KEY_NOT_FOUND` (unknown **and** cross-tenant lookups are
+indistinguishable) · `404 API_KEY_REVOKED` (rotation of a revoked key) ·
+`403 API_KEY_MANAGEMENT_UNAUTHORIZED` · `400 API_KEY_MANAGEMENT_NOT_CONFIGURED`
+(zero-config deployments: management disabled, honestly) ·
+`503 API_KEY_MANAGEMENT_UNAVAILABLE` (store down — fail closed, nothing changed).
+
+### Configuration
+
+| Variable | Meaning |
+|---|---|
+| `PLATRIXA_METERING_DATABASE_URL` | the shared durable store (must be set) |
+| `PLATRIXA_KEY_MANAGEMENT_TOKEN` | operator-issued management credential (unset = management disabled) |
+| `PLATRIXA_KEY_MANAGEMENT_TENANT_ID` | the ONE tenant the token may manage |
+
+Known limitations: one management token ↔ one tenant binding; no self-service
+UI yet (the frontend placeholder is still honest); no per-key quota override at
+creation (defaults apply); `last_used_at` is derived lazily from the runtime
+metering row, not written on the hot path.
+
 ## Async documents (Phase 5E)
 
 Asynchronous document processing reuses the ENTIRE existing document
