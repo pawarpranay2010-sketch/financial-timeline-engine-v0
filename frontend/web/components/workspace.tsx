@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, Layers, Server, Type } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -66,7 +66,7 @@ const MODES: Array<{ key: Mode; label: string; icon: React.ReactNode; availabili
   { key: "api", label: "API", icon: <Server className="size-4" aria-hidden />, availability: "LIVE", hint: "Call the same endpoints your integration will" },
 ];
 
-type Phase = "idle" | "loading" | "done" | "error";
+export type Phase = "idle" | "loading" | "done" | "error";
 
 interface ErrorState {
   code: string;
@@ -88,7 +88,15 @@ function ModeBadge({ availability }: { availability: string }) {
   );
 }
 
-export function ValidationWorkspace() {
+export function ValidationWorkspace({
+  onPhaseChange,
+  progress,
+}: {
+  /** Optional phase observer for embedded compositions (e.g. the homepage). */
+  onPhaseChange?: (phase: Phase) => void;
+  /** Optional node rendered between the input cards and the outcome area. */
+  progress?: React.ReactNode;
+} = {}) {
   const [mode, setMode] = useState<Mode>("text");
   const [input, setInput] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -98,32 +106,44 @@ export function ValidationWorkspace() {
   const [error, setError] = useState<ErrorState | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const onPhaseChangeRef = useRef(onPhaseChange);
+  useEffect(() => {
+    onPhaseChangeRef.current = onPhaseChange;
+  });
+
+  const setPhaseNotified = useCallback(
+    (next: Phase) => {
+      setPhase(next);
+      onPhaseChangeRef.current?.(next);
+    },
+    [],
+  );
 
   const reset = useCallback(() => {
-    setPhase("idle");
+    setPhaseNotified("idle");
     setReport(null);
     setError(null);
-  }, []);
+  }, [setPhaseNotified]);
 
   async function runText(raw?: string) {
     const text = (raw ?? input).trim();
     if (!text) return;
     setInput(text);
-    setPhase("loading");
+    setPhaseNotified("loading");
     setError(null);
     setReport(null);
     try {
       const response = await processTransaction(text);
       setReport({ ...response });
       setSource("api");
-      setPhase("done");
+      setPhaseNotified("done");
     } catch (err) {
       setError(
         err instanceof ApiRequestError
           ? { code: err.code, message: err.message, apiStatus: err.apiStatus, retryable: err.retryable }
           : { code: "NETWORK_ERROR", message: "Could not reach the Platrixa API through the frontend proxy." },
       );
-      setPhase("error");
+      setPhaseNotified("error");
     }
   }
 
@@ -133,7 +153,7 @@ export function ValidationWorkspace() {
       setFileNote(`File exceeds the backend's 10 MiB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`);
       return;
     }
-    setPhase("loading");
+    setPhaseNotified("loading");
     setError(null);
     setReport(null);
     try {
@@ -143,19 +163,19 @@ export function ValidationWorkspace() {
         engine_status: response.engine_status ?? response.status,
       });
       setSource("api");
-      setPhase("done");
+      setPhaseNotified("done");
     } catch (err) {
       setError(
         err instanceof ApiRequestError
           ? { code: err.code, message: err.message, apiStatus: err.apiStatus, retryable: err.retryable }
           : { code: "NETWORK_ERROR", message: "Could not reach the Platrixa API through the frontend proxy." },
       );
-      setPhase("error");
+      setPhaseNotified("error");
     }
   }
 
   function showDemo() {
-    setPhase("done");
+    setPhaseNotified("done");
     setReport(DEMO_RESULT);
     setSource("demo");
     setError(null);
@@ -381,6 +401,8 @@ export function ValidationWorkspace() {
           </CardContent>
         </Card>
       )}
+
+      {progress}
 
       {loading && (
         <Card>
