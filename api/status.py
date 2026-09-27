@@ -153,6 +153,15 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     "API_KEY_MANAGEMENT_UNAUTHORIZED": STATUS_INVALID_INPUT,
     "API_KEY_MANAGEMENT_NOT_CONFIGURED": STATUS_INVALID_INPUT,
     "API_KEY_MANAGEMENT_UNAVAILABLE": STATUS_PROCESSING,
+    # Phase 5H developer usage / request observability (read-only):
+    #   a missing store on a zero-config deployment is a client-side
+    #   config issue; a transient store failure is retryable (fail
+    #   closed, but not yet served); an unknown or cross-tenant request
+    #   reference is a client error (indistinguishable by design).
+    "USAGE_NOT_CONFIGURED": STATUS_INVALID_INPUT,
+    "USAGE_UNAVAILABLE": STATUS_PROCESSING,
+    "REQUEST_HISTORY_UNAVAILABLE": STATUS_PROCESSING,
+    "REQUEST_NOT_FOUND": STATUS_INVALID_INPUT,
 }
 
 # Human-readable labels for the six public states.

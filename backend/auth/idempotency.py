@@ -470,3 +470,49 @@ def release(raw_key: str, tenant_id: str) -> None:
                 ),
                 {"t": tenant_id, "kh": idempotency_key_hash(raw_key)},
             )
+
+
+def find_result_by_request_id(tenant_id: str, request_id: str) -> Optional[dict]:
+    """Phase 5H: locate a durable result snapshot by (tenant, request_id).
+
+    Read-only lookup over the EXISTING Phase 5C storage. Returns the
+    stored envelope (terminal result or stored deterministic failure)
+    when one exists for this tenant, else None. Nothing is fabricated,
+    extended, or refreshed — the Phase 5C retention window governs
+    availability exactly as before.
+    """
+    from sqlalchemy import text
+
+    if _metering_database_url() is None:
+        raise IdempotencyUnavailableError("idempotency store not configured")
+    SessionLocal = _session_factory()
+    try:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT state, request_id, result_json, failure_json, updated_at "
+                    "FROM platrixa_idempotency_keys "
+                    "WHERE tenant_id = :t AND request_id = :rid "
+                    "AND state IN ('COMPLETED', 'FAILED') "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                ),
+                {"t": tenant_id, "rid": str(request_id)[:128]},
+            ).mappings().first()
+    except IdempotencyUnavailableError:
+        raise
+    except Exception as exc:
+        raise IdempotencyUnavailableError("idempotency snapshot lookup failed") from exc
+    if row is None:
+        return None
+    envelope_json = row["result_json"] if row["state"] == "COMPLETED" else row["failure_json"]
+    if not envelope_json:
+        return None
+    try:
+        envelope = json.loads(envelope_json)
+    except Exception:
+        return None
+    return {
+        "envelope": envelope,
+        "state": row["state"],
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }

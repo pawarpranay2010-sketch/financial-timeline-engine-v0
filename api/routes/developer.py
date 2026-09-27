@@ -819,13 +819,15 @@ def _process_v1_idempotent(
 
     # Atomic quota reservation — canonical attempts only (replays never
     # reach this line). On refusal the claim is released.
+    admitted_ctx = None  # Phase 5H: tenant context captured at admission
     if metered_gate._metering_configured():
         provided = request.headers.get("x-platrixa-api-key", "")
-        reason, _ctx = metered_gate.authorize_request(provided)
+        reason, adm_ctx = metered_gate.authorize_request(provided)
         if reason != metered_gate.REASON_OK:
             if idem_key:
                 idempotency_store.release(idem_key, idem_tenant)
             raise _gate_http_exception(reason)
+        admitted_ctx = (adm_ctx, (provided or "")[:16] or None)
 
     # Imported lazily: importing the platrixa package pulls the backend
     # kernel graph, which must never happen at api.main import time
@@ -852,6 +854,14 @@ def _process_v1_idempotent(
                 http_status=422,
                 request_id=rid,
             )
+        _record_request_metadata(
+            admitted_ctx,
+            http_status=422,
+            api_status=envelope_dict["error"]["api_status"],
+            reason_code="INPUT_INVALID",
+            request_id=rid,
+            duration_ms=duration_ms,
+        )
         return JSONResponse(status_code=422, content=envelope_dict)
     except PlatrixaError as exc:
         # Runtime failure (provider unavailable/failed). Never converted
@@ -871,6 +881,14 @@ def _process_v1_idempotent(
         # so a retry (same key, same request) genuinely retries.
         if idem_key:
             idempotency_store.release(idem_key, idem_tenant)
+        _record_request_metadata(
+            admitted_ctx,
+            http_status=503,
+            api_status="PROCESSING",
+            reason_code="PROVIDER_UNAVAILABLE",
+            request_id=rid,
+            duration_ms=duration_ms,
+        )
         return _error_response(
             503,
             "PROVIDER_UNAVAILABLE",
@@ -908,6 +926,19 @@ def _process_v1_idempotent(
         error=None,
     )
 
+    # Phase 5H: append request metadata (best-effort; never affects the
+    # response). Metadata only — no raw input, no key material.
+    _record_request_metadata(
+        admitted_ctx,
+        http_status=transport_status,
+        api_status=content.get("api_status"),
+        reason_code=(content.get("reason_codes") or [None])[0]
+        if isinstance(content.get("reason_codes"), list)
+        else None,
+        request_id=content.get("request_id") or rid,
+        duration_ms=duration_ms,
+    )
+
     # Phase 5C: record the terminal envelope for future replays.
     if idem_key:
         try:
@@ -929,6 +960,43 @@ def _process_v1_idempotent(
         content=content,
         headers=headers,
     )
+
+
+def _record_request_metadata(
+    admitted_ctx: Optional[tuple],
+    *,
+    http_status: int,
+    api_status: Optional[str],
+    reason_code: Optional[str],
+    request_id: Optional[str],
+    duration_ms: Optional[int],
+) -> None:
+    """Phase 5H: best-effort request-metadata append after a terminal outcome.
+
+    ``admitted_ctx`` is the (TenantContext, key_prefix) captured at
+    admission; None (auth failures / metering-down) records nothing —
+    there is no tenant to attribute to, and attribution is never guessed.
+    Observability must never alter the response path: every failure mode
+    here is logged and swallowed by the store layer by design.
+    """
+    if admitted_ctx is None:
+        return
+    ctx, key_prefix = admitted_ctx
+    try:
+        from backend.auth import request_log
+
+        request_log.record_request(
+            tenant_id=ctx.tenant_id,
+            endpoint="/v1/process",
+            http_status=http_status,
+            request_id=request_id,
+            key_prefix=key_prefix,
+            api_status=api_status,
+            reason_code=reason_code,
+            duration_ms=duration_ms,
+        )
+    except Exception:  # pragma: no cover — belt and braces; store swallows too
+        logger.debug("request metadata append skipped")
 
 
 def _resolve_idempotency_tenant(request: Request) -> Optional[str]:

@@ -129,6 +129,12 @@ def create_app() -> FastAPI:
     from api.routes import developer_keys
 
     app.include_router(developer_keys.router)
+    # Phase 5H: developer usage + request observability (read-only).
+    # Zero data-plane quota for reads; two-plane authorization identical
+    # to Phase 5G; retention semantics documented, never faked.
+    from api.routes import observability
+
+    app.include_router(observability.router)
     # Phase 15: deterministic malformed-request normalization for /v1 only
     # (400 instead of the framework-default 422 for parsing/validation
     # failures). Browser-facing /api/v1 keeps its documented behavior.

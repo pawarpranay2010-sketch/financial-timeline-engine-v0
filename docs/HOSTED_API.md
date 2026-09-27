@@ -679,6 +679,62 @@ UI yet (the frontend placeholder is still honest); no per-key quota override at
 creation (defaults apply); `last_used_at` is derived lazily from the runtime
 metering row, not written on the hot path.
 
+## Developer usage & request observability (Phase 5H)
+
+Read-only visibility over data that already exists durably. Three views,
+no analytics platform, no new quota behavior. **Every read consumes zero
+data-plane quota** and never touches the kernel, the model, or grounding.
+
+### Endpoints
+
+- `GET /v1/usage` — **data plane** (`X-Platrixa-API-Key`). The authenticated
+  key's own current month bucket: `month`, `monthly_limit`, `used`,
+  `remaining = max(limit - used, 0)`, `last_request_at` (null until the first
+  admitted request — never invented). Pure projection of the metering row;
+  `resolve_tenant` only, `reserve_unit` never called.
+- `GET /v1/developer/api-keys/{key_id}/usage` — **management plane**. Per-key
+  context plus the tenant usage aggregate. Exposes only the masked
+  `key_prefix`; never the hash or raw key. Cross-tenant key → 404.
+- `GET /v1/developer/usage` — **management plane**. Tenant-wide aggregate
+  across the tenant's active credentials (sum of per-credential buckets).
+- `GET /v1/developer/requests?limit&offset` — **management plane**.
+  Tenant-scoped request metadata index, deterministic order
+  (`created_at DESC, id DESC`), paginated (limit ≤ 200). Fields:
+  `request_id`, `created_at`, `endpoint`, masked `key_prefix`,
+  `http_status`, `api_status`, `reason_code`, `capability_id` (only when
+  the engine reported one — currently always null; never invented),
+  `duration_ms`. **No raw financial payload appears in the index.**
+- `GET /v1/developer/requests/{request_id}` — **management plane**.
+  Metadata always. The result envelope is included ONLY when a durable
+  snapshot exists (requests sent with an `Idempotency-Key` within the
+  Phase 5C retention window). The response states `result.available` and
+  `result.source` explicitly — metadata-only is an honest outcome, not an
+  error.
+
+### Retention (explicit, not faked)
+
+| Data | Window |
+|---|---|
+| Usage counters | current UTC month bucket (resets monthly — Phase 16) |
+| Request metadata (`platrixa_request_log`) | operator-pruned; default 30 days (`PLATRIXA_REQUEST_LOG_RETENTION_DAYS`); pruning is explicit (`backend.auth.request_log.prune_older_than`), never silent |
+| Result snapshots | Phase 5C idempotency retention (72h) — unchanged |
+| Async job/result retention | Phase 5E store — unchanged |
+
+This is NOT a permanent audit log. No claim of indefinite retention is made.
+
+### Errors (existing envelope)
+
+`503 USAGE_NOT_CONFIGURED` (zero-config deployments — honest) ·
+`503 USAGE_UNAVAILABLE` / `503 REQUEST_HISTORY_UNAVAILABLE` (store down —
+fail closed, no partial data) · `404 REQUEST_NOT_FOUND` (unknown **and**
+cross-tenant request ids are indistinguishable) · `400 INPUT_INVALID`
+(bad pagination). Auth failures reuse the existing `401`/`403` mappings.
+
+Writes: the request log is **append-only** and records metadata only — no
+raw input, no key material, no model prompts. A request-log outage never
+affects the validation response path (logged and skipped), while every read
+path fails closed.
+
 ## Async documents (Phase 5E)
 
 Asynchronous document processing reuses the ENTIRE existing document
