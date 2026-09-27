@@ -48,6 +48,34 @@ configured the proxy fails closed with a structured
 `503 BACKEND_NOT_CONFIGURED` envelope, and the UI shows a connection state —
 it never substitutes mock data for a live failure.
 
+## Production: Cloudflare Pages (static export + existing Pages Functions)
+
+On Cloudflare Pages the frontend is a **static export** of this app; the
+server-side API boundary is the EXISTING Pages Functions
+(`frontend/functions/api/[[path]].js` and `frontend/functions/v1/[[path]].js`),
+which forward same-origin `/api/*` and `/v1/*` requests to the FastAPI host
+configured in the Pages environment variable `API_BACKEND_URL`:
+
+```
+Browser (same-origin /api/*, /v1/*)
+   ↓
+Cloudflare Pages static app (frontend/web: build:pages → out/)
+   ↓
+Cloudflare Pages Functions (functions/api/[[path]].js, functions/v1/[[path]].js)
+   ↓
+FastAPI (API_BACKEND_URL, e.g. the Render host)
+   ↓
+Platrixa deterministic authorities
+```
+
+Build command: `npm run build:pages` (inside `frontend/web` as the Pages build
+root) — static export to `out/` + Functions copied in. Next.js route handlers
+cannot be statically exported, so the Node proxy handlers are excluded from
+this one build only; the managed dev/preview build (`npm run build`) still
+includes them. The Functions add no credentials — the operator configures
+backend authentication (zero-config or tenant-gate mode) on the backend itself,
+and `API_BACKEND_URL` is set in the Pages dashboard, never in source code.
+
 ## Environment variables
 
 | Variable | Side | Purpose |
@@ -57,6 +85,12 @@ it never substitutes mock data for a live failure.
 
 No secrets appear in the client bundle: both variables are read exclusively
 inside Node route handlers.
+
+### Production (Cloudflare Pages)
+
+| Variable | Side | Purpose |
+|---|---|---|
+| `API_BACKEND_URL` | Pages project env | FastAPI base URL the Pages Functions forward `/api/*` and `/v1/*` to (set in the Pages dashboard, never committed) |
 
 ## Status semantics
 
