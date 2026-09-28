@@ -1,0 +1,160 @@
+{
+  "phase": "H",
+  "artifact": "phase_h_v01_dev_evaluation",
+  "state": "EVALUATION_COMPLETE_NOT_PROMOTED",
+  "promotion_status": "NOT_PROMOTED",
+  "retrain_status": "DO_NOT_RETRAIN",
+  "report_recorded_utc": "2026-09-28",
+  "scope_note": "Durable record of a completed frozen DEV evaluation executed on the Colab GPU host. Raw evaluation artifacts (predictions/report/checkpoint and the two evaluator scripts) are NOT yet in this repository; see artifacts.not_in_repository.",
+
+  "training_artifact": {
+    "kind": "broader financial-semantic LoRA (explicitly NOT FYJC-only)",
+    "base_model_id": "Qwen/Qwen2.5-1.5B-Instruct",
+    "base_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "adapter_path_in_training_env": "/content/drive/MyDrive/platrixa/phase_h_output",
+    "dataset_name": "phase_h_v01_8000",
+    "dataset_sha256": "5c56b373537c982d3784452a67f01d173fa390e093978e46df4788e3048d1f29",
+    "dataset_rows": 8000,
+    "split": {
+      "train": 6856,
+      "dev": 1144
+    },
+    "hyperparameters": {
+      "epochs": 3,
+      "lora_r": 16,
+      "lora_alpha": 32,
+      "per_device_train_batch_size": 2,
+      "gradient_accumulation_steps": 4,
+      "effective_batch_size": 8,
+      "precision": "fp16",
+      "final_train_loss": 0.00531427,
+      "final_eval_loss": 0.00065822
+    }
+  },
+
+  "evaluation_protocol": {
+    "dataset_sha256": "5c56b373537c982d3784452a67f01d173fa390e093978e46df4788e3048d1f29",
+    "dataset_sha_matches_training_dataset": true,
+    "frozen_examples": 1144,
+    "batch_size": 16,
+    "max_new_tokens": 394,
+    "gpu": "Tesla T4",
+    "base_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "adapter": "Phase H local adapter",
+    "decoding": "as-run in the evaluation environment (not re-executed in this repository)",
+    "examples_completed": 1144,
+    "completion": "1144/1144",
+    "runtime": "~37m05s"
+  },
+
+  "metrics": {
+    "json_validity_pct": 98.25,
+    "exact_18_field_schema_pct": 87.24,
+    "transaction_type_pct": 80.86,
+    "parties_pct": 92.31,
+    "amounts_pct": 88.90,
+    "payment_method_pct": 90.03,
+    "grounding_pct": 62.67,
+    "suggested_status_pct": 90.38,
+    "leakage_free_pct": 99.91,
+    "accounting_leakage_count": 1
+  },
+
+  "performance": {
+    "mean_latency_s_per_example": 1.9448,
+    "p50_latency_s": 1.9277,
+    "p95_latency_s": 1.9807,
+    "throughput_examples_per_s": 0.5142
+  },
+
+  "canonical_18_field_contract": {
+    "note": "Unchanged by Phase H. Listed in the canonical repository order from backend/maths/fyjc_contract.ALL_VALID_FIELDS (18 entries, verified in-repo).",
+    "fields_repo_canonical_order": [
+      "parties",
+      "ambiguity_flags",
+      "overall_confidence",
+      "referenced_transaction_index",
+      "referenced_amount",
+      "suggested_status",
+      "safety_flags",
+      "references",
+      "field_confidences",
+      "payment_method_enum",
+      "transaction_type_enum",
+      "referenced_party",
+      "transaction_type",
+      "amounts",
+      "ambiguities",
+      "grounding",
+      "payment_method",
+      "scope_flags"
+    ]
+  },
+
+  "artifacts": {
+    "produced_in_evaluation_environment": [
+      "phase_h_dev_predictions.jsonl (1144 predictions)",
+      "phase_h_dev_final_report.json",
+      "phase_h_dev_checkpoint.json",
+      "phase_h_v01_dev_evaluate.py",
+      "phase_h_v01_dev_evaluate_resumable.py"
+    ],
+    "not_in_repository": true,
+    "retrieval_required_before_failure_analysis": true,
+    "not_in_repository_note": "The 1 accounting-leakage case and the grounding failures cannot be analysed from this repository until phase_h_dev_predictions.jsonl is retrieved. This report records outcomes; it does not substitute for the prediction-level evidence."
+  },
+
+  "excluded_from_this_report": {
+    "path": "training_data/eval_20260828_092036.jsonl",
+    "reason": "Independently verified to be a ZERO-BYTE file (sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855, the digest of empty input). It contains 0 records and is NOT the 1144-example Phase H DEV evaluation. It was deliberately not used as evidence and is left untouched."
+  },
+
+  "interpretation": {
+    "headline": "Evaluation is COMPLETE. Phase H is NOT promoted.",
+    "concerns": [
+      {
+        "rank": 1,
+        "concern": "Grounding is only 62.67%",
+        "detail": "Lowest quality metric by a wide margin (36.33 points below the next-worst metric, transaction_type at 80.86%). Grounding is a fail-closed gate in the production path, so this is the blocking concern for any promotion decision."
+      },
+      {
+        "rank": 2,
+        "concern": "Exact 18-field schema 87.24% with JSON validity 98.25%",
+        "detail": "A ~11 point gap between 'parses as JSON' and 'carries exactly the 18 contract fields' means roughly 1 in 8 otherwise-valid outputs is missing or has extra fields. The production schema verifier would reject these."
+      },
+      {
+        "rank": 3,
+        "concern": "Exactly 1 accounting-leakage case must be investigated",
+        "detail": "Leakage-free is otherwise 99.91% (1143/1144). A single leak is still a real, must-understand occurrence and is treated as a required investigation item, not a rounding error."
+      }
+    ],
+    "acceptable_for_now": [
+      "Performance is usable at ~1.94 s/example on a T4 (P95 1.98 s, throughput 0.5142 ex/s).",
+      "Parties (92.31%), amounts (88.90%) and payment_method (90.03%) are comparatively strong."
+    ],
+    "explicit_non_conclusions": [
+      "DO NOT retrain yet.",
+      "DO NOT treat the old Phase 6C / FYJC-focused Hugging Face Space as the Phase H production artifact.",
+      "DO NOT interpret Phase H as evidence that Platrixa is FYJC-only; Phase H was explicitly trained broader.",
+      "DO NOT read a 0.00065822 final eval loss as a quality signal; the 62.67% grounding result contradicts any inference that the model is production-ready."
+    ],
+    "next_step": "Failure analysis of the grounding failures and the single accounting-leakage case, followed by the Phase 24 breadth/generalization evaluation."
+  },
+
+  "provenance": {
+    "metrics_source": "Operator-reported results from the Colab GPU evaluation environment. Not re-executed or independently recomputed in this repository.",
+    "independently_verified_in_repository": [
+      "training_data/phase_h_v01_8000.jsonl sha256 == 5c56b373537c982d3784452a67f01d173fa390e093978e46df4788e3048d1f29 and row_count == 8000",
+      "training_data/phase_h_v01_manifest.json sha256 field matches the same dataset digest",
+      "training/phase_h_sft_job.py: BASE_MODEL, BASE_MODEL_REVISION, EPOCHS=3, LORA_R=16, LORA_ALPHA=32, PER_DEVICE_BATCH=2, GRAD_ACCUM=4, FP16=True, TRAIN_COUNT_EXPECTED=6856, VALID_COUNT_EXPECTED=1144",
+      "backend/maths/fyjc_contract.ALL_VALID_FIELDS has exactly 18 entries",
+      "training_data/eval_20260828_092036.jsonl is zero bytes and is not this evaluation"
+    ],
+    "not_verifiable_in_repository": [
+      "Final train/eval loss values",
+      "All quality metrics (JSON validity, 18-field, per-field, leakage)",
+      "Latency and throughput figures",
+      "The existence and content of the 1144 predictions and the evaluator scripts"
+    ]
+  }
+}
