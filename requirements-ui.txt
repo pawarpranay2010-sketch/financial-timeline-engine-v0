@@ -9,4 +9,4 @@
 # Neither package is imported anywhere on the API+kernel path (verified).
 
 streamlit>=1.32
-pandas>=2.0
+pandas>=2.3.3
