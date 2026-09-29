@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Tuple
@@ -138,26 +139,58 @@ def _session_factory():
     A dedicated engine is built lazily per unique URL and cached, so the
     metering gate works even when backend.database.db is not importable
     (no DATABASE_URL) and never touches the application pool.
+
+    BUG FIX (2026-09-29) — the engine cache never hit. The lookup below used
+    the RAW env URL while the entry was STORED under the NORMALIZED URL
+    ("postgresql://…" rewritten to "postgresql+psycopg2://…"), so the two
+    keys could never match. Every call therefore built a brand-new Engine
+    and ConnectionPool that was never reused and never disposed.
+
+    Under concurrent load that is unbounded connection growth: the Phase 16
+    concurrency suite (fte_fyjc_66_metered_gate_test, section H — 40 threads)
+    built 132 engines in one process, exhausted the server's 100-connection
+    cap ("FATAL: sorry, too many clients already"), and the resulting
+    psycopg2.OperationalError surfaced as MeteredGateError — i.e. spurious
+    fail-closed HTTP 503s where the quota contract requires 429.
+
+    It failed SAFE (503 = never admitted, no auth or quota bypass), but it is
+    also an availability amplification: one API key could drive the metering
+    store to sustained 503s. The fix is to normalize the URL BEFORE the cache
+    lookup so the key used for lookup and the key used for storage are the
+    same string. A lock makes the cold-start race safe, so N simultaneous
+    first-calls still build exactly one engine.
     """
     global _session_factory_cache
     url = _metering_database_url()
     if url is None:
         raise MeteredGateError("metering store not configured")
+
+    # Normalize FIRST: the cache key and the engine URL must be the same
+    # string, otherwise the lookup below can never match what we store.
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
     cached = _session_factory_cache.get(url)
     if cached is not None:
         return cached
+
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    engine = create_engine(url, pool_pre_ping=True, future=True)
-    factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    _session_factory_cache[url] = factory
-    return factory
+    with _session_factory_lock:
+        # Re-check under the lock: concurrent cold-start callers must not
+        # each construct their own engine.
+        cached = _session_factory_cache.get(url)
+        if cached is not None:
+            return cached
+        engine = create_engine(url, pool_pre_ping=True, future=True)
+        factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        _session_factory_cache[url] = factory
+        return factory
 
 
 _session_factory_cache: dict = {}
+_session_factory_lock = threading.Lock()
 
 
 def _metering_configured() -> bool:
