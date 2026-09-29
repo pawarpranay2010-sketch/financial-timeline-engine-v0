@@ -46,33 +46,66 @@ are git-ignored.
   (or run `python backend/database/init_db.py` on the server).
   The app starts fine without it — the API only needs the DB when serving data.
 
-## Static frontend
+## Static frontend (legacy reference UI)
 
-Already configured: `api/main.py` mounts `frontend/` as static files at `/`.
-No build step, no Node toolchain required.
+`api/main.py` mounts `frontend/` as static files at `/`. This is the
+**legacy** single-page app (`index.html` + `app.js` + `styles.css`); it needs
+no build step and no Node toolchain, and it stays a working fallback.
+
+It is NOT the current product surface. The current front-end is the Next.js 16
+app in `frontend/web/` (home, /validate, /capabilities, /trust, /console,
+/developer). Serving the V2 app as the main page is a **Cloudflare Pages
+project setting**, not a code change — see below.
 
 ## Cloudflare Pages frontend → FastAPI backend (Phase 7I)
 
 The production frontend is served from Cloudflare Pages while FastAPI runs
-as a separate long-running service (Render/Railway, see below). Two supported
-ways to wire them:
+as a separate long-running service (Render/Railway, see below).
 
-1. **Pages proxy (recommended)** — `frontend/functions/api/[[path]].js`
-   (in this repo) proxies every `/api/*` request to the FastAPI host. It
-   must live inside the Pages **build output directory** (`frontend/`),
-   because Cloudflare only discovers Functions there. Set the Pages
-   environment variable:
+### Production Pages configuration (V2 app — current)
 
-       API_BACKEND_URL=https://<your-fastapi-host>
+This is the configuration that serves the **V2 app as the main page**:
 
-   The frontend keeps its same-origin API base (`/api/v1/kernel/process`).
-   Without `API_BACKEND_URL` the proxy returns an explicit 502
-   `backend_not_configured` instead of Cloudflare's generic 405.
+| Pages setting | Value |
+|---|---|
+| Build root directory | `frontend/web` |
+| Build command | `npm run build:pages` |
+| Build output directory | `out` |
+| Environment variable | `API_BACKEND_URL=https://<your-fastapi-host>` |
 
-2. **Direct base override** — inject before `app.js` loads (e.g. in
-   `frontend/index.html` or at deploy time):
+`npm run build:pages` (see `frontend/web/scripts/build-pages.mjs`) statically
+exports the Next.js app to `out/` and then copies `frontend/functions/` into
+`out/functions/`. Cloudflare only discovers Pages Functions inside the build
+output directory, so the copy is what makes the API boundary work from the
+V2 artifact. The two Node route handlers that cannot be statically exported
+are excluded from this one build only and are always restored afterwards; the
+managed dev/preview build (`npm run build`) still includes them.
 
-       <script>window.PLATRIXA_API_BASE="https://<your-fastapi-host>";</script>
+Verified locally: `npm run lint`, `npx tsc --noEmit` (run AFTER a build, since
+`LayoutProps` is a Next-generated global from `.next/types`) and
+`npm run build:pages` all succeed; all seven routes prerender static and both
+Functions are present in the artifact.
+
+If the Pages project is still pointed at `frontend/` it is serving the
+**legacy** UI. That is the single setting that decides which page is public.
+
+### API boundary (unchanged for both surfaces)
+
+`frontend/functions/api/[[path]].js` and `frontend/functions/v1/[[path]].js`
+proxy every `/api/*` and `/v1/*` request to the FastAPI host, so the browser
+keeps a same-origin API base (`/api/v1/kernel/process`). Set:
+
+    API_BACKEND_URL=https://<your-fastapi-host>
+
+Without it the proxy returns an explicit 502 `backend_not_configured`
+instead of Cloudflare's generic 405. The Functions add no credentials — the
+operator configures backend authentication on the backend itself.
+
+### Direct base override (legacy app only)
+
+Inject before `app.js` loads (e.g. in `frontend/index.html` or at deploy time):
+
+    <script>window.PLATRIXA_API_BASE="https://<your-fastapi-host>";</script>
 
 Never hardcode a backend URL in committed frontend code; the FastAPI host
 is deployment configuration owned by the environment.
