@@ -7,8 +7,35 @@ WHY THIS EXISTS
 Render Free (512 MB RAM) cannot load Qwen2.5-1.5B-Instruct: every production
 load attempt is killed by the platform after ~75–96 s (Phase 7R audit, 6/6
 reproductions). This service hosts the EXACT Phase 6C model artifact on a
-Modal serverless GPU container and exposes a minimal HTTP contract to the
+Modal serverless container and exposes a minimal HTTP contract to the
 existing Platrixa ModelProvider boundary.
+
+RESOURCE SPLIT (2026-09-29)
+---------------------------
+Normal inference runs on CPU. GPU (T4) is reserved for training and
+GPU-heavy evaluation, which live in `training/run_modal.py`.
+
+    PLATRIXA_MODEL_RESOURCE   "cpu" (DEFAULT) | "gpu"
+    PLATRIXA_MODEL_GPU        GPU class, used only when resource == "gpu"
+                              (default "T4")
+    PLATRIXA_MODAL_GPU        deprecated alias for PLATRIXA_MODEL_GPU
+
+An unrecognised value is a hard configuration error at import time. There is
+NO CPU -> GPU fallback: a CPU container that cannot serve fails closed with
+503 MODEL_UNAVAILABLE, exactly like an adapter that fails to load.
+
+The resolution rules live in `training/modal_resources.py`, which imports no
+Modal code and is unit-tested in `scripts/fte_modal_resource_profile_test.py`.
+
+    modal deploy training/modal_inference.py          # CPU (default)
+    PLATRIXA_MODEL_RESOURCE=gpu modal deploy training/modal_inference.py
+
+CAPACITY HONESTY NOTE: the CPU profile's CPU/memory values are derived from
+parameter-count arithmetic (see `training/modal_resources.py`), NOT measured.
+No CPU Modal runtime was available when this split was made, so NO latency,
+throughput, or memory-headroom figure is claimed. The resource profile changes
+only WHERE the model runs — never the model, the adapter, the prompt, the
+18-field contract, grounding, authority routing, or VERIFIED semantics.
 
 Architecture position (nothing downstream changes):
 
@@ -81,6 +108,11 @@ from typing import Any, Dict, Optional, Tuple
 
 import modal
 
+try:
+    from training.modal_resources import resolve_inference_profile
+except ImportError:  # running the file directly (`modal deploy training/...`)
+    from modal_resources import resolve_inference_profile
+
 # ---------------------------------------------------------------------------
 # Locked model artifacts (mirrors backend/model_provider/base.py pins)
 # ---------------------------------------------------------------------------
@@ -110,10 +142,25 @@ INFERENCE_PACKAGES = [
     "uvicorn>=0.30",
 ]
 
-# T4 (16 GB) is the cheapest GPU class that comfortably holds the 1.5B model
-# in fp16/bf16 (~3.5 GB weights) with KV cache and PEFT overhead. The adapter
-# itself adds only tens of MB.
-_GPU = os.environ.get("PLATRIXA_MODAL_GPU", "T4")
+# RESOURCE SELECTION (2026-09-29) — the default is now CPU.
+#
+# Previously this module always requested a GPU:
+#     _GPU = os.environ.get("PLATRIXA_MODAL_GPU", "T4")
+# so every ordinary production interpretation consumed a T4. Resource
+# selection is now explicit and lives in training/modal_resources.py:
+#
+#     NORMAL INFERENCE   -> CPU  (PLATRIXA_MODEL_RESOURCE, default "cpu")
+#     TRAINING / GPU EVAL -> T4  (training/run_modal.py, never inferred)
+#
+# There is deliberately NO CPU -> GPU fallback. If a CPU container cannot
+# serve a request it fails closed with 503 MODEL_UNAVAILABLE, the same path
+# already used for an adapter that fails to load. Silently escalating to a
+# billable accelerator would make cost and capacity non-deterministic.
+#
+# GPU NOTE: T4 (16 GB) remains the cheapest class that comfortably holds the
+# 1.5B model in bf16 (~3.1 GB weights) with KV cache and PEFT overhead. The
+# adapter itself adds only tens of MB. The GPU path is UNCHANGED.
+_PROFILE = resolve_inference_profile()
 
 # Generation parameters mirror the LocalHF provider defaults.
 MAX_NEW_TOKENS = 512
@@ -223,6 +270,13 @@ def extract_json_candidate(raw_response: str) -> Optional[Dict[str, Any]]:
 
 @app.cls(
     image=image,
+    # None on the CPU profile: no accelerator is requested, so no accelerator
+    # is ever allocated. T4 (or an explicit override) only when GPU is asked
+    # for via PLATRIXA_MODEL_RESOURCE=gpu.
+    gpu=_PROFILE.modal_gpu_arg(),
+    cpu=_PROFILE.cpu,
+    memory=_PROFILE.memory_mb,
+    volumes={"/root/.cache/huggingface": HF_CACHE_VOL},
     # The LoRA adapter (Pranay-20/platrixa-financial-semantic-v0.1) is a
     # PRIVATE Hugging Face repo, so a cold container cannot pull it without
     # credentials and the adapter load would fail closed (503). The base
@@ -231,14 +285,22 @@ def extract_json_candidate(raw_response: str) -> Optional[Dict[str, Any]]:
     # the container (same mechanism as training/run_modal.py). It is never
     # written into this file, the image, or any response body.
     secrets=[modal.Secret.from_name("hf-token")],
-    gpu=_GPU,
-    volumes={"/root/.cache/huggingface": HF_CACHE_VOL},
     timeout=300,
     startup_timeout=900,   # first-ever start downloads ~3 GB into the volume
     scaledown_window=600,  # keep a warm container for 10 min between requests
+    # Scale to zero. There is deliberately no always-on worker: a CPU
+    # inference service that idles at zero containers costs nothing, and a
+    # GPU profile must never leave a billable accelerator running.
+    min_containers=0,
 )
 class PlatrixaModelInference:
-    """Stateful GPU container holding the pinned Qwen + LoRA artifact."""
+    """Stateful container holding the pinned Qwen + LoRA artifact.
+
+    Runs on CPU by default and on a T4 when explicitly configured. The
+    resource profile is infrastructure only — the model, the adapter, the
+    prompt, the 18-field contract and every downstream gate are identical on
+    both paths.
+    """
 
     def __init__(self) -> None:
         self._model: Any = None
@@ -261,24 +323,46 @@ class PlatrixaModelInference:
                 revision=BASE_MODEL_REVISION,
             )
 
+            # Compute dtype follows the RESOURCE PROFILE, not the model.
+            # GPU path is byte-identical to the previous behaviour (bfloat16).
+            # CPU path uses float32: torch bfloat16 on CPU is emulated unless
+            # the host has AVX512-BF16, which is neither fast nor portable.
+            # This is a runtime numeric detail only — same weights, same
+            # adapter, same greedy decoding, same prompt, same 18-field
+            # contract. CPU-vs-GPU output parity has NOT been benchmarked.
+            target_dtype = {
+                "bfloat16": torch.bfloat16,
+                "float32": torch.float32,
+            }[_PROFILE.dtype]
+
             # transformers 5.x may accept `dtype` instead of `torch_dtype`;
             # try the legacy kwarg first, then the new one.
             load_kwargs: Dict[str, Any] = {
                 "revision": BASE_MODEL_REVISION,
-                "device_map": "auto",
             }
+            if _PROFILE.is_cpu:
+                # No accelerate device_map on CPU: with a single visible
+                # device it installs sharding/dispatch machinery that buys
+                # nothing and measurably slows CPU inference.
+                load_kwargs["device_map"] = None
+            else:
+                load_kwargs["device_map"] = "auto"
+
             try:
                 self._model = AutoModelForCausalLM.from_pretrained(
                     BASE_MODEL_ID,
-                    torch_dtype=torch.bfloat16,
+                    torch_dtype=target_dtype,
                     **load_kwargs,
                 )
             except TypeError:
                 self._model = AutoModelForCausalLM.from_pretrained(
                     BASE_MODEL_ID,
-                    dtype=torch.bfloat16,
+                    dtype=target_dtype,
                     **load_kwargs,
                 )
+
+            if _PROFILE.is_cpu:
+                self._model.to("cpu")
 
             # Attach the pinned Platrixa LoRA adapter.
             #
@@ -326,7 +410,15 @@ class PlatrixaModelInference:
             "model_loaded": self._model_loaded,
             "adapter_loaded": self._adapter_loaded,
             "error": self._load_error,
+            # Resource shape, non-secret. Lets an operator confirm which
+            # profile this deployment actually resolved to. Carries no
+            # endpoint, token, or credential.
+            "resource": _PROFILE.as_public_dict(),
         }
+
+    def resource_profile(self) -> Dict[str, Any]:
+        """The resolved resource profile (cpu/gpu, capacity, dtype)."""
+        return _PROFILE.as_public_dict()
 
     def _is_ready(self) -> bool:
         return self._model_loaded and self._adapter_loaded

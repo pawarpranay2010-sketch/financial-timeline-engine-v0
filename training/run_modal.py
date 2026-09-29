@@ -47,6 +47,26 @@ import sys
 
 import modal
 
+try:
+    from training.modal_resources import resolve_training_profile
+except ImportError:  # run directly from the repo root
+    from modal_resources import resolve_training_profile
+
+# TRAINING / GPU EVALUATION IS EXPLICITLY GPU-BACKED (2026-09-29).
+#
+# The inference service now defaults to CPU. Training deliberately does NOT
+# follow that default: the SFT job's hyperparameters, dataset and memory
+# envelope were established against a T4, and there is no CPU training path.
+#
+# `resolve_training_profile()` therefore always returns a GPU profile, keeps
+# the pre-existing T4 requirement, and raises ResourceConfigurationError if
+# someone sets PLATRIXA_MODEL_RESOURCE=cpu rather than silently training on a
+# CPU. There is no inference of the requirement from the inference selector.
+#
+# cpu/memory are intentionally NOT set, preserving the existing GPU
+# deployment exactly.
+_TRAINING_PROFILE = resolve_training_profile()
+
 PINNED_DEPS = [
     "torch==2.6.0",
     "transformers==5.16.1",
@@ -75,7 +95,9 @@ image = (
 
 @app.function(
     image=image,
-    gpu="T4",                 # 16 GB VRAM — fp16 LoRA needs ~5-6 GB
+    # 16 GB VRAM — fp16 LoRA needs ~5-6 GB. T4 by default; overridable with
+    # PLATRIXA_MODEL_GPU. Never CPU, never inferred.
+    gpu=_TRAINING_PROFILE.modal_gpu_arg(),
     timeout=7200,             # 2h cap; Modal allows up to 24h
     ephemeral_disk=524288,        # MiB — model weights + HF cache + outputs
     secrets=[modal.Secret.from_name("hf-token")],

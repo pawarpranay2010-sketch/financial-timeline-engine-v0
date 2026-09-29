@@ -154,6 +154,62 @@ Edit `training/config.yaml` to change:
 All configuration is provider-independent. No Colab, Kaggle, or
 Google Drive paths.
 
+## Modal resource split: CPU inference, GPU training
+
+Normal production interpretation runs on a **CPU** container. A **T4 GPU** is
+reserved for training and GPU-heavy evaluation. This split is explicit — there
+is no automatic CPU→GPU failover, and normal inference never silently
+escalates to a billable accelerator.
+
+| Workload | Entry point | Resource | Selected by |
+|---|---|---|---|
+| Normal inference | `training/modal_inference.py` | **CPU (default)** | `PLATRIXA_MODEL_RESOURCE` unset or `cpu` |
+| Training / GPU eval | `training/run_modal.py` | **T4** | always GPU; refuses `cpu` |
+
+### Environment variables
+
+```bash
+# Normal inference (default) — CPU, 4 vCPU / 12 GiB, scales to zero
+modal deploy training/modal_inference.py
+
+# Inference on a GPU (must be explicit)
+PLATRIXA_MODEL_RESOURCE=gpu modal deploy training/modal_inference.py
+
+# Optional GPU class override (default T4)
+PLATRIXA_MODEL_RESOURCE=gpu PLATRIXA_MODEL_GPU=A10G modal deploy training/modal_inference.py
+
+# Training always runs on a GPU
+modal run training/run_modal.py
+```
+
+- `PLATRIXA_MODEL_RESOURCE` — `cpu` (default) or `gpu`. Anything else is a hard
+  configuration error at deploy time; it never falls back to a GPU.
+- `PLATRIXA_MODEL_GPU` — GPU class, used **only** when the resource is `gpu`.
+  Default `T4`.
+- `PLATRIXA_MODAL_GPU` — deprecated alias for `PLATRIXA_MODEL_GPU`, still read.
+
+**Behaviour change to be aware of:** before this split, a deployment that set
+only `PLATRIXA_MODAL_GPU=T4` got a GPU. A GPU *inference* deployment must now
+also set `PLATRIXA_MODEL_RESOURCE=gpu`. Training is unaffected.
+
+Resolution rules live in `training/modal_resources.py` (no Modal import, unit
+testable) and are covered by `scripts/fte_modal_resource_profile_test.py`.
+
+### What this does and does not change
+
+The resource profile is **infrastructure only**. It changes *where* the model
+runs. It does not change the base model revision, the adapter revision, the
+Alpaca prompt, the 18-field `CandidateSemanticIR` contract, grounding,
+authority routing, or `VERIFIED` semantics. The GPU path is byte-identical to
+the previous behaviour, including its dtype and resource arguments.
+
+The CPU profile's CPU/memory values are derived from parameter-count arithmetic,
+**not measured** — no CPU Modal runtime was benchmarked, so no latency or
+throughput figure is claimed. The CPU path loads in fp32 (torch bfloat16 on
+CPU is emulated unless the host has AVX512-BF16); that is a runtime numeric
+detail, and CPU-vs-GPU output parity against the Phase 6C evaluation has not
+been measured.
+
 ## Connecting to Platrixa
 
 After training:
