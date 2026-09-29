@@ -27,7 +27,7 @@ groq>=0.4.0
 
 # Developer-facing regression suites (fte_*) use TestClient + embedded PG:
 httpx>=0.27
-pgserver>=0.1 ; sys_platform != "win32"
+pgserver>=0.1.4 ; sys_platform != "win32"
 
 # Authenticated encryption for webhook signing-secret sealing (audit M-03).
 # AES-256-GCM + HKDF-SHA256. See requirements.txt for the rationale.
