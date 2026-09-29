@@ -223,6 +223,14 @@ def extract_json_candidate(raw_response: str) -> Optional[Dict[str, Any]]:
 
 @app.cls(
     image=image,
+    # The LoRA adapter (Pranay-20/platrixa-financial-semantic-v0.1) is a
+    # PRIVATE Hugging Face repo, so a cold container cannot pull it without
+    # credentials and the adapter load would fail closed (503). The base
+    # model Qwen2.5-1.5B-Instruct is public; only the adapter needs this.
+    # The token lives in a Modal secret and is injected as HF_TOKEN inside
+    # the container (same mechanism as training/run_modal.py). It is never
+    # written into this file, the image, or any response body.
+    secrets=[modal.Secret.from_name("hf-token")],
     gpu=_GPU,
     volumes={"/root/.cache/huggingface": HF_CACHE_VOL},
     timeout=300,
