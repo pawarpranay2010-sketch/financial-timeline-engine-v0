@@ -316,13 +316,23 @@ r_i2 = gate.ground(interp_i2, "Test input.")
 _check("I2: Non-integer reference rejected", not r_i2.grounded)
 
 # I3: Valid reference index (with grounded data)
+#
+# FIXTURE CORRECTION (security hardening 2026-09-29): the source text was
+# "Paid Amit Rs.10000 cash." while the candidate claims
+# transaction_type_enum="PURCHASE". That is internally inconsistent — no
+# purchase keyword appears in the text. The assertion below passed only
+# because the grounding gate failed OPEN on an unverifiable transaction
+# type (audit M-01). The text now says "Purchased", keeping the candidate,
+# parties, amount, payment method and reference index identical so this
+# test still exercises exactly what it claims: that a VALID reference
+# index is accepted.
 interp_i3 = _make_interp(
     parties=["Amit"],
     amounts=[{"value": "10000", "currency": "INR", "source": "explicit"}],
     payment_method_enum="CASH", payment_method="CASH",
     referenced_transaction_index=0,
 )
-r_i3 = gate.ground(interp_i3, "Paid Amit Rs.10000 cash.")
+r_i3 = gate.ground(interp_i3, "Purchased from Amit Rs.10000 cash.")
 _check("I3: Valid reference index accepted", r_i3.grounded, r_i3.summary)
 
 

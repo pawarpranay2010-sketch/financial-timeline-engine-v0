@@ -6,9 +6,12 @@ initialization, or Redis. No heavy module is imported at module scope.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("platrixa.api")
 
 APP_STARTED_AT = time.monotonic()
 
@@ -72,10 +75,19 @@ def database_status() -> Dict[str, Any]:
             conn.execute(text("SELECT 1"))
         return {"configured": True, "reachable": True, "error": None}
     except Exception as exc:
+        # SECURITY (audit M-04, 2026-09-29): this value is served by the
+        # PUBLIC /api/v1/health route (render.yaml healthCheckPath). The raw
+        # driver message disclosed the database driver, the connection
+        # configuration and the failing SQLAlchemy operation — e.g.
+        # "OperationalError: (psycopg2.OperationalError) invalid sslmode
+        # value: \"required\"". Only the exception TYPE is returned now;
+        # the full text is written to the server log instead.
+        logger.warning("database health probe failed: %s: %s",
+                       type(exc).__name__, exc, extra={"redact": False})
         return {
             "configured": True,
             "reachable": False,
-            "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+            "error": f"database probe failed ({type(exc).__name__})",
         }
 
 

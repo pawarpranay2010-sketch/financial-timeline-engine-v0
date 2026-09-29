@@ -39,6 +39,7 @@ Security boundary (mirrors backend.auth.gate / idempotency):
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -104,6 +105,16 @@ def webhook_signing_configured() -> bool:
 
 
 def _seal_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    """LEGACY v1 keystream — RETAINED FOR REFERENCE ONLY.
+
+    Security hardening (audit M-03, 2026-09-29): this SHA256 counter-mode
+    XOR keystream is UNAUTHENTICATED. It is malleable — flipping bit n of
+    the ciphertext flips bit n of the plaintext — and unsealing detects
+    nothing. It is no longer used to protect webhook signing secrets.
+
+    Kept ONLY so the v1 refusal path is readable and testable. Do not use
+    it for new data.
+    """
     out = bytearray()
     counter = 0
     while len(out) < length:
@@ -115,33 +126,100 @@ def _seal_keystream(key: bytes, nonce: bytes, length: int) -> bytes:
     return bytes(out[:length])
 
 
-def seal_webhook_secret(plain: str) -> str:
-    """Seal a webhook signing secret for at-rest storage."""
-    key = (os.getenv(WEBHOOK_SEALING_ENV_VAR, "") or "").strip()
-    if not key:
+_SEAL_VERSION = "v2"
+
+
+def _seal_key() -> bytes:
+    """Derive a 32-byte AES key from the configured signing key.
+
+    The configured value is an arbitrary operator string, not a 32-byte
+    key, so it is stretched with HKDF-SHA256 into a fixed-length key. HKDF
+    is a standard primitive from the ``cryptography`` library; this
+    repository does not implement a custom KDF.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    raw = (os.getenv(WEBHOOK_SEALING_ENV_VAR, "") or "").strip()
+    if not raw:
         raise AsyncStoreUnavailableError("webhook signing key not configured")
-    nonce = secrets.token_bytes(16)
-    data = plain.encode("utf-8")
-    stream = _seal_keystream(key.encode("utf-8"), nonce, len(data))
-    ct = bytes(a ^ b for a, b in zip(data, stream))
-    return f"v1:{nonce.hex()}:{ct.hex()}"
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"platrixa-webhook-secret-seal-v2",
+    ).derive(raw.encode("utf-8"))
+
+
+def seal_webhook_secret(plain: str) -> str:
+    """
+    Seal a webhook signing secret for at-rest storage.
+
+    Uses AES-256-GCM (an AEAD): the ciphertext carries an authentication
+    tag, so any modification is detected BEFORE the plaintext is accepted.
+    Format: ``v2:<base64url(nonce || ciphertext || tag)>``.
+
+    Replaces the unauthenticated XOR scheme of audit M-03, where a one-bit
+    ciphertext edit yielded a well-formed but wrong signing secret.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = _seal_key()
+    nonce = secrets.token_bytes(12)          # 96-bit nonce, unique per seal
+    blob = nonce + AESGCM(key).encrypt(nonce, plain.encode("utf-8"), None)
+    return f"{_SEAL_VERSION}:{base64.urlsafe_b64encode(blob).decode('ascii')}"
 
 
 def unseal_webhook_secret(sealed: str) -> str:
-    """Recover a sealed webhook signing secret (worker-side signing)."""
-    key = (os.getenv(WEBHOOK_SEALING_ENV_VAR, "") or "").strip()
-    if not key:
-        raise AsyncStoreUnavailableError("webhook signing key not configured")
+    """
+    Recover a sealed webhook signing secret (worker-side signing).
+
+    FAILS CLOSED on a malformed blob, an unsupported version, or a failed
+    AEAD authentication tag (tampered ciphertext).
+
+    MIGRATION NOTE (audit M-03): legacy ``v1`` blobs used an unauthenticated
+    XOR scheme and therefore cannot be verified. They are REFUSED rather
+    than accepted, because accepting them would silently restore the
+    malleability this change removes. A v1 webhook secret must be
+    re-registered (POST /v1/webhook-endpoints) to obtain a v2 seal. The
+    consequence is bounded: webhook DELIVERY is best-effort by design and a
+    refused seal is logged, never raised into the job path.
+    """
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = _seal_key()
     try:
-        version, nonce_hex, ct_hex = sealed.split(":", 2)
-        if version != "v1":
-            raise ValueError("unsupported seal version")
-        nonce = bytes.fromhex(nonce_hex)
-        ct = bytes.fromhex(ct_hex)
+        version, payload = sealed.split(":", 1)
     except Exception as exc:
         raise AsyncStoreUnavailableError("webhook secret seal corrupt") from exc
-    stream = _seal_keystream(key.encode("utf-8"), nonce, len(ct))
-    return bytes(a ^ b for a, b in zip(ct, stream)).decode("utf-8")
+
+    if version != _SEAL_VERSION:
+        if version == "v1":
+            raise AsyncStoreUnavailableError(
+                "legacy v1 webhook secret seal cannot be authenticated; "
+                "re-register the webhook endpoint to migrate to v2"
+            )
+        raise AsyncStoreUnavailableError("unsupported seal version")
+
+    try:
+        blob = base64.urlsafe_b64decode(payload.encode("ascii"))
+    except Exception as exc:
+        raise AsyncStoreUnavailableError("webhook secret seal corrupt") from exc
+
+    if len(blob) < 12:
+        raise AsyncStoreUnavailableError("webhook secret seal corrupt")
+
+    nonce, ct_and_tag = blob[:12], blob[12:]
+    try:
+        return AESGCM(key).decrypt(nonce, ct_and_tag, None).decode("utf-8")
+    except InvalidTag as exc:
+        raise AsyncStoreUnavailableError(
+            "webhook secret seal failed authentication — ciphertext was "
+            "modified or was sealed under a different key"
+        ) from exc
+    except Exception as exc:
+        raise AsyncStoreUnavailableError("webhook secret seal corrupt") from exc
 
 
 # ---------------------------------------------------------------------------

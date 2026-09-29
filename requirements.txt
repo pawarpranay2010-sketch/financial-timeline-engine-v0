@@ -40,4 +40,11 @@ tenacity>=8.2
 
 numpy>=1.26
 
+# Authenticated encryption for webhook signing-secret sealing (audit M-03).
+# AES-256-GCM via cryptography.hazmat.primitives.ciphers.aead.AESGCM, plus
+# HKDF-SHA256 for key derivation. A range is used here to match this
+# project's existing dependency policy; the AEAD API has been stable since
+# cryptography 2.0, and 41.0 is a conservative floor.
+cryptography>=41.0
+
 pytest>=8.0

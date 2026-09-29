@@ -1,12 +1,18 @@
 """Stage 2 — market data endpoints (via Phase 6 DataAgent/ProviderOrchestrator)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 import api.services as svc
+from api.routes._admission import require_api_v1_credential
 from api.schemas import MarketSnapshotResponse
 
-router = APIRouter(tags=["market"])
+# Security hardening (audit H-01, 2026-09-29): these fan out to paid
+# third-party providers and must not be anonymous.
+router = APIRouter(
+    tags=["market"],
+    dependencies=[Depends(require_api_v1_credential)],
+)
 
 
 @router.get("/market/{ticker}", response_model=MarketSnapshotResponse)

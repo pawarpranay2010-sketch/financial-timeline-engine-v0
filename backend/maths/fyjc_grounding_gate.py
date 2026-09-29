@@ -117,47 +117,79 @@ def _text_contains(text: str, candidate: str) -> bool:
     return candidate_norm in text_norm
 
 
+def _numeric_tokens(text: str) -> set:
+    """Every numeric token in ``text``, normalized to a canonical digit string.
+
+    A token is a maximal run of digits (with optional internal thousands
+    separators and an optional decimal part). Normalization drops separators
+    and leading zeros, so "90,000", "₹90000" and "090000" all canonicalize to
+    "90000".
+    """
+    out = set()
+    for match in re.finditer(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        digits = re.sub(r"[^0-9]", "", match.group(0))
+        if digits:
+            out.add(digits.lstrip("0") or "0")
+    return out
+
+
 def _amount_in_text(text: str, amount_value: str) -> bool:
     """Check if a monetary amount is supported by the input text.
 
-    Handles: 25000, 25,000, Rs.25000, ₹25,000, 25k, etc.
+    Handles: 25000, 25,000, Rs.25000, ₹25,000, 25k, 90 thousand, etc.
+
+    SECURITY (audit M-02, 2026-09-29)
+    ---------------------------------
+    This function previously used ``val in text_digits_only`` — pure
+    SUBSTRING containment over the digits of the source. Against
+    "Rs. 90,000" that made "90" (1000x understated), "0", "9", "000" and
+    even the plausible-looking "9,000" (10x wrong) all report as
+    grounded. A smaller or different numeric substring was being accepted
+    as proof that the candidate amount appears in the source.
+
+    Matching is now TOKEN-BOUNDED NUMERIC EQUALITY: the candidate amount
+    must correspond to a complete numeric token present in the source.
+    Substrings of a longer number no longer ground.
+
+    The accepted contract is unchanged, not widened:
+      * plain digits and comma-grouped digits  -> supported
+      * "X thousand" / "Xk"                    -> still supported
+      * anything carrying a currency word       -> still NOT supported
+        (unchanged; see fte_sec_01 D-section notes)
     """
     if not amount_value or not text:
         return False
 
-    # Normalize the amount value
+    # Normalize the amount value (unchanged contract).
     val = amount_value.replace(",", "").replace(".", "").strip()
 
-    # Strip all non-digits from text for numeric matching
-    text_digits_only = re.sub(r"[^0-9]", "", text)
+    # A candidate that contains letters or a currency symbol is not a plain
+    # number. Those forms were never grounded; keep that behaviour.
+    candidate_is_plain_number = bool(val) and not re.search(r"[A-Za-z₹$€£]", amount_value)
 
-    # Try exact number match in digit-stripped text
-    if val and val in text_digits_only:
-        return True
+    if candidate_is_plain_number:
+        candidate_digits = re.sub(r"[^0-9]", "", val)
+        if candidate_digits:
+            canonical = candidate_digits.lstrip("0") or "0"
+            if canonical in _numeric_tokens(text):
+                return True
 
-    # Try with currency prefixes
-    for prefix in ["Rs.", "Rs", "₹", "INR", "rupees", "Rs. "]:
-        if f"{prefix}{val}" in text.replace(" ", ""):
-            return True
-        if f"{prefix} {val}" in text:
-            return True
-
-    # Try "X thousand" format
+    # Try "X thousand" / "Xk" format (unchanged).
     try:
         num = int(val)
         if num >= 1000:
             thousands = num // 1000
             remainder = num % 1000
             if remainder == 0:
-                if f"{thousands} thousand" in text.lower():
+                lowered = text.lower()
+                if f"{thousands} thousand" in lowered:
                     return True
-                if f"{thousands}k" in text.lower():
+                if f"{thousands}k" in lowered:
                     return True
     except (ValueError, TypeError):
         pass
 
-    # Fallback: check if the raw number string appears anywhere
-    return val in text.replace(",", "").replace(" ", "")
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +368,31 @@ class ExpandedGroundingGate:
                         matched = True
                         break
             if not matched:
-                # Some transaction types are harder to verify from text alone
-                # Allow them but mark as inferred rather than grounded
+                # FAIL CLOSED (audit M-01, 2026-09-29).
+                #
+                # This branch previously recorded FieldGrounding(grounded=False)
+                # but did NOT append to `issues`. Because the aggregate is
+                # `grounded = len(issues) == 0`, the gate then reported a
+                # self-contradictory result:
+                #
+                #     field_results: transaction_type.grounded == False
+                #     grounded: True   issues: []   safe_for_kernel: True
+                #
+                # i.e. an unverifiable transaction_type was admitted to the
+                # deterministic kernel while the gate's own field record said
+                # it was ungrounded. Every other rule (parties, amounts,
+                # payment method, references) already appended to `issues`;
+                # Rule 5 was the sole exception.
+                #
+                # The field is still SEMANTICALLY CHECKED — it is not removed
+                # from grounding. A type that cannot be corroborated by the
+                # source text is now reported as an issue, which forces
+                # grounded=False -> safe_for_kernel=False -> no VERIFIED.
+                issues.append(
+                    f"Transaction type '{tx_type}' could not be verified from "
+                    "the input text — ungrounded transaction type is not "
+                    "admitted to deterministic accounting"
+                )
                 field_results.append(FieldGrounding(
                     field_name="transaction_type",
                     grounded=False,

@@ -108,6 +108,87 @@ def _is_https_url(url: str) -> bool:
         return True
 
 
+def _assert_safe_delivery_target(url: str) -> None:
+    """
+    Delivery-time re-validation of a registered webhook URL.
+
+    Security hardening (audit H-03, 2026-09-29). ``_is_https_url`` runs only
+    at REGISTRATION time and never resolves DNS, so it cannot stop:
+
+      * a redirect from the approved host into an internal destination
+        (fixed separately by pinning ``allow_redirects=False``);
+      * DNS rebinding — a public-looking hostname that resolves to a
+        private, loopback, or link-local address at delivery time;
+      * an attacker re-pointing the domain between registration and
+        delivery.
+
+    This check resolves the hostname NOW and refuses any address that is not
+    globally routable. It is deliberately a property of the resolved address,
+    not a string blocklist: blocking the literal "169.254.169.254" would be
+    security theatre, because the same range is reachable via any address in
+    it, via IPv6, or via a hostname.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("webhook URL has no host")
+
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise ValueError(f"webhook host could not be resolved: {type(exc).__name__}")
+
+    if not infos:
+        raise ValueError("webhook host resolved to no addresses")
+
+    for info in infos:
+        address = info[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            raise ValueError("webhook host resolved to a non-IP address")
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError(
+                f"webhook host resolves to a non-public address "
+                f"({ip.is_private and 'private' or ip.is_loopback and 'loopback' or ip.is_link_local and 'link-local' or 'non-public'})"
+            )
+
+
+def _post_webhook(url: str, body: str, headers: dict) -> Any:
+    """
+    Perform one webhook POST.
+
+    Security hardening (audit H-03): redirects are NOT followed and the
+    resolved destination is re-validated immediately before the request, so
+    a destination approved at registration cannot be used to reach an
+    internal service later.
+
+    Extracted as a named seam so the security regression suite can exercise
+    the real delivery path rather than a reimplementation of it.
+    """
+    import requests
+
+    _assert_safe_delivery_target(url)
+    return requests.post(
+        url,
+        data=body,
+        headers=headers,
+        timeout=5,
+        allow_redirects=False,
+    )
+
+
 def _job_urls(job_id: str, result_id: str) -> tuple[str, str]:
     base = (os.getenv("PLATRIXA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
     status_url = f"{base}/v1/jobs/{job_id}" if base else f"/v1/jobs/{job_id}"
@@ -417,7 +498,7 @@ def _deliver_webhooks(record: async_jobs.JobRecord, event: str, api_status: str)
                     "Platrixa-Signature": f"t={ts},v1={sig}",
                     "Platrixa-Event": event,
                 }
-                resp = requests.post(endpoint.url, data=body, headers=headers, timeout=5)
+                resp = _post_webhook(endpoint.url, body, headers)
                 logger.info(
                     "webhook delivered endpoint=%s job=%s status=%d",
                     urlparse(endpoint.url).netloc[:40],

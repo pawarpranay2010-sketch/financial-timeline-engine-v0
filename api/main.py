@@ -63,9 +63,19 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request, exc):
+        # SECURITY (audit M-04, 2026-09-29): the previous body named the
+        # concrete exception class, which aids targeted reconnaissance. The
+        # full traceback is logged server-side; the client gets a fixed,
+        # non-identifying message. The route is visible to the caller via
+        # the path, so the class name adds nothing but signal.
+        import logging
+
+        logging.getLogger("platrixa.api").exception(
+            "unhandled error on %s: %s", request.url.path, type(exc).__name__
+        )
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Unhandled error: {type(exc).__name__}"},
+            content={"detail": "internal error"},
         )
 
     # Phase 13: app-level body-size cap for the versioned developer API.
@@ -75,6 +85,56 @@ def create_app() -> FastAPI:
     # durable async store, so it gets its own (larger, still bounded) cap.
     _MAX_DEV_BODY_BYTES = 64 * 1024
     _MAX_ASYNC_DOCUMENT_BODY_BYTES = 16 * 1024 * 1024 + 64 * 1024
+
+    def _rate_key(request) -> str:
+        """Transport peer address; never a client-supplied identifier."""
+        from api.rate_limit import _client_key
+
+        return _client_key(request)
+
+    from api.rate_limit import EXEMPT_EXACT as _RATE_LIMIT_EXEMPT
+
+    @app.middleware("http")
+    async def _request_rate_limit(request, call_next):
+        """
+        Security hardening (audit H-02, 2026-09-29): bound the number of
+        requests an anonymous client can issue.
+
+        Runs BEFORE routing and before any route body, so a throttled
+        request never reaches a provider call, the agentic loop, the model,
+        or the database. It does NOT replace the tenant quota in
+        backend/auth/gate.py, which remains the authoritative per-tenant
+        control on the metered /v1 surface.
+        """
+        path = request.url.path
+        if path in _RATE_LIMIT_EXEMPT or not (
+            path.startswith("/v1/") or path.startswith("/api/v1/")
+        ):
+            return await call_next(request)
+
+        from api.rate_limit import check as _rl_check
+
+        allowed, remaining, retry_after, _window = _rl_check(path, _rate_key(request))
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={
+                    "Retry-After": str(max(1, retry_after)),
+                    "X-Platrixa-Error": "RATE_LIMITED",
+                    "X-RateLimit-Remaining": "0",
+                },
+                content={
+                    "api_version": "v1",
+                    "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "too many requests; retry later",
+                    },
+                },
+            )
+        response = await call_next(request)
+        if remaining >= 0:
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
 
     @app.middleware("http")
     async def _developer_body_size_guard(request, call_next):
