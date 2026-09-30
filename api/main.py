@@ -73,9 +73,36 @@ def create_app() -> FastAPI:
         logging.getLogger("platrixa.api").exception(
             "unhandled error on %s: %s", request.url.path, type(exc).__name__
         )
+        # Phase 5I (audit M1): unhandled failures now speak the same
+        # deterministic envelope as every other /v1 error. FAILED is the
+        # fail-closed public state; retryable is false (an unchanged
+        # retry of a deterministic pipeline is not expected to differ);
+        # the server-side correlation id is echoed so the operator can
+        # match the logged traceback without exposing any internals.
+        from api.status import (
+            LABEL_BY_PUBLIC_STATUS,
+            RETRYABLE_BY_PUBLIC_STATUS,
+            STATUS_FAILED,
+        )
+
+        rid = (request.headers.get("x-request-id") or "").strip()
+        import re as _re
+
+        if not _re.fullmatch(r"[A-Za-z0-9._-]{1,128}", rid or ""):
+            rid = None
         return JSONResponse(
             status_code=500,
-            content={"detail": "internal error"},
+            content={
+                "api_version": "v1",
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "internal error",
+                    "request_id": rid,
+                    "api_status": STATUS_FAILED,
+                    "api_status_label": LABEL_BY_PUBLIC_STATUS.get(STATUS_FAILED, ""),
+                    "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(STATUS_FAILED, False),
+                },
+            },
         )
 
     # Phase 13: app-level body-size cap for the versioned developer API.
@@ -116,6 +143,31 @@ def create_app() -> FastAPI:
 
         allowed, remaining, retry_after, _window = _rl_check(path, _rate_key(request))
         if not allowed:
+            # Phase 5I (audit M1): the throttle response now uses the same
+            # deterministic error envelope as every /v1 and /api/v1 error
+            # (api_status trio + request_id). Retryability is honest: the
+            # limiter is a transient condition.
+            from api.status import (
+                LABEL_BY_PUBLIC_STATUS,
+                RETRYABLE_BY_PUBLIC_STATUS,
+                public_status_for_error_code,
+            )
+
+            rid = (request.headers.get("x-request-id") or "").strip()
+            import re as _re
+
+            if not _re.fullmatch(r"[A-Za-z0-9._-]{1,128}", rid or ""):
+                rid = None
+            api_status = public_status_for_error_code("RATE_LIMITED")
+            error = {
+                "code": "RATE_LIMITED",
+                "message": "too many requests; retry later",
+                "api_status": api_status,
+                "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+                "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
+            }
+            if rid:
+                error["request_id"] = rid
             return JSONResponse(
                 status_code=429,
                 headers={
@@ -123,13 +175,7 @@ def create_app() -> FastAPI:
                     "X-Platrixa-Error": "RATE_LIMITED",
                     "X-RateLimit-Remaining": "0",
                 },
-                content={
-                    "api_version": "v1",
-                    "error": {
-                        "code": "RATE_LIMITED",
-                        "message": "too many requests; retry later",
-                    },
-                },
+                content={"api_version": "v1", "error": error},
             )
         response = await call_next(request)
         if remaining >= 0:

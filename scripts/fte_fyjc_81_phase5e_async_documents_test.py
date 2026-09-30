@@ -125,9 +125,13 @@ def pg_backend():
     ).read_text(encoding="utf-8")
     with engine.begin() as conn:
         conn.execute(text(quota_ddl))
-    idem._session_factory_cache.pop(uri.replace("postgresql://", "postgresql+psycopg2://", 1), None)
+    # Phase 5I: the per-module engine caches were removed (both stores
+    # delegate to the gate's canonical cache). Reset via the canonical
+    # cache + the local schema-ensured sets.
+    metered_gate._session_factory_cache.pop(uri.replace("postgresql://", "postgresql+psycopg2://", 1), None)
+    idem._schema_ensured.discard(uri)
     idem._session_factory()
-    async_jobs._session_factory_cache.pop(uri.replace("postgresql://", "postgresql+psycopg2://", 1), None)
+    async_jobs._schema_ensured.discard(uri)
     async_jobs._session_factory()
     _PG = (srv, engine)
     return _PG

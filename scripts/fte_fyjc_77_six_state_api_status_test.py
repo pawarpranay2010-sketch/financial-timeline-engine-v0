@@ -225,7 +225,10 @@ def section_c() -> None:
         "REQUEST_TOO_LARGE": "INVALID_INPUT",
         "INPUT_INVALID": "INVALID_INPUT",
         "UNAUTHORIZED": "INVALID_INPUT",
-        "QUOTA_EXHAUSTED": "INVALID_INPUT",
+        # Phase 5I (audit M2): quota exhaustion is retryable-by-nature
+        # (the monthly window resets) — PROCESSING, not INVALID_INPUT.
+        "QUOTA_EXHAUSTED": "PROCESSING",
+        "RATE_LIMITED": "PROCESSING",
         "FILE_TOO_LARGE": "INVALID_INPUT",
         "PROVIDER_UNAVAILABLE": "PROCESSING",
         "METERING_UNAVAILABLE": "PROCESSING",

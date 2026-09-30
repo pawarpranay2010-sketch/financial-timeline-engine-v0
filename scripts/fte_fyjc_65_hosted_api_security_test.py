@@ -486,7 +486,16 @@ def section_g() -> None:
     check("G1 gate reads env at request time, no hardcoded key value",
           'PLATRIXA_DEV_API_KEY' in src and 'platrixa_dev_api_key = "' not in src.lower())
     check("G2 no os.environ writes in route (secrets loaded from config source)", "os.environ[" not in src and "environ.setdefault" not in src)
-    check("G3 constant-time comparison used", "_constant_time_equal" in src and "compare_digest" in src)
+    # Phase 5I: the credential comparison moved to the single admission
+    # boundary (backend/auth/admission.py); developer.py keeps the
+    # _constant_time_equal name as a delegating wrapper. The security
+    # property is still verified — the implementation must be the
+    # length-independent SHA-256 + compare_digest form, in exactly one place.
+    admission_src = Path("backend/auth/admission.py").read_text(encoding="utf-8")
+    check("G3 constant-time comparison used (single implementation in the admission boundary)",
+          "_constant_time_equal" in src
+          and "compare_digest" in admission_src
+          and admission_src.count("def _constant_time_equal") == 1)
 
 
 def section_h() -> None:

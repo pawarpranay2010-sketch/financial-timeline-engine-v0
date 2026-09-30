@@ -267,34 +267,53 @@ def async_configured() -> bool:
     return bool((os.getenv(METERING_ENV_VAR, "") or "").strip())
 
 
-def _session_factory():
-    """Sessionmaker over the metering store with the schema ensured once."""
-    from backend.auth.gate import METERING_ENV_VAR
+METERING_ENV_VAR = "PLATRIXA_METERING_DATABASE_URL"
 
+
+def _session_factory():
+    """Sessionmaker over the metering store with the schema ensured once.
+
+    Phase 5I (audit C3): this store previously kept its OWN engine cache
+    with the same lookup-raw/store-normalized defect ``gate.py`` already
+    documented and fixed (2026-09-29 incident: 132 engines under the
+    40-thread suite, connection-cap exhaustion, spurious fail-closed
+    503s). The async store now delegates to the gate's single canonical,
+    locked, normalize-first cache — one engine per process per store
+    URL, never a third implementation.
+    """
     url = (os.getenv(METERING_ENV_VAR, "") or "").strip()
     if not url:
         raise AsyncStoreUnavailableError("async store not configured")
-    cached = _session_factory_cache.get(url)
-    if cached is not None:
-        return cached
 
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import sessionmaker
+    from backend.auth.gate import _session_factory as _canonical_factory
 
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if url not in _schema_ensured:
+        from sqlalchemy import create_engine, text
+
+        ddl_url = (
+            url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            if url.startswith("postgresql://")
+            else url
+        )
+        try:
+            engine = create_engine(ddl_url, future=True)
+            with engine.begin() as conn:
+                conn.execute(text(_DDL))
+        except Exception as exc:
+            raise AsyncStoreUnavailableError("async store unavailable") from exc
+        finally:
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+        _schema_ensured.add(url)
     try:
-        engine = create_engine(url, pool_pre_ping=True, future=True)
-        with engine.begin() as conn:
-            conn.execute(text(_DDL))
-        factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+        return _canonical_factory()
     except Exception as exc:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
-    _session_factory_cache[url] = factory
-    return factory
 
 
-_session_factory_cache: dict = {}
+_schema_ensured: set = set()
 
 
 # ---------------------------------------------------------------------------
@@ -483,22 +502,48 @@ def claim_next_job(lease_seconds: int = JOB_LEASE_SECONDS) -> Optional[JobRecord
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
-def complete_job(job_id: str, *, envelope: Dict[str, Any], http_status: int) -> bool:
-    """Store the terminal 5D envelope for a COMPLETED job."""
+def complete_job(
+    job_id: str,
+    *,
+    envelope: Dict[str, Any],
+    http_status: int,
+    request_id: Optional[str] = None,
+) -> bool:
+    """Store the terminal 5D envelope for a COMPLETED job.
+
+    Phase 5I: ``request_id`` optionally aligns the stored request id with
+    the ENGINE request id produced inside the worker, so the submission
+    path, the job/result read paths, and the observability log all
+    report ONE id for the same logical request (the audit's request-
+    history 404 finding). The alignment is best-effort: an id mismatch
+    never changes the job's terminal state.
+    """
     from sqlalchemy import text
 
     try:
         SessionLocal = _session_factory()
         with SessionLocal() as session:
             with session.begin():
-                result = session.execute(
-                    text(
-                        "UPDATE platrixa_async_jobs SET status = 'COMPLETED', "
-                        "result_json = :res, http_status = :st, lease_expires_at = NULL, updated_at = now() "
-                        "WHERE job_id = :j AND status = 'PROCESSING'"
-                    ),
-                    {"res": json.dumps(envelope, ensure_ascii=False), "st": http_status, "j": job_id},
-                )
+                if request_id:
+                    result = session.execute(
+                        text(
+                            "UPDATE platrixa_async_jobs SET status = 'COMPLETED', "
+                            "result_json = :res, http_status = :st, request_id = :rid, "
+                            "lease_expires_at = NULL, updated_at = now() "
+                            "WHERE job_id = :j AND status = 'PROCESSING'"
+                        ),
+                        {"res": json.dumps(envelope, ensure_ascii=False), "st": http_status,
+                         "rid": (request_id or None), "j": job_id},
+                    )
+                else:
+                    result = session.execute(
+                        text(
+                            "UPDATE platrixa_async_jobs SET status = 'COMPLETED', "
+                            "result_json = :res, http_status = :st, lease_expires_at = NULL, updated_at = now() "
+                            "WHERE job_id = :j AND status = 'PROCESSING'"
+                        ),
+                        {"res": json.dumps(envelope, ensure_ascii=False), "st": http_status, "j": job_id},
+                    )
                 return (result.rowcount or 0) == 1
     except AsyncStoreUnavailableError:
         raise

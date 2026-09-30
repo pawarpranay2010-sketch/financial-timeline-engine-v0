@@ -68,8 +68,6 @@ filesystem paths, or credentials.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 import os
 import re
@@ -113,6 +111,13 @@ from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 # reads its env-var configuration lazily at request time.
 from backend.auth import gate as metered_gate
 from backend.auth import idempotency as idempotency_store
+
+# Phase 5I: the ONE authoritative admission path lives in
+# backend/auth/admission.py. The guard, the idempotency tenant
+# resolution, and every billable route handler all route through it —
+# reservation is no longer a per-route memory task (audit finding C1:
+# POST /v1/process/document reserved nothing).
+from backend.auth import admission as admission_boundary
 
 # Gate reason → HTTP mapping (single source of truth for /v1):
 #   missing/unknown/inactive key → 401 (externally indistinguishable)
@@ -180,40 +185,32 @@ def _gate_http_exception(reason: str) -> HTTPException:
 
 def _metered_api_key_guard(request: Request) -> None:
     """
-    FastAPI dependency implementing the Phase 16 metered admission
-    boundary, in request order:
+    FastAPI dependency implementing the Phase 5I admission boundary —
+    AUTHENTICATION half. Every request on the /v1 surface authenticates
+    here, before any route code runs, under the deterministic Phase 15 /
+    Phase 16 precedence (see backend/auth/admission.py). A request that
+    fails this guard never reaches a handler, the model, or a store.
 
-      1. Phase 15 single-key gate (when PLATRIXA_DEV_API_KEY is set) —
-         still the zero-config local boundary.
-      2. Metered gate (when a metering store is configured):
-         hash → tenant → ATOMIC reservation. 401/429/503 on rejection;
-         on success the reservation is ALREADY committed before any
-         processing begins.
+    The QUOTA half of admission — the single reservation — is performed
+    by exactly ONE ``admission.admit`` call inside each BILLABLE
+    handler, after cheap input-shape validation and (where present)
+    after the idempotency claim, so:
 
-    RAISES (aborting the request) whenever the request is rejected —
-    rejection happens strictly before the public interface is resolved
-    and before Kernel.process, so a rejected request can never load the
-    model. Returns None only when the request is admitted.
+      * replays never double-charge (Phase 5C contract),
+      * malformed input is still a free rejection (documented 400
+        semantics), and
+      * an admitted request that later fails downstream keeps its
+        reservation — the unit paid for admission to the processing
+        system (documented Phase 16 policy, unchanged).
+
+    There is exactly one reservation call per billable route and it
+    lives at one named choke point; suite fte_fyjc_85 asserts the
+    per-route charge table (1/1/1/0/0/0) so a future route cannot
+    "forget" admission without failing the suite.
     """
-    phase15_failure = _check_api_key(request)
-    if phase15_failure is not None:
-        raise _gate_http_exception(metered_gate.REASON_MISSING_KEY)
-
-    if not metered_gate._metering_configured():
-        return  # metering not configured → Phase 15 boundary only
-
     provided = request.headers.get("x-platrixa-api-key", "")
-    # Phase 5C: authenticate WITHOUT reserving — the reservation moves
-    # inside the idempotency-aware handler so a replay never consumes a
-    # second unit. All other endpoints keep the original guard
-    # (authenticate + reserve) unchanged. Store unavailability stays
-    # fail-closed exactly as before (503, never admitted).
-    try:
-        reason, _ctx = metered_gate.resolve_tenant(provided)
-    except metered_gate.MeteredGateError:
-        logger.warning("metering gate unavailable: %s", type(metered_gate.MeteredGateError).__name__)
-        raise _gate_http_exception(metered_gate.REASON_METERING_UNAVAILABLE)
-    if reason != metered_gate.REASON_OK:
+    reason, _ctx = admission_boundary.authenticate_only(provided)
+    if reason != admission_boundary.ADMIT_OK:
         raise _gate_http_exception(reason)
 
 logger = logging.getLogger("platrixa.api")
@@ -282,40 +279,30 @@ def reset_client() -> None:
 
 
 def _configured_api_key() -> Optional[str]:
-    """The server-side developer API key, if one is configured."""
+    """The Phase 15 shared developer API key, if one is configured.
+
+    Phase 5I: reading the credential is owned by
+    ``backend.auth.admission`` (single admission boundary); this helper
+    remains for callers that only need to know whether the Phase 15
+    break-glass credential exists. The VALUE is never logged, echoed, or
+    serialized.
+    """
     return (os.getenv("PLATRIXA_DEV_API_KEY", "") or "").strip() or None
 
 
 def _constant_time_equal(provided: str, expected: str) -> bool:
     """
-    Length-independent constant-time comparison.
+    Length-independent constant-time comparison (SHA-256 both operands, so
+    the comparison cost never leaks the secret's length or content through
+    timing).
 
-    Both operands are hashed first so the comparison cost never leaks the
-    secret's length or content through timing.
+    Phase 5I: the single IMPLEMENTATION of the credential comparison now
+    lives in ``backend.auth.admission`` (the single admission boundary);
+    this wrapper delegates so existing imports and the security-suite
+    invariant ("a constant-time comparison is used on this path") keep
+    resolving to one implementation rather than two copies.
     """
-    a = hashlib.sha256(provided.encode("utf-8")).digest()
-    b = hashlib.sha256(expected.encode("utf-8")).digest()
-    return hmac.compare_digest(a, b)
-
-
-def _check_api_key(request: Request) -> Optional[JSONResponse]:
-    """
-    Fail-closed API-key gate for /v1/process.
-
-    - No key configured server-side → endpoint stays open (current
-      documented Phase 13 behavior; zero-config local development).
-    - Key configured → requests MUST present `X-Platrixa-API-Key` with the
-      exact value. Anything else → 401 with the deterministic error
-      envelope (same shape as all other /v1 errors).
-    The key is never logged, never echoed, never serialized anywhere.
-    """
-    expected = _configured_api_key()
-    if expected is None:
-        return None
-    provided = request.headers.get("x-platrixa-api-key", "")
-    if not provided or not _constant_time_equal(provided, expected):
-        return _error_response(401, "UNAUTHORIZED", "missing or invalid API key")
-    return None
+    return admission_boundary._constant_time_equal(provided, expected)
 
 
 def _error_envelope(
@@ -377,20 +364,24 @@ def developer_validation_handler(request: Request, exc: RequestValidationError):
     ]
     # Phase 5A: the 400 envelope also carries the six-state public API
     # status trio, mapped from the error code like every other /v1 error.
+    # Phase 5I (audit M1): the caller's correlation id is honored here
+    # like on every other /v1 error path (it was previously dropped only
+    # on this one).
     api_status = public_status_for_error_code("REQUEST_MALFORMED")
+    error = {
+        "code": "REQUEST_MALFORMED",
+        "message": "request body could not be parsed as a valid process request",
+        "fields": fields,
+        "api_status": api_status,
+        "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+        "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
+    }
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    if rid:
+        error["request_id"] = rid
     return JSONResponse(
         status_code=400,
-        content={
-            "api_version": API_VERSION,
-            "error": {
-                "code": "REQUEST_MALFORMED",
-                "message": "request body could not be parsed as a valid process request",
-                "fields": fields,
-                "api_status": api_status,
-                "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
-                "retryable": RETRYABLE_BY_PUBLIC_STATUS.get(api_status, False),
-            },
-        },
+        content={"api_version": API_VERSION, "error": error},
     )
 
 
@@ -616,23 +607,41 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
         )
 
     provider_status = client.provider_status()
-    ready = bool(provider_status.get("available") or provider_status.get("loadable"))
+    provider_ready = bool(provider_status.get("available") or provider_status.get("loadable"))
+
+    # Phase 5I: readiness covers the ADMISSION stack, not just the model.
+    # A deployment is admission-ready when a real credential boundary is
+    # configured (Phase 15 shared key OR Phase 16 metering) and the
+    # metering store behind it is reachable. Zero-config open mode is a
+    # valid local-development state but is reported honestly as not
+    # production-ready. The block contains configuration booleans only —
+    # never key material, tokens, or connection strings.
+    admission = admission_boundary.readiness_block()["admission"]
+    ready = provider_ready and admission["production_ready"]
+    reason = None
+    if not ready:
+        if not provider_ready:
+            reason = str(provider_status.get("reason") or "provider not available")
+        elif not admission_boundary.phase15_key_configured() and not admission_boundary.metering_configured():
+            reason = "admission not configured: no PLATRIXA_DEV_API_KEY and no metering store (zero-config open mode)"
+        else:
+            reason = "metering store unreachable"
+
     duration_ms = int((time.perf_counter() - started) * 1000)
     _log(
         "/v1/ready",
         request_id=None,
         status="ready" if ready else "not_ready",
         duration_ms=duration_ms,
-        error=None if ready else "PROVIDER_NOT_READY",
+        error=None if ready else "NOT_READY",
     )
     return DeveloperReadyResponse(
         status="ready" if ready else "not_ready",
         api_version=API_VERSION,
         provider=provider_status,
         rule_pack=client.rule_pack_summary(),
-        reason=None
-        if ready
-        else str(provider_status.get("reason") or "provider not available"),
+        reason=reason,
+        admission=admission,
     )
 
 
@@ -736,7 +745,7 @@ def _process_v1_idempotent(
         if not ok:
             return _error_response(400, key_code, idempotency_store.KEY_FORMAT_MESSAGE, request_id=rid)
         idem_key = (idem_key_raw or "").strip()
-        if not metered_gate._metering_configured():
+        if not admission_boundary.metering_configured():
             # Zero-config deployments have no durable store to back the
             # replay contract — fail explicitly rather than silently
             # ignoring the key (which would fake the guarantee).
@@ -817,17 +826,17 @@ def _process_v1_idempotent(
             status_code=503, detail="service configuration invalid"
         ) from exc
 
-    # Atomic quota reservation — canonical attempts only (replays never
-    # reach this line). On refusal the claim is released.
-    admitted_ctx = None  # Phase 5H: tenant context captured at admission
-    if metered_gate._metering_configured():
-        provided = request.headers.get("x-platrixa-api-key", "")
-        reason, adm_ctx = metered_gate.authorize_request(provided)
-        if reason != metered_gate.REASON_OK:
-            if idem_key:
-                idempotency_store.release(idem_key, idem_tenant)
-            raise _gate_http_exception(reason)
-        admitted_ctx = (adm_ctx, (provided or "")[:16] or None)
+    # Phase 5I atomic quota reservation — the ONE admission call on this
+    # route (canonical attempts only; replays never reach this line). On
+    # refusal the claim is released. The stored key prefix is minimized
+    # to 12 characters inside the admission boundary (audit M6).
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, adm = admission_boundary.admit(provided, reserve=True)
+    if reason != admission_boundary.ADMIT_OK:
+        if idem_key:
+            idempotency_store.release(idem_key, idem_tenant)
+        raise _gate_http_exception(reason)
+    admitted_ctx = (adm.tenant_id, adm.key_prefix)
 
     # Imported lazily: importing the platrixa package pulls the backend
     # kernel graph, which must never happen at api.main import time
@@ -970,24 +979,27 @@ def _record_request_metadata(
     reason_code: Optional[str],
     request_id: Optional[str],
     duration_ms: Optional[int],
+    endpoint: str = "/v1/process",
 ) -> None:
     """Phase 5H: best-effort request-metadata append after a terminal outcome.
 
-    ``admitted_ctx`` is the (TenantContext, key_prefix) captured at
+    ``admitted_ctx`` is the (tenant_id, key_prefix) captured at
     admission; None (auth failures / metering-down) records nothing —
     there is no tenant to attribute to, and attribution is never guessed.
-    Observability must never alter the response path: every failure mode
-    here is logged and swallowed by the store layer by design.
+    Phase 5I: ``endpoint`` names the serving route so async/document
+    outcomes are attributable too (audit M3: only /v1/process was ever
+    recorded). Observability must never alter the response path: every
+    failure mode here is logged and swallowed by the store layer by design.
     """
     if admitted_ctx is None:
         return
-    ctx, key_prefix = admitted_ctx
+    tenant_id, key_prefix = admitted_ctx
     try:
         from backend.auth import request_log
 
         request_log.record_request(
-            tenant_id=ctx.tenant_id,
-            endpoint="/v1/process",
+            tenant_id=tenant_id,
+            endpoint=endpoint,
             http_status=http_status,
             request_id=request_id,
             key_prefix=key_prefix,
@@ -1000,23 +1012,20 @@ def _record_request_metadata(
 
 
 def _resolve_idempotency_tenant(request: Request) -> Optional[str]:
-    """The tenant scope for idempotency (Phase 5C).
+    """The tenant scope for idempotency (Phase 5C, Phase 5I path).
 
-    Metering configured → tenant_id resolved from the authenticated key
-    (never client-supplied). Zero-config mode → a single anonymous local
+    Resolved through the single admission boundary (authenticate WITHOUT
+    reserving — a replay lookup must never charge). Metering configured
+    → tenant_id resolved from the authenticated key (never
+    client-supplied). Zero-config mode → a single anonymous local
     namespace. Returns None when the tenant cannot be established, which
     the caller maps to a fail-closed 503.
     """
-    if not metered_gate._metering_configured():
-        return idempotency_store.ANONYMOUS_TENANT_ID
     provided = request.headers.get("x-platrixa-api-key", "")
-    try:
-        reason, ctx = metered_gate.resolve_tenant(provided)
-    except metered_gate.MeteredGateError:
+    reason, adm = admission_boundary.authenticate_only(provided)
+    if reason != admission_boundary.ADMIT_OK or adm is None:
         return None
-    if reason != metered_gate.REASON_OK or ctx is None:
-        return None
-    return ctx.tenant_id
+    return adm.tenant_id
 
 
 # ---------------------------------------------------------------------------
@@ -1099,6 +1108,18 @@ async def process_document_v1(request: Request) -> "DeveloperResultEnvelope":
              error=exc.code)
         return _error_response(status_code, exc.code, exc.message, request_id=rid)
 
+    # Phase 5I: this route IS billable (OCR + document understanding +
+    # model inference). It now reserves its one unit through the same
+    # single admission choke point as every other billable route —
+    # AFTER input shape validation, so a malformed document is still a
+    # free rejection, and BEFORE any model/OCR work (audit C1: this
+    # route previously reserved NOTHING).
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, adm = admission_boundary.admit(provided, reserve=True)
+    if reason != admission_boundary.ADMIT_OK:
+        raise _gate_http_exception(reason)
+    admitted_ctx = (adm.tenant_id, adm.key_prefix)
+
     try:
         client = _get_client(request)
     except Exception as exc:  # server configuration problem — fail closed
@@ -1121,6 +1142,17 @@ async def process_document_v1(request: Request) -> "DeveloperResultEnvelope":
         logger.warning("document request failed: %s: %s", type(exc).__name__, exc)
         _log("/v1/process/document", request_id=rid, status=None,
              duration_ms=duration_ms, error="PROVIDER_UNAVAILABLE")
+        # Phase 5H: the admitted request reached a terminal outcome —
+        # record it (best-effort) like every other admitted request.
+        _record_request_metadata(
+            admitted_ctx,
+            http_status=503,
+            api_status="PROCESSING",
+            reason_code="PROVIDER_UNAVAILABLE",
+            request_id=rid,
+            duration_ms=duration_ms,
+            endpoint="/v1/process/document",
+        )
         return _error_response(
             503, "PROVIDER_UNAVAILABLE",
             "model provider is unavailable; retry later", request_id=rid,
@@ -1153,6 +1185,23 @@ async def process_document_v1(request: Request) -> "DeveloperResultEnvelope":
 
     _log("/v1/process/document", request_id=rid, status=status,
          duration_ms=int((time.perf_counter() - started) * 1000), error=None)
+
+    # Phase 5I: the admitted request reached a terminal outcome — append
+    # request metadata (best-effort) and make the effective request id
+    # discoverable from observability (audit M3: this route previously
+    # recorded nothing).
+    effective_rid = getattr(kernel_result, "request_id", None) or rid
+    _record_request_metadata(
+        admitted_ctx,
+        http_status=transport_status,
+        api_status=content.get("api_status"),
+        reason_code=(content.get("reason_codes") or [None])[0]
+        if isinstance(content.get("reason_codes"), list)
+        else None,
+        request_id=effective_rid,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        endpoint="/v1/process/document",
+    )
     return JSONResponse(
         status_code=transport_status,
         content=content,

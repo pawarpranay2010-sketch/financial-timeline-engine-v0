@@ -584,12 +584,48 @@ def section_p(client: TestClient) -> None:
 
 def section_q(client: TestClient) -> None:
     print("\nQ — readiness reflects dependency state")
+    # Phase 5I: /v1/ready now means PRODUCTION ADMISSION readiness, not
+    # merely "the provider object can be constructed". A live provider in
+    # the zero-config OPEN mode is honestly not_ready — the credential /
+    # quota boundary a production deployment requires is absent — while
+    # /v1/health stays green (process alive). The distinction is the
+    # contract the phase brief specifies.
     developer.set_client(TransportStub("VERIFIED"))
     try:
         r = client.get("/v1/ready")
-        check("Q1 ready when provider is available/loadable", r.status_code == 200 and r.json()["status"] == "ready")
+        body = r.json()
+        check("Q1 zero-config open mode is NOT ready (admission unconfigured)",
+              r.status_code == 200 and body["status"] == "not_ready", str(body.get("status")))
+        adm = body.get("admission") or {}
+        check("Q1b the not_ready reason names the missing admission configuration",
+              "admission" in str(body.get("reason", "")), str(body.get("reason")))
+        check("Q1c admission block reports open-anonymous + production_ready=false",
+              adm.get("mode") == "open-anonymous" and adm.get("production_ready") is False, str(adm))
+        h = client.get("/v1/health")
+        check("Q1d /health stays GREEN while /ready is not_ready (liveness ≠ readiness)",
+              h.status_code == 200 and h.json().get("status") == "ok", str(h.status_code))
     finally:
         developer.reset_client()
+
+    # With an admission boundary configured and its store reachable,
+    # readiness follows the provider again.
+    from backend.auth import gate as metered_gate
+
+    os.environ["PLATRIXA_METERING_DATABASE_URL"] = "postgresql://u:p@h:5432/db"
+    real_factory = metered_gate._session_factory
+    metered_gate._session_factory = lambda: (lambda: None)
+    developer.set_client(TransportStub("VERIFIED"))
+    try:
+        r = client.get("/v1/ready")
+        body = r.json()
+        check("Q1e ready when provider is loadable AND admission is production-ready",
+              r.status_code == 200 and body["status"] == "ready"
+              and (body.get("admission") or {}).get("production_ready") is True, str(body)[:160])
+    finally:
+        developer.reset_client()
+        metered_gate._session_factory = real_factory
+        os.environ.pop("PLATRIXA_METERING_DATABASE_URL", None)
+
     developer.set_client(NotReadyStub())
     try:
         r = client.get("/v1/ready")

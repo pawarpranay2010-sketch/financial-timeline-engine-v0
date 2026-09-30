@@ -228,28 +228,39 @@ def _store_database_url() -> Optional[str]:
 
 
 def _session_factory():
-    """Sessionmaker on the metering store, schema self-ensured once per URL."""
-    global _session_factory_cache
+    """Sessionmaker on the metering store, schema self-ensured once per URL.
+
+    Phase 5I (audit C3): the management plane previously kept its own
+    engine cache with the same lookup-raw/store-normalized defect the
+    other stores had. It now delegates to the gate's single canonical,
+    locked, normalize-first engine cache; only the schema ensure is
+    local. No second engine cache remains in backend/auth.
+    """
+    global _schema_ensured
     url = _store_database_url()
     if url is None:
         raise ApiKeyStoreError("key-management store not configured")
-    cached = _session_factory_cache.get(url)
-    if cached is not None:
-        return cached
 
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
+    from backend.auth.gate import _session_factory as _canonical_factory
 
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    engine = create_engine(url, pool_pre_ping=True, future=True)
-    _ensure_schema(engine)
-    factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    _session_factory_cache[url] = factory
-    return factory
+    if url not in _schema_ensured:
+        from sqlalchemy import create_engine
+
+        ddl_url = (
+            url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            if url.startswith("postgresql://")
+            else url
+        )
+        engine = create_engine(ddl_url, future=True)
+        try:
+            _ensure_schema(engine)
+        finally:
+            engine.dispose()
+        _schema_ensured.add(url)
+    return _canonical_factory()
 
 
-_session_factory_cache: dict = {}
+_schema_ensured: set = set()
 
 
 def _ensure_schema(engine) -> None:

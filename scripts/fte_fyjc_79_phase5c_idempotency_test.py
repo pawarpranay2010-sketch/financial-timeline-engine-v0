@@ -151,7 +151,12 @@ def pg_backend():
                  "platrixa_tenant_quota_schema.sql").read_text(encoding="utf-8")
     with engine.begin() as conn:
         conn.execute(text(quota_ddl))
-    idem._session_factory_cache.pop(uri.replace("postgresql://", "postgresql+psycopg2://", 1), None)
+    # Phase 5I: per-module engine cache removed (delegates to the gate's
+    # canonical cache). Reset via the canonical cache + schema set.
+    from backend.auth import gate as _gate5i
+
+    _gate5i._session_factory_cache.pop(uri.replace("postgresql://", "postgresql+psycopg2://", 1), None)
+    idem._schema_ensured.discard(uri)
     idem._session_factory()
     _PG = (srv, engine)
     return _PG
@@ -568,7 +573,10 @@ def section_f(engine) -> None:
 
     # Process-boundary replay: fresh app, fresh stub, cleared engine cache —
     # the result can only come from PostgreSQL.
-    idem._session_factory_cache.clear()
+    from backend.auth import gate as _gate5i
+
+    _gate5i._session_factory_cache.clear()
+    idem._schema_ensured.clear()
     fresh_stub = StubClient()
     c2 = _client(fresh_stub)
     replay = c2.post("/v1/process", json=VALID_BODY, headers=hdr("k-F", KEY))

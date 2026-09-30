@@ -92,9 +92,14 @@ def pg_backend() -> tuple[object, str]:
     with engine.begin() as conn:
         conn.execute(text(quota_ddl))
     # Reset the lazy factory so the fresh URL + DDL take effect.
-    key_store._session_factory_cache.pop(
+    # Phase 5I: key-store engine cache removed (delegates to the gate's
+    # canonical cache) — reset via the canonical cache + schema set.
+    from backend.auth import gate as _gate5i
+
+    _gate5i._session_factory_cache.pop(
         uri.replace("postgresql://", "postgresql+psycopg2://", 1), None
     )
+    key_store._schema_ensured.discard(uri)
     key_store._session_factory()  # self-ensures the registry schema
     _PG = (srv, uri)
     return _PG

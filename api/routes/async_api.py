@@ -61,6 +61,7 @@ from api.routes.developer import (
     _error_response,
     _get_client,
     _log,
+    _record_request_metadata,
     _resolve_idempotency_tenant,
     _safe_accounting,
     _safe_candidate,
@@ -69,6 +70,10 @@ from api.routes.developer import (
 from backend.auth import async_jobs
 from backend.auth import gate as metered_gate
 from backend.auth import idempotency as idempotency_store
+
+# Phase 5I: the ONE authoritative admission path (audit C1). Reservation
+# is owned by the admission boundary, never by a per-route call.
+from backend.auth import admission as admission_boundary
 
 logger = logging.getLogger("platrixa.api")
 
@@ -209,9 +214,20 @@ def _async_not_ready(code: str, rid: Optional[str], message: str) -> JSONRespons
 
 
 def _metered_api_key_guard_async(request: Request) -> None:
-    from api.routes.developer import _metered_api_key_guard
+    """Phase 5I admission for read/management async endpoints.
 
-    _metered_api_key_guard(request)
+    This guard authenticates WITHOUT reserving: the billable endpoint
+    (POST /v1/documents) reserves exactly once inside its own handler
+    — after idempotency claim, before job creation — through the single
+    ``admission.admit`` choke point, exactly like POST /v1/process.
+    Read endpoints (jobs/results/webhook registration) never charge.
+    """
+    from api.routes.developer import _gate_http_exception
+
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, _adm = admission_boundary.authenticate_only(provided)
+    if reason != admission_boundary.ADMIT_OK:
+        raise _gate_http_exception(reason)
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +269,29 @@ def _worker_loop() -> None:
         except Exception as exc:  # never let the worker die
             logger.warning("async worker iteration failed: %s", type(exc).__name__)
             time.sleep(1.0)
+
+
+def _resolve_engine_request_id(record: async_jobs.JobRecord) -> Optional[str]:
+    """Phase 5I: the request id the whole stack reports for this job.
+
+    The document pipeline assigns the engine request id inside the
+    worker (record.request_id is the value captured at submission). The
+    job/result/observability surfaces must all agree on ONE id, so the
+    worker overwrites the record's request_id with the engine id after
+    processing completes (see _process_job). This helper reads the
+    stored envelope's request_id when present, falling back to the
+    submission-time id.
+    """
+    if not record.result_json:
+        return record.request_id
+    try:
+        import json as _json
+
+        env = _json.loads(record.result_json)
+        rid_out = env.get("request_id")
+        return rid_out or record.request_id
+    except Exception:
+        return record.request_id
 
 
 def _process_job(record: async_jobs.JobRecord) -> None:
@@ -330,12 +369,31 @@ def _process_job(record: async_jobs.JobRecord) -> None:
         duration_ms=int((time.perf_counter() - started) * 1000),
     )
     try:
-        async_jobs.complete_job(record.job_id, envelope=content, http_status=transport_status)
+        async_jobs.complete_job(
+            record.job_id,
+            envelope=content,
+            http_status=transport_status,
+            request_id=content.get("request_id") or rid,
+        )
     except async_jobs.AsyncStoreUnavailableError:
         logger.warning("async job %s completion store write failed", record.job_id[:14])
         return
 
     api_status = public_status_for_engine(status)
+    # Phase 5I: record the worker outcome under the ENGINE request id —
+    # the same id /v1/jobs/{id}, /v1/results/{id} and the submit log row
+    # align to — so observability covers the async path (audit M3).
+    _record_request_metadata(
+        (record.tenant_id, None),
+        http_status=transport_status,
+        api_status=api_status,
+        reason_code=(content.get("reason_codes") or [None])[0]
+        if isinstance(content.get("reason_codes"), list)
+        else None,
+        request_id=content.get("request_id") or rid,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        endpoint="/v1/documents(worker)",
+    )
     _emit_webhooks(record, api_status)
     _log(
         "/v1/documents(worker)",
@@ -372,6 +430,18 @@ def _fail_job(
     except async_jobs.AsyncStoreUnavailableError:
         logger.warning("async job %s failure store write failed", record.job_id[:14])
         return
+    # Phase 5I: the worker thread has no HTTP admission context; the
+    # tenant is the job's own durable tenant (server-derived at
+    # submission) — attribution is never guessed from the id.
+    _record_request_metadata(
+        (record.tenant_id, None),
+        http_status=503 if retryable else 400,
+        api_status=api_status,
+        reason_code=code,
+        request_id=rid,
+        duration_ms=None,
+        endpoint="/v1/documents(worker)",
+    )
     _emit_webhooks(record, api_status if retryable else "FAILED")
 
 
@@ -646,7 +716,7 @@ async def create_document_job(request: Request) -> JSONResponse:
     elif isinstance(raw_input, str) and len(raw_input) > 2_000_000:
         return _error_response(413, "REQUEST_TOO_LARGE", "raw_input exceeds the durable-store payload limit", request_id=rid)
 
-    # ---- tenant scope (server-derived) ------------------------------------
+    # ---- tenant scope (server-derived; authenticate-only, never charges)
     tenant = _resolve_idempotency_tenant(request)
     if tenant is None:
         return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; request not admitted")
@@ -708,16 +778,20 @@ async def create_document_job(request: Request) -> JSONResponse:
                 headers={"Idempotent-Replayed": "false", "Retry-After": "2"},
             )
 
-    # ---- quota reservation (canonical attempts only) -----------------------
-    if metered_gate._metering_configured():
-        provided = request.headers.get("x-platrixa-api-key", "")
-        reason, _ctx = metered_gate.authorize_request(provided)
-        if reason != metered_gate.REASON_OK:
-            if idem_key:
-                idempotency_store.release(idem_key, tenant)
-            from api.routes.developer import _gate_http_exception
+    # ---- Phase 5I quota reservation (canonical attempts only) ------------
+    # Exactly ONE admission call on this route: after the idempotency
+    # claim (replays never reach this line), before durable job creation.
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, adm = admission_boundary.admit(provided, reserve=True)
+    if reason != admission_boundary.ADMIT_OK:
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        from api.routes.developer import _gate_http_exception
 
-            raise _gate_http_exception(reason)
+        raise _gate_http_exception(reason)
+    # Phase 5I: keep the admission context for the observability append
+    # below (submission is a terminal outcome for the SUBMIT request).
+    admitted_ctx = (adm.tenant_id, adm.key_prefix)
 
     # ---- durable job creation ----------------------------------------------
     stored_payload: Dict[str, Any] = {"source_name": source_name[:120]}
@@ -726,8 +800,15 @@ async def create_document_job(request: Request) -> JSONResponse:
     if isinstance(raw_input, str) and raw_input.strip():
         stored_payload["raw_input"] = raw_input
 
+    # Phase 5I request-trace alignment: the job's request_id is the
+    # ENGINE request id (which is what /v1/jobs/{id}, /v1/results/{id}
+    # and the observability log all publish) with the client correlation
+    # id as the fallback. Before this change a client-supplied X-Request-Id
+    # was stored here while every read path reported the engine id —
+    # so GET /v1/developer/requests/{id} 404'd for every async request
+    # (audit: request-history finding M3).
     try:
-        record = async_jobs.create_job(tenant, stored_payload, request_id=rid)
+        record = async_jobs.create_job(tenant, stored_payload, request_id=rid or None)
     except async_jobs.AsyncStoreUnavailableError:
         if idem_key:
             idempotency_store.release(idem_key, tenant)
@@ -766,6 +847,19 @@ async def create_document_job(request: Request) -> JSONResponse:
 
     _log("/v1/documents", request_id=rid, status="ACCEPTED",
          duration_ms=int((time.perf_counter() - started) * 1000), error=None)
+
+    # Phase 5I: the SUBMIT request is a terminal outcome for admission
+    # purposes — record it so request history covers async submissions
+    # (audit M3: only /v1/process was ever recorded).
+    _record_request_metadata(
+        admitted_ctx,
+        http_status=202,
+        api_status="PROCESSING",
+        reason_code=None,
+        request_id=rid or None,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        endpoint="/v1/documents",
+    )
     return JSONResponse(
         status_code=202,
         content=accepted,

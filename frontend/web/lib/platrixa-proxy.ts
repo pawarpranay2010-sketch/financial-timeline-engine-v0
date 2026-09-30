@@ -42,6 +42,12 @@ const FORWARD_HEADERS = new Set([
   "accept-language",
   "x-requested-with",
   "x-request-id",
+  // Phase 5I (audit C2): the caller's credential and request identity
+  // reach the backend UNCHANGED. The proxy NEVER invents, substitutes,
+  // or overwrites a caller-supplied credential.
+  "x-platrixa-api-key",
+  "x-platrixa-management-token",
+  "idempotency-key",
 ]);
 
 const NON_BROWSER_HEADERS = new Set([
@@ -66,6 +72,8 @@ export interface ProxyOutcome {
   body: string;
   contentType: string;
   requestId: string | null;
+  /** Upstream response headers (contract headers are re-emitted). */
+  responseHeaders?: Headers;
 }
 
 /** The same envelope shape the backend and the frontend already use. */
@@ -145,8 +153,16 @@ export async function forwardToPlatrixa(
     if (FORWARD_HEADERS.has(lower)) headers.set(name, value);
   }
 
+  // Phase 5I (audit C2): the server-side operator key is a FALLBACK for
+  // local development only — it is used when and ONLY when the caller
+  // supplied no key of their own. Overwriting a caller-supplied key
+  // silently re-attributed every request to the operator's tenant (the
+  // audit measured GET /v1/usage returning the WRONG tenant's usage with
+  // no error). Management credentials are never substituted.
   const apiKey = (process.env[PROXY_KEY_ENV] ?? "").trim();
-  if (apiKey) headers.set("x-platrixa-api-key", apiKey);
+  if (apiKey && !headers.has("x-platrixa-api-key")) {
+    headers.set("x-platrixa-api-key", apiKey);
+  }
 
   const method = request.method.toUpperCase();
   const init: RequestInit = { method, headers, redirect: "follow" };
@@ -167,17 +183,39 @@ export async function forwardToPlatrixa(
     body,
     contentType: upstream.headers.get("content-type") ?? "application/json",
     requestId,
+    responseHeaders: upstream.headers,
   };
 }
 
 /** Render a ProxyOutcome as a NextResponse (no data transformation). */
 export function proxyResponse(outcome: ProxyOutcome): Response {
+  const outHeaders: Record<string, string> = {
+    "content-type": outcome.contentType,
+    "cache-control": "no-store",
+  };
+  // Phase 5I (audit C2): idempotency and transport contract headers live
+  // in the RESPONSE too — Idempotent-Replayed, Retry-After, and the
+  // error-tag header are part of the public developer contract and were
+  // previously swallowed here, making replay observability impossible
+  // through the browser origin.
+  if (outcome.responseHeaders) {
+    for (const [name, value] of outcome.responseHeaders.entries()) {
+      const lower = name.toLowerCase();
+      if (
+        lower === "idempotent-replayed" ||
+        lower === "retry-after" ||
+        lower === "x-platrixa-error" ||
+        lower === "idempotency-key" ||
+        lower === "x-request-id" ||
+        lower.startsWith("x-ratelimit-")
+      ) {
+        outHeaders[name] = value;
+      }
+    }
+  }
   return new Response(outcome.body, {
     status: outcome.status,
-    headers: {
-      "content-type": outcome.contentType,
-      "cache-control": "no-store",
-    },
+    headers: outHeaders,
   });
 }
 

@@ -113,7 +113,12 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     "CONTENT_TYPE_UNSUPPORTED": STATUS_INVALID_INPUT,
     "FILE_TOO_LARGE": STATUS_INVALID_INPUT,
     "UNAUTHORIZED": STATUS_INVALID_INPUT,
-    "QUOTA_EXHAUSTED": STATUS_INVALID_INPUT,
+    # Phase 5I (audit M2): quota exhaustion is a RETRYABLE service
+    # condition (the monthly window resets), not a malformed request.
+    # It is published as PROCESSING — "outcome not available; retry
+    # later" — which is the only honest six-state for a 429. VALID_INPUT
+    # was wrong on both axes (not an input problem; not non-retryable).
+    "QUOTA_EXHAUSTED": STATUS_PROCESSING,
     "METERING_UNAVAILABLE": STATUS_PROCESSING,
     "PROVIDER_UNAVAILABLE": STATUS_PROCESSING,
     "INPUT_INVALID": STATUS_INVALID_INPUT,
@@ -158,6 +163,9 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     #   config issue; a transient store failure is retryable (fail
     #   closed, but not yet served); an unknown or cross-tenant request
     #   reference is a client error (indistinguishable by design).
+    # Phase 5I: the transport rate limiter is RETRYABLE by definition —
+    # the client did nothing wrong except send too soon.
+    "RATE_LIMITED": STATUS_PROCESSING,
     "USAGE_NOT_CONFIGURED": STATUS_INVALID_INPUT,
     "USAGE_UNAVAILABLE": STATUS_PROCESSING,
     "REQUEST_HISTORY_UNAVAILABLE": STATUS_PROCESSING,

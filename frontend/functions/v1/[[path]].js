@@ -24,6 +24,14 @@ const FORWARD_HEADERS = [
   "authorization",
   "accept-language",
   "x-requested-with",
+  // Phase 5I (audit C2): the caller's credential and request identity
+  // must reach the backend UNCHANGED. The developer contract is
+  // key-in-header; dropping these made every proxied call anonymous
+  // (or 401) and made idempotent replay impossible from the browser.
+  "x-platrixa-api-key",
+  "x-platrixa-management-token",
+  "idempotency-key",
+  "x-request-id",
 ];
 
 export async function onRequest(context) {

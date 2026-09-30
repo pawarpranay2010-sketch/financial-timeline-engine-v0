@@ -461,10 +461,18 @@ class DeveloperHealthResponse(BaseModel):
 
 
 class DeveloperReadyResponse(BaseModel):
-    """Readiness — dependencies available enough to process a request."""
+    """Readiness — dependencies available enough to process a request.
+
+    Phase 5I: ``admission`` reports whether the credential/quota boundary
+    a production deployment requires is actually configured. It contains
+    configuration BOOLEANS and a coarse store-availability flag only —
+    never key values, tokens, or connection strings. A deployment may be
+    alive (/v1/health ok) yet not admission-ready (status not_ready).
+    """
 
     status: str
     api_version: str
     provider: Dict[str, Any]
     rule_pack: Optional[Dict[str, Any]] = None
     reason: Optional[str] = None
+    admission: Optional[Dict[str, Any]] = None

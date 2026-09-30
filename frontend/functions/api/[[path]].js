@@ -17,6 +17,12 @@ const FORWARD_HEADERS = [
   "authorization",
   "accept-language",
   "x-requested-with",
+  // Phase 5I (audit C2): same developer-contract identity headers as the
+  // /v1 function — forwarded unchanged, never fabricated.
+  "x-platrixa-api-key",
+  "x-platrixa-management-token",
+  "idempotency-key",
+  "x-request-id",
 ];
 
 export async function onRequest(context) {

@@ -147,10 +147,10 @@ def validate_key(raw_key: Optional[str]) -> Tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
-# Store wiring (dedicated lazy engine over the metering store, schema ensured)
+# Store wiring (Phase 5I: delegates to the gate's canonical engine cache;
+# only the one-time schema ensure is local. No second engine cache.)
 # ---------------------------------------------------------------------------
 
-_session_factory_cache: dict = {}
 _schema_ensured: set = set()
 
 _DDL = """
@@ -182,29 +182,46 @@ def _metering_database_url() -> Optional[str]:
 
 
 def _session_factory():
-    """Sessionmaker over the metering store with the schema ensured once."""
+    """Sessionmaker over the metering store with the schema ensured once.
+
+    Phase 5I (audit C3): this store previously kept its OWN engine cache
+    with the same lookup-raw/store-normalized defect ``gate.py`` already
+    documented and fixed (2026-09-29 incident: 132 engines under the
+    40-thread suite, connection-cap exhaustion, spurious fail-closed
+    503s). Both stores now delegate to the gate's single canonical,
+    locked, normalize-first cache — one engine per process per store
+    URL, never a third implementation.
+    """
     url = _metering_database_url()
     if not url:
         raise IdempotencyUnavailableError("metering store not configured")
-    cached = _session_factory_cache.get(url)
-    if cached is not None:
-        return cached
 
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import sessionmaker
+    from backend.auth.gate import _session_factory as _canonical_factory
 
-    if url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if url not in _schema_ensured:
+        from sqlalchemy import create_engine, text
+
+        ddl_url = (
+            url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            if url.startswith("postgresql://")
+            else url
+        )
+        try:
+            engine = create_engine(ddl_url, future=True)
+        except Exception as exc:
+            raise IdempotencyUnavailableError("idempotency store unavailable") from exc
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(_DDL))
+        except Exception as exc:
+            raise IdempotencyUnavailableError("idempotency store unavailable") from exc
+        finally:
+            engine.dispose()
+        _schema_ensured.add(url)
     try:
-        engine = create_engine(url, pool_pre_ping=True, future=True)
-        with engine.begin() as conn:
-            conn.execute(text(_DDL))
-        factory = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+        return _canonical_factory()
     except Exception as exc:
         raise IdempotencyUnavailableError("idempotency store unavailable") from exc
-    _session_factory_cache[url] = factory
-    _schema_ensured.add(url)
-    return factory
 
 
 # ---------------------------------------------------------------------------
