@@ -24,6 +24,7 @@ Stable result + evidence
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/v1/process` | Process one financial transaction (text) |
+| `POST` | `/v1/process/bulk` | Process a bounded batch (max 25) of independent text transactions (Phase 5J) |
 | `POST` | `/v1/process/document` | Process a transaction from **text, a PDF, or an image** |
 | `GET` | `/v1/health` | Liveness — API process alive (touches nothing) |
 | `GET` | `/v1/ready` | Readiness — dependencies available enough to process |
@@ -326,12 +327,55 @@ Requests are logged as safe metadata only: endpoint, request id, duration,
 resulting state, coarse error category. Financial content, credentials,
 and secrets are never logged.
 
-## Idempotency & replay-safe requests (Phase 5C)
+## Batch processing (Phase 5J)
 
-`POST /v1/process` supports an optional `Idempotency-Key` header that
-makes retries safe: repeating the same key with the same request returns
-the originally recorded result instead of creating another processing
-attempt — without consuming additional quota.
+`POST /v1/process/bulk` submits a bounded batch of **independent** text
+transactions in one request:
+
+```json
+{ "items": [ { "item_id": "inv-1", "raw_input": "..." },
+             { "item_id": "inv-2", "raw_input": "..." } ] }
+```
+
+Each item runs through the **same** pipeline as `POST /v1/process` — the
+same schema verification, grounding, capability routing, evidence and
+deterministic authority. There is no second accounting path and no
+alternative route to `VERIFIED`. Results are returned in **input order**,
+one entry per submitted item, each carrying that item's canonical result
+envelope (or its canonical error envelope).
+
+- **Limits:** at most **25** items; each `raw_input` uses the same 1–2000
+  character contract as the single-item endpoint. The existing 64 KiB body
+  guard still applies.
+- **Item ids:** optional, `[A-Za-z0-9._:-]{1,64}`, echoed verbatim;
+  duplicates are rejected. They are **correlation labels, not idempotency
+  keys** — replay safety comes only from the `Idempotency-Key` header.
+- **Quota:** one unit per item, reserved **atomically for the whole batch**
+  (all-or-nothing). If the batch does not fit the remaining quota the
+  entire request is refused with `429 QUOTA_EXHAUSTED` and **zero** units
+  are consumed. Rejected, malformed, and rate-limited requests are free.
+- **Batch status:** reuses the existing six-state contract, aggregated
+  deterministically. The batch is `VERIFIED` only when **every** item is;
+  mixed terminal outcomes aggregate to `FAILED`, and any non-terminal or
+  not-attempted item makes the batch `PROCESSING` (retryable). Per-item
+  statuses and counts are always present — nothing is omitted.
+- **Partial success** is reported explicitly via `partial_success`,
+  `counts`, and per-item `attempted` / `error` fields.
+- **Ordering** is always input order. Processing is sequential and bounded
+  by a 120 s elapsed-time budget; items not reached are returned explicitly
+  as not attempted rather than silently dropped.
+- `Idempotency-Key` applies to the batch as a whole (see below). The
+  fingerprint is the **ordered** item list, so reordering the same items is
+  a different request and returns `409`.
+
+Full contract, limits rationale, and test evidence:
+`reports/PHASE_5J_BULK_API.md`.
+
+## Idempotency & replay-safe requests (Phase 5C)
+`POST /v1/process` and `POST /v1/process/bulk` support an optional
+`Idempotency-Key` header that makes retries safe: repeating the same key
+with the same request returns the originally recorded result instead of
+creating another processing attempt — without consuming additional quota.
 
 > **Platrixa does NOT promise exactly-once execution.** It provides
 > **durable idempotent replay semantics** for the scope documented here:
@@ -340,9 +384,11 @@ attempt — without consuming additional quota.
 
 ### When it applies
 
-- **Scope:** `POST /v1/process` only. `POST /v1/process/document`, the
-  kernel route, GET endpoints, health/readiness, and capability
-  discovery are deliberately not idempotency-scoped.
+- **Scope:** `POST /v1/process` and `POST /v1/process/bulk` (Phase 5J, which
+  reuses this same store and fingerprint mechanism).
+  `POST /v1/process/document`, the kernel route, GET endpoints,
+  health/readiness, and capability discovery are deliberately not
+  idempotency-scoped.
 - **Optional:** omitting the header keeps the previous behavior exactly
   (each request is its own processing attempt).
 - **Requires metering:** keys are honored only when the deployment has a

@@ -166,10 +166,30 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     # Phase 5I: the transport rate limiter is RETRYABLE by definition —
     # the client did nothing wrong except send too soon.
     "RATE_LIMITED": STATUS_PROCESSING,
+    # Phase 5J bulk transport rejections. All are CLIENT-side contract
+    # problems (the caller must change the request), so they map to
+    # INVALID_INPUT exactly like the single-request transport codes. They
+    # are separate codes so a client can distinguish them, NOT a new
+    # public status vocabulary — the six-state contract is unchanged.
+    "BATCH_EMPTY": STATUS_INVALID_INPUT,
+    "BATCH_TOO_LARGE": STATUS_INVALID_INPUT,
+    "BATCH_ITEM_INVALID": STATUS_INVALID_INPUT,
+    "BATCH_ITEM_ID_INVALID": STATUS_INVALID_INPUT,
+    "BATCH_DUPLICATE_ITEM_ID": STATUS_INVALID_INPUT,
     "USAGE_NOT_CONFIGURED": STATUS_INVALID_INPUT,
     "USAGE_UNAVAILABLE": STATUS_PROCESSING,
     "REQUEST_HISTORY_UNAVAILABLE": STATUS_PROCESSING,
     "REQUEST_NOT_FOUND": STATUS_INVALID_INPUT,
+    # An unexpected server-side failure (the 500 boundary, and a bulk item
+    # whose execution raised). Explicitly FAILED — never INPUT_INVALID.
+    # Unknown codes already fail closed to FAILED; naming it keeps the
+    # contract explicit and testable rather than incidental.
+    "INTERNAL_ERROR": STATUS_FAILED,
+    # A bulk item the batch never attempted because the elapsed-time budget
+    # elapsed first: the outcome is UNKNOWN, not a failed validation. Same
+    # reasoning as RESULT_PENDING on the async job plane — retryable, and
+    # retrying (or polling) can still produce a different outcome.
+    "RESULT_PENDING": STATUS_PROCESSING,
 }
 
 # Human-readable labels for the six public states.

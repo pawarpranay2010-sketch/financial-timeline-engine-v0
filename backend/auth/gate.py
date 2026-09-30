@@ -251,28 +251,55 @@ def resolve_tenant(
 
 
 def reserve_unit(provided_key: Optional[str]) -> Tuple[str, Optional[TenantContext]]:
-    """Authenticate AND atomically reserve one unit of monthly quota.
+    """Authenticate AND atomically reserve ONE unit of monthly quota.
 
-    The reservation is a single UPDATE statement. Its WHERE clause holds
-    the complete admission predicate:
+    Thin wrapper over :func:`reserve_units` with ``units=1`` — the exact
+    Phase 16 semantics, kept as a named function because the single-item
+    routes and their suites call it. ``usage + 1 <= monthly_limit`` is
+    equivalent to the historical ``usage < monthly_limit``.
+
+    See :func:`reserve_units` for the full invariant.
+    """
+    return reserve_units(provided_key, 1)
+
+
+def reserve_units(
+    provided_key: Optional[str],
+    units: int = 1,
+) -> Tuple[str, Optional[TenantContext]]:
+    """Authenticate AND atomically reserve ``units`` units of monthly quota.
+
+    Phase 5J: bulk admission needs to charge for N independent items in ONE
+    decision, so this extends the single-statement predicate rather than
+    looping :func:`reserve_unit`. The reservation remains ONE UPDATE whose
+    WHERE clause carries the complete admission predicate:
 
         hash matches  AND  is_active  AND
-        ( same-month bucket AND usage < limit
-          OR  stale month bucket (rollover — resets to 1) )
+        ( same-month bucket AND usage + units <= limit
+          OR  stale month bucket (rollover — resets to units, and only
+              when units itself fits the limit) )
 
-    PostgreSQL serializes concurrent UPDATEs on the same primary-key
-    row, therefore:
+    PostgreSQL serializes concurrent UPDATEs on the same primary-key row,
+    therefore:
 
         concurrent accepted reservations <= monthly_limit
+        (and a batch is never partially reserved)
 
-    under arbitrary concurrency — no read-modify-write race, no
-    retries, no post-hoc compensation. A quota-exhausted or unknown key
-    matches zero rows and NOTHING is written (authentication failures
-    and quota failures consume zero quota).
+    under arbitrary concurrency — no read-modify-write race, no retries,
+    no post-hoc compensation, and no loop that could reserve part of a
+    batch and then fail. A quota-exhausted, unknown or inactive key
+    matches zero rows and NOTHING is written (authentication failures and
+    quota failures consume zero quota — the all-or-nothing property the
+    bulk route documents).
+
+    ``units`` must be >= 1; a non-positive value is treated as a caller
+    error and rejected without touching the store.
 
     Returns ``(reason, context_or_none)``; raises
     :class:`MeteredGateError` when the store is unavailable.
     """
+    if not isinstance(units, int) or units < 1:
+        return REASON_MISSING_KEY, None
     from backend.auth.models import TenantQuota, current_usage_month
     from backend.auth.tokens import hash_token
 
@@ -300,19 +327,23 @@ def reserve_unit(provided_key: Optional[str]) -> Tuple[str, Optional[TenantConte
                     or_(
                         and_(
                             TenantQuota.usage_month == month,
-                            TenantQuota.current_month_usage
-                            < TenantQuota.monthly_limit,
+                            TenantQuota.current_month_usage + units
+                            <= TenantQuota.monthly_limit,
                         ),
-                        # Stale bucket: rollover is always admissible —
-                        # the same statement resets usage into the new
-                        # bucket, so the limit applies to the NEW month.
-                        TenantQuota.usage_month != month,
+                        # Stale bucket: rollover into the new month —
+                        # admissible only when the whole batch fits the
+                        # limit, so the limit applies to the NEW month
+                        # and a batch is never partially admitted.
+                        and_(
+                            TenantQuota.usage_month != month,
+                            units <= TenantQuota.monthly_limit,
+                        ),
                     ),
                 )
                 .values(
                     current_month_usage=case(
-                        (TenantQuota.usage_month != month, 1),
-                        else_=TenantQuota.current_month_usage + 1,
+                        (TenantQuota.usage_month != month, units),
+                        else_=TenantQuota.current_month_usage + units,
                     ),
                     usage_month=month,
                     last_request_at=now,
@@ -331,7 +362,7 @@ def reserve_unit(provided_key: Optional[str]) -> Tuple[str, Optional[TenantConte
                     monthly_limit=ctx.monthly_limit,
                     current_month_usage=ctx.current_month_usage,
                     usage_month=ctx.usage_month,
-                    units_reserved=1,
+                    units_reserved=units,
                 )
             # Practically unreachable (row existed a moment ago); treat
             # defensively as a store problem — fail closed.
@@ -353,15 +384,24 @@ def reserve_unit(provided_key: Optional[str]) -> Tuple[str, Optional[TenantConte
 def authorize_request(
     provided_key: Optional[str],
 ) -> Tuple[str, Optional[TenantContext]]:
-    """Full admission decision, mapping store failure to fail-closed.
+    """Full admission decision for ONE unit, mapping failure to fail-closed."""
+    return authorize_units(provided_key, 1)
+
+
+def authorize_units(
+    provided_key: Optional[str],
+    units: int = 1,
+) -> Tuple[str, Optional[TenantContext]]:
+    """Full admission decision for ``units`` units, mapping failure closed.
 
     Never raises for store unavailability: an unavailable metering
     dependency returns ``REASON_METERING_UNAVAILABLE`` so the HTTP layer
     can refuse the request (503) instead of admitting it. The critical
-    property: metering failure ⇒ request NOT admitted.
+    property: metering failure ⇒ request NOT admitted (and, for a batch,
+    NOT partially admitted).
     """
     try:
-        return reserve_unit(provided_key)
+        return reserve_units(provided_key, units)
     except MeteredGateError as exc:
         logger.warning("metering gate unavailable: %s", type(exc).__name__)
         return REASON_METERING_UNAVAILABLE, None

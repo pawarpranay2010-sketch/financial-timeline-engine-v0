@@ -71,8 +71,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import secrets
 import time
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -84,6 +85,8 @@ from api.routes.kernel import (
     _safe_candidate,
 )
 from api.schemas import (
+    BulkProcessRequest,
+    DeveloperBulkResultEnvelope,
     DeveloperCapabilitiesResponse,
     DeveloperCapabilityEntry,
     DeveloperHealthResponse,
@@ -94,7 +97,8 @@ from api.schemas import (
 
 # Phase 5D: canonical result envelope builder — transport serialization
 # of engine truth only (no status authority, no financial semantics).
-from api.results import build_process_result
+# Phase 5J also uses it for per-item results (via _execute_single_item).
+from api.results import build_process_result, next_action_for
 
 # Phase 5A: deterministic six-state public-status mapping (transport-only;
 # no status literals in this module — see the E1 discipline below).
@@ -103,6 +107,7 @@ from api.status import (
     RETRYABLE_BY_PUBLIC_STATUS,
     public_status_for_error_code,
 )
+from api.status import STATUS_FAILED as STATUS_FAILED
 from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 
 # Phase 16 metered gate — HTTP-agnostic admission control. Imported at
@@ -838,15 +843,16 @@ def _process_v1_idempotent(
         raise _gate_http_exception(reason)
     admitted_ctx = (adm.tenant_id, adm.key_prefix)
 
-    # Imported lazily: importing the platrixa package pulls the backend
-    # kernel graph, which must never happen at api.main import time
-    # (Phase 7F clean-import discipline for /health serving).
-    from platrixa.errors import InputError, PlatrixaError
+    # Phase 5J: ONE canonical single-item execution path, shared with
+    # POST /v1/process/bulk. The facade call below IS the pipeline
+    # (schema verification → grounding → capability routing → evidence →
+    # deterministic authority); this function adds no financial logic.
+    content, transport_status, outcome_kind = _execute_single_item(
+        client, payload.raw_input, rid, started=started
+    )
+    duration_ms = int((time.perf_counter() - started) * 1000)
 
-    try:
-        result = client.process(payload.raw_input, request_id=rid)
-    except InputError as exc:
-        duration_ms = int((time.perf_counter() - started) * 1000)
+    if outcome_kind == "input_invalid":
         _log(
             "/v1/process",
             request_id=rid,
@@ -854,31 +860,25 @@ def _process_v1_idempotent(
             duration_ms=duration_ms,
             error="INPUT_INVALID",
         )
-        envelope_dict = _error_envelope("INPUT_INVALID", str(exc), request_id=rid)
         if idem_key:
             idempotency_store.fail(
                 idem_key, idem_tenant, "/v1/process", {"raw_input": payload.raw_input},
                 code="INPUT_INVALID",
-                envelope=envelope_dict,
+                envelope=content,
                 http_status=422,
                 request_id=rid,
             )
         _record_request_metadata(
             admitted_ctx,
             http_status=422,
-            api_status=envelope_dict["error"]["api_status"],
+            api_status=content["error"]["api_status"],
             reason_code="INPUT_INVALID",
             request_id=rid,
             duration_ms=duration_ms,
         )
-        return JSONResponse(status_code=422, content=envelope_dict)
-    except PlatrixaError as exc:
-        # Runtime failure (provider unavailable/failed). Never converted
-        # into a success; details logged server-side, generic message out.
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        logger.warning(
-            "developer request failed: %s: %s", type(exc).__name__, exc
-        )
+        return JSONResponse(status_code=422, content=content)
+
+    if outcome_kind == "provider_unavailable":
         _log(
             "/v1/process",
             request_id=rid,
@@ -898,34 +898,11 @@ def _process_v1_idempotent(
             request_id=rid,
             duration_ms=duration_ms,
         )
-        return _error_response(
-            503,
-            "PROVIDER_UNAVAILABLE",
-            "model provider is unavailable; retry later",
-            request_id=rid,
-        )
+        return JSONResponse(status_code=503, content=content)
     # Any other exception propagates to the global handler (500, type
     # name only — no stack traces, no internals in the response).
 
-    duration_ms = int((time.perf_counter() - started) * 1000)
-    status = result.status
-    transport_status = _HTTP_STATUS_BY_KERNEL_STATUS.get(status, 500)
-
-    # Phase 5D: canonical result envelope — a serialization of the engine
-    # result (all Phase 5A fields preserved verbatim, additive evidence /
-    # reason_codes / metadata fields added). Same values, one contract.
-    content = build_process_result(
-        request_id=getattr(result, "request_id", None),
-        engine_status=status,
-        engine_status_label=getattr(result, "status_label", "") or status,
-        next_action=getattr(result, "next_action", None),
-        issues=list(getattr(result, "issues", None) or []),
-        grounding_issues=list(getattr(result, "grounding_issues", None) or []),
-        rule_evidence=list(getattr(result, "rule_evidence", None) or []),
-        interpretation=_safe_candidate(getattr(result, "interpretation", None)),
-        accounting=_safe_accounting(getattr(result, "accounting", None)),
-        duration_ms=duration_ms,
-    )
+    status = content.get("status")
 
     _log(
         "/v1/process",
@@ -969,6 +946,557 @@ def _process_v1_idempotent(
         content=content,
         headers=headers,
     )
+
+
+# ===========================================================================
+# Bulk (Phase 5J)
+# ---------------------------------------------------------------------------
+# POST /v1/process/bulk — submit a bounded batch of independent items in
+# one request. The batch layer only COORDINATES: it validates limits,
+# admits the whole batch through the Phase 5I choke point, runs each item
+# through the ONE canonical single-item execution path
+# (_execute_single_item — the same facade call /v1/process uses), counts
+# outcomes and reports. It contains NO financial logic, NO second
+# accounting engine, and NO alternative route to VERIFIED: every item's
+# status comes verbatim from the existing engine contract.
+# ===========================================================================
+
+# Maximum items per batch. Derived from the existing infrastructure, not
+# invented: it keeps a batch far inside the 64 KiB /v1 body guard (a
+# pathological all-2000-character batch is still refused cleanly by the
+# existing 413 envelope) and bounds the provider work one request can
+# schedule. Documented in reports/PHASE_5J_BULK_API.md.
+MAX_BATCH_ITEMS = 25
+
+# Wall-clock budget for the whole batch. Remote inference timeouts are
+# 60 s (http) / 120 s (gradio), so a full batch of slow items could
+# outlive a gateway timeout. Items not attempted because the budget
+# elapsed are reported EXPLICITLY (attempted=false, retryable) — never
+# silently omitted, and never as a user-input error.
+BULK_TIME_BUDGET_SECONDS = float(
+    (os.getenv("PLATRIXA_BULK_TIME_BUDGET_SECONDS", "") or "120").strip() or 120
+)
+
+# After this many CONSECUTIVE provider/infrastructure failures the batch
+# stops attempting items: every further item would hit the same outage,
+# and hammering a down provider wastes the tenant's reserved quota.
+BULK_MAX_CONSECUTIVE_INFRA_FAILURES = 2
+
+BULK_ENDPOINT = "/v1/process/bulk"
+
+
+def _bulk_item_id(index: int, provided: Optional[str]) -> str:
+    """Stable per-item id: the caller's, else a deterministic server id."""
+    if provided:
+        return provided
+    return f"item_{index:03d}"
+
+
+def _bulk_item_request_id(rid: Optional[str], index: int) -> str:
+    """Deterministic per-item correlation id (``<request id>-<index>``)."""
+    base = rid or "bulk"
+    return f"{base}-{index:03d}"[:128]
+
+
+def _bulk_aggregate_status(item_api_statuses: List[str]) -> tuple[str, List[str]]:
+    """Batch-level public status — deterministic, fail-closed aggregation.
+
+    Reuses the EXISTING six-state vocabulary (api/status.py); it is not a
+    new contract and it can never upgrade an item outcome:
+
+      * every item VERIFIED            → VERIFIED (and only then);
+      * all items terminal and all the same non-VERIFIED state → that
+        state (e.g. all UNSUPPORTED → UNSUPPORTED);
+      * all items terminal but mixed   → FAILED (fail closed; the per-item
+        counts carry the detail);
+      * any item not terminal (PROCESSING / not attempted) → PROCESSING.
+
+    A batch is therefore never VERIFIED because *some* item was verified,
+    and REVIEW_REQUIRED / UNSUPPORTED are never reported as success.
+    """
+    from api.status import PUBLIC_STATES
+
+    if not item_api_statuses:
+        return "FAILED", ["BATCH_EMPTY"]
+    if any(s == "PROCESSING" for s in item_api_statuses):
+        return "PROCESSING", ["RESULT_PENDING"]
+    if all(s == "VERIFIED" for s in item_api_statuses):
+        return "VERIFIED", []
+    distinct = sorted(set(item_api_statuses))
+    if len(distinct) == 1 and distinct[0] in PUBLIC_STATES:
+        return distinct[0], []
+    return "FAILED", ["MIXED_ITEM_OUTCOMES"]
+
+
+def _bulk_not_attempted(
+    code: str, message: str, rid: Optional[str]
+) -> tuple[dict, int]:
+    """Explicit result for an item that was NOT attempted.
+
+    Used when the batch time budget elapses or after repeated provider
+    failures. The item keeps its place in the ordering, states plainly
+    that it was not attempted, and carries the canonical error envelope
+    with the correct six-state mapping (retryable infrastructure
+    conditions are PROCESSING, never INVALID_INPUT).
+    """
+    return _error_envelope(code, message, request_id=rid), 503
+
+
+def _bulk_fingerprint(payload: BulkProcessRequest) -> dict:
+    """Deterministic fingerprint for an ORDERED batch.
+
+    Item order is part of the canonical request (the response is ordered),
+    and ``canonical_fingerprint`` serializes lists in order, so the same
+    items in a different order are a DIFFERENT request — and therefore a
+    409 conflict on a reused key, exactly like the single-item contract.
+    """
+    return {
+        "items": [
+            {"item_id": item.item_id, "raw_input": item.raw_input}
+            for item in payload.items
+        ]
+    }
+
+
+@router.post(
+    "/v1/process/bulk",
+    response_model=DeveloperBulkResultEnvelope,
+    dependencies=[Depends(_metered_api_key_guard)],
+    responses={
+        400: {
+            "description": (
+                "REQUEST_MALFORMED / BATCH_EMPTY / BATCH_TOO_LARGE / "
+                "BATCH_DUPLICATE_ITEM_ID — rejected before admission, so no quota is consumed."
+            )
+        },
+        409: {"description": "Idempotency conflict — key reused with a different canonical batch."},
+        413: {"description": "REQUEST_TOO_LARGE — the existing /v1 body guard refused the batch."},
+        429: {"description": "QUOTA_EXHAUSTED — the whole batch is refused; zero units consumed."},
+        503: {"description": "METERING_UNAVAILABLE / provider unavailable — fail closed."},
+    },
+    summary="Process a bounded batch of independent financial inputs",
+    description=(
+        "Runs each item through the EXISTING single-item pipeline — the same "
+        "public interface, schema verification, grounding, capability routing, "
+        "evidence and deterministic authority POST /v1/process uses — and "
+        "returns each item's canonical result envelope in input order. One "
+        "quota unit per item, reserved atomically for the whole batch "
+        "(all-or-nothing). The batch-level status reuses the existing "
+        "six-state public contract and is VERIFIED only when every item is."
+    ),
+)
+def process_bulk_v1(
+    payload: BulkProcessRequest,
+    request: Request,
+    idempotency_key: Optional[str] = Header(
+        default=None,
+        alias="Idempotency-Key",
+        title="Idempotency-Key",
+        description=(
+            "Optional. Same Phase 5C contract as POST /v1/process, scoped to "
+            "the canonical ORDERED batch: same key + same batch replays the "
+            "original result without reprocessing or recharging; same key + a "
+            "different batch is a 409. Requires a metering-enabled "
+            "deployment (400 IDEMPOTENCY_NOT_CONFIGURED otherwise). Item ids "
+            "are NOT idempotency keys."
+        ),
+    ),
+) -> "DeveloperBulkResultEnvelope":
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    started = time.perf_counter()
+    items = list(payload.items)
+    batch_id = "bat_" + secrets.token_hex(12)
+
+    # ---- transport validation (BEFORE admission: a rejected batch is free)
+    if not items:
+        return _error_response(400, "BATCH_EMPTY", "items must contain at least one item",
+                               request_id=rid)
+    if len(items) > MAX_BATCH_ITEMS:
+        return _error_response(
+            400,
+            "BATCH_TOO_LARGE",
+            f"a batch may contain at most {MAX_BATCH_ITEMS} items; received {len(items)}",
+            request_id=rid,
+        )
+    seen_ids: set = set()
+    for idx, item in enumerate(items):
+        if item.item_id:
+            if item.item_id in seen_ids:
+                return _error_response(
+                    400,
+                    "BATCH_DUPLICATE_ITEM_ID",
+                    f"item_id {item.item_id!r} appears more than once; item ids must be unique",
+                    request_id=rid,
+                )
+            seen_ids.add(item.item_id)
+
+    # ---- idempotency (claim BEFORE reservation: a replay never charges)
+    idem_key: Optional[str] = None
+    idem_tenant: Optional[str] = None
+    if idempotency_key is not None:
+        ok, key_code = idempotency_store.validate_key(idempotency_key)
+        if not ok:
+            return _error_response(400, key_code, idempotency_store.KEY_FORMAT_MESSAGE, request_id=rid)
+        idem_key = (idempotency_key or "").strip()
+        if not admission_boundary.metering_configured():
+            return _error_response(
+                400,
+                "IDEMPOTENCY_NOT_CONFIGURED",
+                "this deployment has no durable idempotency store configured; omit the Idempotency-Key header",
+                request_id=rid,
+            )
+        idem_tenant = _resolve_idempotency_tenant(request)
+        if idem_tenant is None:
+            return _error_response(
+                503,
+                "IDEMPOTENCY_UNAVAILABLE",
+                "idempotency store unavailable; request not admitted",
+                request_id=rid,
+            )
+        try:
+            outcome = idempotency_store.claim(
+                idem_key, idem_tenant, BULK_ENDPOINT, _bulk_fingerprint(payload)
+            )
+        except idempotency_store.IdempotencyUnavailableError:
+            return _error_response(
+                503,
+                "IDEMPOTENCY_UNAVAILABLE",
+                "idempotency store unavailable; request not admitted",
+                request_id=rid,
+            )
+        if outcome.replay:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            _log(BULK_ENDPOINT, request_id=outcome.request_id or rid, status=None,
+                 duration_ms=duration_ms, error="IDEMPOTENT_REPLAY")
+            return JSONResponse(
+                status_code=outcome.http_status or 200,
+                content=outcome.envelope or {},
+                headers={
+                    "Idempotent-Replayed": "true",
+                    "Idempotency-Key": idempotency_store.idempotency_key_hash(idem_key)[:8],
+                },
+            )
+        if outcome.conflict:
+            return _error_response(
+                409,
+                idempotency_store.CONFLICT_CODE,
+                "this Idempotency-Key was already used with a different request",
+                request_id=rid,
+            )
+        if outcome.processing:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "api_version": API_VERSION,
+                    "request_id": outcome.request_id,
+                    "status": "PROCESSING",
+                    "status_label": "Processing",
+                    "success": False,
+                    "api_status": "PROCESSING",
+                    "api_status_label": "Processing",
+                    "retryable": True,
+                    "reason_code": idempotency_store.IN_PROGRESS_CODE,
+                },
+                headers={"Idempotent-Replayed": "false", "Retry-After": "2"},
+            )
+
+    try:
+        client = _get_client(request)
+    except Exception as exc:  # server configuration problem — fail closed
+        if idem_key:
+            idempotency_store.release(idem_key, idem_tenant)
+        logger.error("developer client construction failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="service configuration invalid") from exc
+
+    # ---- Phase 5I admission: ONE atomic reservation of N units ---------
+    # One unit per item, all-or-nothing: either every item is admitted or
+    # the batch is refused with ZERO units consumed. There is no loop of
+    # single reservations, so a batch can never be partially charged.
+    provided = request.headers.get("x-platrixa-api-key", "")
+    reason, adm = admission_boundary.admit(provided, reserve=True, units=len(items))
+    if reason != admission_boundary.ADMIT_OK:
+        if idem_key:
+            idempotency_store.release(idem_key, idem_tenant)
+        raise _gate_http_exception(reason)
+    admitted_ctx = (adm.tenant_id, adm.key_prefix)
+
+    # ---- execute items, sequentially, in input order -------------------
+    results: List[dict] = []
+    counts: Dict[str, int] = {}
+    engine_counts: Dict[str, int] = {}
+    consecutive_infra = 0
+    aborted_reason: Optional[tuple] = None
+    attempted = 0
+
+    for idx, item in enumerate(items):
+        item_rid = _bulk_item_request_id(rid, idx)
+        deadline_hit = (time.perf_counter() - started) >= BULK_TIME_BUDGET_SECONDS
+        if aborted_reason is not None or deadline_hit:
+            code, message = aborted_reason or (
+                "RESULT_PENDING",
+                "batch time budget elapsed before this item was attempted; "
+                "resubmit it (with this Idempotency-Key omitted) to process it",
+            )
+            envelope, _status = _bulk_not_attempted(code, message, item_rid)
+            attempted_flag = False
+        else:
+            item_started = time.perf_counter()
+            # Item-level isolation: an unexpected exception escaping the
+            # engine/serialization layer must not erase the results of
+            # independent items already produced. It is reported as an
+            # infrastructure failure (PROCESSING / retryable) for THIS
+            # item only — never downgraded to an input error, and the
+            # exception type is logged server-side, never returned.
+            try:
+                envelope, _status, kind = _execute_single_item(
+                    client, item.raw_input, item_rid, started=item_started
+                )
+            except Exception as exc:  # noqa: BLE001 — deliberate boundary
+                logger.error(
+                    "bulk item %s raised %s", idx, type(exc).__name__
+                )
+                envelope, _status = _bulk_not_attempted(
+                    "INTERNAL_ERROR",
+                    "this item could not be processed because of an internal "
+                    "error; the other items in the batch were unaffected",
+                    item_rid,
+                )
+                kind = "provider_unavailable"
+            attempted_flag = True
+            attempted += 1
+            if kind == "provider_unavailable":
+                consecutive_infra += 1
+                if consecutive_infra >= BULK_MAX_CONSECUTIVE_INFRA_FAILURES:
+                    aborted_reason = (
+                        "PROVIDER_UNAVAILABLE",
+                        "model provider is unavailable; the remaining items were not attempted "
+                        "after repeated provider failures and may succeed on resubmission",
+                    )
+            else:
+                consecutive_infra = 0
+
+        entry = {
+            "index": idx,
+            "item_id": _bulk_item_id(idx, item.item_id),
+            "attempted": attempted_flag,
+            "request_id": item_rid,
+        }
+        # ``build_process_result`` returns a FLAT envelope (no "result"
+        # key); the error envelope carries an "error" key. Discriminate on
+        # "error" — the single reliable marker — and fail closed: anything
+        # that is not recognisably a terminal engine result is reported as
+        # a per-item FAILED, never silently dropped.
+        if "error" in envelope:
+            err = envelope["error"] or {}
+            item_api_status = err.get("api_status") or STATUS_FAILED
+            item_status = None
+            item_engine_status = None
+            item_reason_codes = [err["code"]] if err.get("code") else []
+            item_result = None
+            item_error = err
+        else:
+            item_api_status = envelope.get("api_status") or STATUS_FAILED
+            item_status = envelope.get("status")
+            item_engine_status = envelope.get("engine_status")
+            item_reason_codes = list(envelope.get("reason_codes") or [])
+            # build_process_result already JSON-safes every field it emits
+            # (see api.results._jsonable), so the canonical envelope is
+            # passed through verbatim — no re-serialization, no rewriting
+            # of evidence, confidence, capability ids, or lineage.
+            item_result = envelope
+            item_error = None
+
+        entry["result"] = item_result
+        entry["error"] = item_error
+        entry["api_status"] = item_api_status
+        entry["engine_status"] = item_engine_status
+        entry["status"] = item_status
+        entry["reason_codes"] = item_reason_codes
+        counts[item_api_status] = counts.get(item_api_status, 0) + 1
+        if item_engine_status:
+            engine_counts[item_engine_status] = engine_counts.get(item_engine_status, 0) + 1
+        results.append(entry)
+
+    api_status, reason_codes = _bulk_aggregate_status(
+        [str(e.get("api_status") or "FAILED") for e in results]
+    )
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    not_attempted = len(items) - attempted
+    partial = bool(0 < sum(counts.values()) < len(items)) or any(
+        e["api_status"] not in {"VERIFIED"} for e in results
+    )
+
+    from api.status import LABEL_BY_PUBLIC_STATUS as _labels
+    from api.status import RETRYABLE_BY_PUBLIC_STATUS as _retryable
+
+    content = {
+        "api_version": API_VERSION,
+        "request_id": rid,
+        "batch_id": batch_id,
+        "status": api_status,
+        "status_label": _labels.get(api_status, ""),
+        "api_status": api_status,
+        "api_status_label": _labels.get(api_status, ""),
+        # No engine "batch state" exists — the batch has no engine verdict
+        # of its own, so the verbatim engine field stays null rather than
+        # inventing one.
+        "engine_status": None,
+        "success": api_status == "VERIFIED",
+        "retryable": bool(_retryable.get(api_status, False)),
+        "reason_code": reason_codes[0] if reason_codes else None,
+        "reason_codes": reason_codes,
+        "next_action": next_action_for(api_status),
+        "total_items": len(items),
+        "attempted_items": attempted,
+        "not_attempted_items": not_attempted,
+        "partial_success": partial,
+        "counts": counts,
+        "counts_by_engine_status": engine_counts,
+        "quota": {
+            "units_reserved": adm.units_reserved,
+            "policy": "one unit per item, reserved atomically for the whole batch (all-or-nothing)",
+        },
+        "results": results,
+        "metadata": {
+            "engine_status": None,
+            "processing_time_ms": duration_ms,
+            "timings_ms": None,
+            "notes": [
+                "items are processed sequentially in input order through the "
+                "single-item pipeline; no item is retried automatically"
+            ],
+        },
+    }
+
+    _log(BULK_ENDPOINT, request_id=rid, status=api_status, duration_ms=duration_ms, error=None)
+
+    # Phase 5H: batch request metadata (no raw inputs, no key material).
+    _record_request_metadata(
+        admitted_ctx,
+        http_status=200,
+        api_status=api_status,
+        reason_code=reason_codes[0] if reason_codes else None,
+        request_id=rid,
+        duration_ms=duration_ms,
+        endpoint=BULK_ENDPOINT,
+    )
+    # Per-item rows for every item that did NOT come back VERIFIED, so a
+    # failed/flagged item stays independently identifiable in the
+    # request-history surface without flooding it with successes.
+    for entry in results:
+        if entry.get("api_status") == "VERIFIED":
+            continue
+        _record_request_metadata(
+            admitted_ctx,
+            http_status=200 if entry.get("attempted") else 202,
+            api_status=entry.get("api_status"),
+            reason_code=(entry.get("reason_codes") or [None])[0],
+            request_id=entry.get("request_id"),
+            duration_ms=None,
+            endpoint=f"{BULK_ENDPOINT}(item)",
+        )
+
+    # Phase 5C: record the terminal batch envelope for replay.
+    if idem_key:
+        try:
+            idempotency_store.complete(
+                idem_key,
+                idem_tenant,
+                BULK_ENDPOINT,
+                _bulk_fingerprint(payload),
+                request_id=rid or None,
+                envelope=content,
+                http_status=200,
+            )
+        except idempotency_store.IdempotencyUnavailableError:
+            logger.warning("bulk idempotency record completion failed (non-fatal)")
+
+    return JSONResponse(
+        status_code=200,
+        content=content,
+        headers={"Idempotent-Replayed": "false"} if idem_key else None,
+    )
+
+
+def _execute_single_item(
+    client,
+    raw_input: str,
+    rid: Optional[str],
+    *,
+    started: Optional[float] = None,
+) -> tuple[dict, int, str]:
+    """Phase 5J: THE canonical single-item execution path.
+
+    Runs ONE item through the existing public interface
+    (``client.process`` → Kernel, exactly once) and serializes it with the
+    existing Phase 5D builder. This is the ONE implementation shared by
+    ``POST /v1/process`` and ``POST /v1/process/bulk`` so a bulk item
+    produces exactly the envelope the single-item route would produce for
+    the same input — same schema verification, grounding, capability
+    routing, evidence and deterministic authority, because the same
+    facade call IS the pipeline. No financial logic exists in this
+    function and none may be added.
+
+    Returns ``(envelope, http_status, outcome_kind)`` where
+    ``outcome_kind`` is one of:
+
+      ``result``               — a terminal engine result (envelope is the
+                                 canonical Phase 5D result contract);
+      ``input_invalid``        — the engine rejected the input; envelope is
+                                 the canonical error envelope (422,
+                                 INVALID_INPUT);
+      ``provider_unavailable`` — a runtime/infrastructure failure; envelope
+                                 is the canonical error envelope (503,
+                                 PROVIDER_UNAVAILABLE → public PROCESSING,
+                                 retryable). NEVER downgraded to an
+                                 input error.
+
+    The kind marker lets the single-item route keep its Phase 5C
+    idempotency semantics (record a terminal failure vs release the claim)
+    without duplicating this mapping.
+    """
+    from platrixa.errors import InputError, PlatrixaError
+
+    try:
+        result = client.process(raw_input, request_id=rid)
+    except InputError as exc:
+        return (
+            _error_envelope("INPUT_INVALID", str(exc), request_id=rid),
+            422,
+            "input_invalid",
+        )
+    except PlatrixaError as exc:
+        # Runtime failure (provider unavailable/failed). Never converted
+        # into a success; details logged server-side, generic message out.
+        logger.warning("developer request failed: %s: %s", type(exc).__name__, exc)
+        return (
+            _error_envelope(
+                "PROVIDER_UNAVAILABLE",
+                "model provider is unavailable; retry later",
+                request_id=rid,
+            ),
+            503,
+            "provider_unavailable",
+        )
+
+    engine_status = result.status
+    transport_status = _HTTP_STATUS_BY_KERNEL_STATUS.get(engine_status, 500)
+    duration_ms = (
+        int((time.perf_counter() - started) * 1000) if started is not None else None
+    )
+    envelope = build_process_result(
+        request_id=getattr(result, "request_id", None),
+        engine_status=engine_status,
+        engine_status_label=getattr(result, "status_label", "") or engine_status,
+        next_action=getattr(result, "next_action", None),
+        issues=list(getattr(result, "issues", None) or []),
+        grounding_issues=list(getattr(result, "grounding_issues", None) or []),
+        rule_evidence=list(getattr(result, "rule_evidence", None) or []),
+        interpretation=_safe_candidate(getattr(result, "interpretation", None)),
+        accounting=_safe_accounting(getattr(result, "accounting", None)),
+        duration_ms=duration_ms,
+    )
+    return envelope, transport_status, "result"
 
 
 def _record_request_metadata(

@@ -129,17 +129,26 @@ def admit(
     provided_key: Optional[str],
     *,
     reserve: bool = True,
+    units: int = 1,
 ) -> Tuple[str, Optional[AdmissionContext]]:
-    """THE admission path: authenticate (+ reserve exactly one unit).
+    """THE admission path: authenticate (+ reserve quota units).
 
     Every billable processing route MUST obtain admission through this
     function before expensive processing. Routes must not call
-    ``metered_gate.reserve_unit`` / ``authorize_request`` themselves;
+    ``metered_gate.reserve_unit(s)`` / ``authorize_units`` themselves;
     the shared FastAPI guard also routes through here.
+
+    ``units`` (Phase 5J) is how many quota units the request bills. The
+    default ``1`` is the Phase 16 single-request contract and is what
+    every non-bulk route uses. Bulk admission passes the number of items
+    it is about to process; the reservation is ONE atomic statement, so
+    a batch is either fully admitted (N units) or fully refused (0
+    units) — never partially charged. Callers MUST NOT loop :func:`admit`
+    to charge for N items.
 
     Order of evaluation (deterministic, see module docstring):
       1. Phase 15 shared key configured → exact-match check only.
-      2. Metering configured → resolve tenant, then reserve ONE unit.
+      2. Metering configured → resolve tenant, then reserve the units.
       3. Neither → zero-config open mode, anonymous context.
 
     Returns ``(reason, context_or_none)``; ``reason != ADMIT_OK`` means
@@ -174,8 +183,8 @@ def admit(
         if not provided:
             return ADMIT_MISSING_KEY, None
         try:
-            reason, ctx = metered_gate.authorize_request(provided)
-        except Exception:  # defensive: authorize_request already maps, belt+braces
+            reason, ctx = metered_gate.authorize_units(provided, units)
+        except Exception:  # defensive: authorize_units already maps, belt+braces
             return ADMIT_METERING_UNAVAILABLE, None
         if reason != metered_gate.REASON_OK or ctx is None:
             return reason, None
@@ -183,7 +192,7 @@ def admit(
             tenant_id=ctx.tenant_id,
             key_prefix=_phase15_prefix(provided),
             mode="metered-tenants",
-            units_reserved=ctx.units_reserved or 1,
+            units_reserved=ctx.units_reserved or units,
         )
 
     # --- 3. Zero-config open mode (documented Phase 13 contract) --------

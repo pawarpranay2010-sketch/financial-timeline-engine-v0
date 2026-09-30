@@ -210,6 +210,28 @@ def hdr(key: str) -> dict:
     return {"X-Platrixa-API-Key": key}
 
 
+def _has_guard(module, func_name: str) -> bool:
+    """True when ``module.func_name`` is registered with the admission guard.
+
+    Anti-bypass proof: a billable route must carry
+    ``dependencies=[Depends(_metered_api_key_guard)]``. This inspects the
+    ACTUAL decorator argument on the real function, so renaming or
+    dropping the guard makes this return False.
+    """
+    fn = getattr(module, func_name, None)
+    if fn is None:
+        return False
+    guard = getattr(module, "_metered_api_key_guard", None)
+    # FastAPI stores the decorator dependencies on the APIRoute, not on the
+    # function object, so read them from the route that wraps this endpoint.
+    for route in getattr(module.router, "routes", []):
+        if getattr(route, "endpoint", None) is fn:
+            for d in getattr(route, "dependencies", []) or []:
+                if getattr(d, "dependency", None) is guard:
+                    return True
+    return False
+
+
 def _all_route_paths(app) -> set:
     """Flatten route paths across FastAPI versions.
 
@@ -478,11 +500,32 @@ def section_g(engine) -> None:
 
     # The hosted developer entry point remains the ONLY /v1 processing
     # route, and it still flows through the public interface.
+    from api.routes import developer
     from api.main import create_app as _ca
     app = _ca()
     paths = _all_route_paths(app)
-    check("G1 /v1/process is the sole versioned processing endpoint",
-          "/v1/process" in paths and not any(p.startswith("/v1/") and "process" in p and p != "/v1/process" for p in paths))
+    # Sole TEXT processing endpoint. (/v1/process/document was added later
+    # as the second documented processing route; it shares the same gate,
+    # and is pinned here as the ONLY other /v1 processing path. Phase 5J
+    # added /v1/process/bulk as the THIRD documented processing route; the
+    # allowlist below is the anti-BYPASS pin — the set of routes that are
+    # PERMITTED to process — and it must be extended deliberately, never
+    # widened. Bulk shares the same guard and the same public interface.)
+    _ALLOWED_PROCESSING_PATHS = (
+        "/v1/process",
+        "/v1/process/document",
+        "/v1/process/bulk",
+    )
+    check("G1 /v1/process is the sole versioned TEXT processing endpoint",
+          "/v1/process" in paths and not any(
+              p.startswith("/v1/") and "process" in p
+              and p not in _ALLOWED_PROCESSING_PATHS
+              for p in paths))
+    check("G1b /v1/process/document is the only other /v1 processing route",
+          "/v1/process/document" in paths)
+    check("G1c /v1/process/bulk is behind the same admission guard (no bypass)",
+          "/v1/process/bulk" in paths and _has_guard(developer, "process_bulk_v1"),
+          "bulk route is unguarded")
 
     src = Path("api/routes/developer.py").read_text(encoding="utf-8")
     check("G2 route still calls the public interface (client.process)",

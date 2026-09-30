@@ -74,7 +74,16 @@ class _Ctx:
 
 
 def _install_metered_mode(tenant_for_key=None):
-    """Point the admission boundary at a COUNTING stub of the Phase 16 gate."""
+    """Point the admission boundary at a COUNTING stub of the Phase 16 gate.
+
+    Phase 5J: the admission boundary now calls ``authorize_units`` (the
+    multi-unit entry point) for EVERY billable route, with ``units=1`` for
+    the single-item routes. The stub therefore replaces
+    ``authorize_units`` — and keeps ``authorize_request`` aliased to it, so
+    either entry point is counted. The counting semantics (one entry per
+    charged unit) are unchanged, so every assertion below still means
+    "this route reserved exactly N units".
+    """
     tenant_for_key = tenant_for_key or (lambda key: f"tenant-for-{key[-4:]}")
 
     def _resolve(key):
@@ -82,14 +91,18 @@ def _install_metered_mode(tenant_for_key=None):
             return metered_gate.REASON_MISSING_KEY, None
         return metered_gate.REASON_OK, _Ctx(tenant_for_key(key))
 
-    def _authorize(key):
+    def _authorize_units(key, units=1):
         if not (key or "").strip():
             return metered_gate.REASON_MISSING_KEY, None
-        RESERVATIONS.append(key)
-        return metered_gate.REASON_OK, _Ctx(tenant_for_key(key))
+        for _ in range(int(units or 1)):
+            RESERVATIONS.append(key)
+        ctx = _Ctx(tenant_for_key(key))
+        ctx.units_reserved = int(units or 1)
+        return metered_gate.REASON_OK, ctx
 
     metered_gate.resolve_tenant = _resolve
-    metered_gate.authorize_request = _authorize
+    metered_gate.authorize_units = _authorize_units
+    metered_gate.authorize_request = lambda key: _authorize_units(key, 1)
     metered_gate._metering_configured = lambda: True
 
 
@@ -328,11 +341,14 @@ def section_c() -> None:
     RESERVATIONS.clear()
 
     # Quota exhausted: reservation refused, zero rows written.
-    def _authorize_quota(key):
+    # (Phase 5J: the boundary calls authorize_units, so the refusal is
+    # installed on that entry point and aliased onto authorize_request.)
+    def _authorize_quota(key, units=1):
         return metered_gate.REASON_QUOTA_EXHAUSTED, None
 
     metered_gate.resolve_tenant = lambda key: (metered_gate.REASON_OK, _Ctx("t"))
-    metered_gate.authorize_request = _authorize_quota
+    metered_gate.authorize_units = _authorize_quota
+    metered_gate.authorize_request = lambda key: _authorize_quota(key, 1)
     metered_gate._metering_configured = lambda: True
 
     from fastapi import FastAPI

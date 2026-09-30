@@ -476,3 +476,96 @@ class DeveloperReadyResponse(BaseModel):
     rule_pack: Optional[Dict[str, Any]] = None
     reason: Optional[str] = None
     admission: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# Bulk (Phase 5J)
+# ---------------------------------------------------------------------------
+
+
+class BulkItem(BaseModel):
+    """One independent item in a bulk request.
+
+    ``raw_input`` is validated with the SAME contract the single-item route
+    uses (``KernelProcessRequest``: 1..2000 characters). The batch layer
+    never reinterprets, repairs, or relaxes an item's input — an item that
+    fails this validation produces an explicit per-item INVALID_INPUT
+    result rather than silently changing the input.
+
+    ``item_id`` is an OPTIONAL caller-supplied correlation id. It is never
+    an idempotency key: replay safety for the whole batch comes from the
+    request-level ``Idempotency-Key`` header.
+    """
+
+    item_id: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._:-]{1,64}$",
+        description="Optional caller-supplied identifier echoed back verbatim.",
+    )
+    raw_input: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Raw financial text for this item, sent to the Kernel verbatim.",
+    )
+
+
+class BulkProcessRequest(BaseModel):
+    """A bounded batch of independent items.
+
+    The list itself is intentionally NOT constrained by ``min_length``:
+    Pydantic would reject an empty batch during body validation, and the
+    Phase 15 malformed-body handler would report the generic
+    ``REQUEST_MALFORMED`` — making the specific ``BATCH_EMPTY`` rejection
+    unreachable. Leaving the check to the route keeps one deterministic
+    error code for the condition, as the schema docstring intends.
+
+    Upper bound (``MAX_BATCH_ITEMS``) is likewise enforced by the route, so
+    both batch limits are decided in exactly one place.
+    """
+
+    items: List[BulkItem] = Field(
+        ...,
+        description="1..MAX_BATCH_ITEMS independent items, processed in order.",
+    )
+
+
+class DeveloperBulkResultEnvelope(BaseModel):
+    """Phase 5J — the batch envelope.
+
+    Batch-level ``status`` / ``api_status`` reuse the EXISTING six-state
+    public contract (owned by api/status.py); there is no competing
+    vocabulary. They describe the BATCH outcome as a whole, aggregated from
+    the items by the documented, deterministic rule (see
+    reports/PHASE_5J_BULK_API.md) — a batch is VERIFIED only when EVERY
+    item is VERIFIED.
+
+    Each entry in ``results`` is one item's existing canonical contract: a
+    Phase 5D result envelope for a processed item, or the canonical error
+    envelope for an item that failed or was not attempted. Order is always
+    the input order.
+    """
+
+    api_version: str = "v1"
+    request_id: Optional[str] = None
+    batch_id: str
+    status: str
+    status_label: str = ""
+    api_status: str
+    api_status_label: str = ""
+    engine_status: Optional[str] = None
+    success: bool = False
+    retryable: bool = False
+    reason_code: Optional[str] = None
+    reason_codes: List[str] = Field(default_factory=list)
+    next_action: Optional[str] = None
+    total_items: int
+    attempted_items: int = 0
+    not_attempted_items: int = 0
+    partial_success: bool = False
+    counts: Dict[str, int] = Field(default_factory=dict)
+    counts_by_engine_status: Dict[str, int] = Field(default_factory=dict)
+    quota: Dict[str, Any] = Field(default_factory=dict)
+    results: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
