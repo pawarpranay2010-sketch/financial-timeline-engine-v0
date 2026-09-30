@@ -7,8 +7,8 @@ adds scheduling, not semantics:
         ↓ 202 job accepted              ↓ 201 endpoint registered
         ↓ (job_id, result_id,           ↓ (secret shown EXACTLY ONCE)
            status_url, result_url)          ↓
-        ↓                          best-effort signed delivery after
-    durable PostgreSQL job state   each terminal job outcome
+        ↓                          durable signed delivery after
+    durable PostgreSQL job state   each job outcome (5K)
         ↓
     in-process worker thread
         ↓ claim_next_job (lease)
@@ -23,9 +23,11 @@ Honest limits (documented in docs/HOSTED_API.md):
   * One durable job store (the metering PostgreSQL). Restarts never
     erase jobs; QUEUED work is resumed and leased PROCESSING work is
     recovered after the lease expires.
-  * Webhook delivery is a best-effort, single-attempt, signed
-    foundation — not an at-least-once production queue. Polling is the
-    reliable path; webhooks are a convenience.
+  * Webhook delivery is DURABLE and at-least-once (Phase 5K): each
+    delivery is persisted before the attempt and retried with bounded
+    backoff. Consumers must still deduplicate on the deterministic event
+    id; exactly-once is not claimed. Polling remains the simplest
+    reliable path.
 
 Security boundary:
   * Same admission as sync: Phase 15 key / Phase 16 metered gate
@@ -40,7 +42,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -237,14 +239,25 @@ def _metered_api_key_guard_async(request: Request) -> None:
 _worker_started = False
 _worker_lock = threading.Lock()
 
+# Phase 5K §18: bounded worker concurrency. A fixed pool, NOT a task per
+# queued job. This is a resource-safety bound, not a capacity claim: no
+# jobs/sec figure is asserted because none has been benchmarked.
+WORKER_MAX_CONCURRENCY = max(
+    1, int((os.getenv("PLATRIXA_WORKER_CONCURRENCY", "") or "2").strip() or 2)
+)
+
+# Webhook retries are drained in bounded batches (5K §18).
+WEBHOOK_BATCH_SIZE = 20
+WEBHOOK_RETRY_INTERVAL_SECONDS = 5.0
+
 
 def ensure_worker_started() -> None:
     """Start the in-process worker once per process (idempotent).
 
-    Started lazily on the first /v1/documents submission so an API
-    process that never uses async pays nothing. The worker is a daemon
-    thread: it never blocks shutdown, and durable state means a restart
-    loses nothing (QUEUED jobs are resumed; leased work is recovered).
+    Still started lazily so an API process that never uses async pays
+    nothing, but the worker now runs a RECOVERY SWEEP on entry, so a
+    restart picks up jobs that already exist instead of waiting for the
+    next submission to poke it (5K §8).
     """
     global _worker_started
     with _worker_lock:
@@ -253,22 +266,227 @@ def ensure_worker_started() -> None:
         thread = threading.Thread(target=_worker_loop, name="platrixa-async-worker", daemon=True)
         thread.start()
         _worker_started = True
-        logger.info("async document worker started (in-process, lease-based)")
+        logger.info("async document worker started (in-process, lease-based, bounded pool)")
 
 
-def _worker_loop() -> None:
-    while True:
-        try:
-            record = async_jobs.claim_next_job()
-            if record is None:
-                time.sleep(0.5)
+def _worker_loop(stop_event=None) -> None:
+    """Bounded worker pool with startup recovery (5K §8, §18).
+
+    Before 5K this loop only ever started when a NEW submission arrived,
+    so a job created while no worker was running stayed QUEUED forever.
+    Two changes:
+
+      * it performs a RECOVERY SWEEP on entry, so jobs that already
+        exist (including ones whose previous worker died with an expired
+        lease) are discovered and completed without waiting for another
+        submission to poke the thread;
+      * concurrency is BOUNDED by a fixed-size pool
+        (``WORKER_MAX_CONCURRENCY``). Jobs are pulled only while a slot
+        is free, so an unbounded queue can never create unbounded tasks.
+        Overload behaviour is therefore explicit: excess QUEUED jobs
+        simply wait — they are not dropped and not partially processed.
+    """
+    logger.info("async worker starting (recovery sweep + bounded pool)")
+    _recovery_sweep()
+    sem = threading.Semaphore(WORKER_MAX_CONCURRENCY)
+    active: List[threading.Thread] = []
+
+    while not (stop_event is not None and stop_event.is_set()):
+        # Reap finished work so the list cannot grow without bound.
+        active = [t for t in active if t.is_alive()]
+        if sem.acquire(blocking=False):
+            try:
+                record = async_jobs.claim_next_job()
+            except async_jobs.AsyncStoreUnavailableError:
+                sem.release()
+                if _stopped(stop_event):
+                    break
+                time.sleep(2.0)
                 continue
-            _process_job(record)
-        except async_jobs.AsyncStoreUnavailableError:
-            time.sleep(2.0)
-        except Exception as exc:  # never let the worker die
-            logger.warning("async worker iteration failed: %s", type(exc).__name__)
-            time.sleep(1.0)
+            except Exception as exc:  # never let the worker die
+                logger.warning("async worker iteration failed: %s", type(exc).__name__)
+                sem.release()
+                if _stopped(stop_event):
+                    break
+                time.sleep(1.0)
+                continue
+            if record is None:
+                sem.release()
+                if _stopped(stop_event):
+                    break
+                # Keep draining webhook retries alongside job work even
+                # when the job queue is empty: a retrying delivery must
+                # not wait for the next submission to arrive.
+                if _drain_webhook_retries():
+                    continue
+                if _stopped(stop_event):
+                    break
+                _interruptible_sleep(stop_event, 0.5)
+                continue
+            # 5K §15: the processing event is emitted at CLAIM time — the
+            # only point where "this document is now being processed" is
+            # true. It was declared in the event vocabulary but never
+            # emitted anywhere (the audit's reachability finding).
+            _emit_event_for_job(record, async_jobs.EVENT_PROCESSING, "PROCESSING")
+            t = threading.Thread(
+                target=_run_claimed_job,
+                args=(record, sem),
+                name=f"platrixa-job-{record.job_id[-8:]}",
+                daemon=True,
+            )
+            active.append(t)
+            t.start()
+            try:
+                if _drain_webhook_retries():
+                    time.sleep(0.05)
+            except Exception:
+                pass
+        else:
+            # At capacity: wait for a slot instead of queueing more work.
+            _interruptible_sleep(stop_event, 0.2)
+
+
+def _stopped(stop_event) -> bool:
+    return stop_event is not None and stop_event.is_set()
+
+
+def _interruptible_sleep(stop_event, seconds: float) -> None:
+    """Sleep that wakes early on shutdown (so tests/utdown are prompt)."""
+    if stop_event is None:
+        time.sleep(seconds)
+        return
+    stop_event.wait(seconds)
+
+
+def _run_claimed_job(record: async_jobs.JobRecord, sem: threading.Semaphore) -> None:
+    try:
+        _process_job(record)
+    except Exception as exc:  # never let one job kill its worker thread
+        logger.warning("async job thread failed: %s", type(exc).__name__)
+    finally:
+        sem.release()
+
+
+def start_worker_thread(stop_event=None) -> threading.Thread:
+    """Run the worker loop on a background thread (tests + startup).
+
+    Production uses :func:`ensure_worker_started`, which additionally
+    guards against double-start. This entry point exists so the loop's
+    RECOVERY behaviour and BOUNDED CONCURRENCY can be exercised directly
+    by a test rather than merely asserted from reading the code.
+    """
+    t = threading.Thread(
+        target=_worker_loop, args=(stop_event,), name="platrixa-async-worker-test", daemon=True
+    )
+    t.start()
+    return t
+
+
+def _recovery_sweep() -> int:
+    """Startup recovery: report and reclaim work left by a previous run.
+
+    Expired leases are NOT mutated here — ``claim_next_job`` already
+    treats an expired lease as claimable, atomically and race-free, so
+    this sweep only COUNTS what is outstanding. Counting is what makes
+    the recovery observable (and testable) without introducing a second,
+    racy reclaim path that could double-claim.
+
+    It also drains webhook deliveries left PENDING/RETRYING by a previous
+    process, which is the delivery-side equivalent of job recovery.
+    """
+    try:
+        counts = async_jobs.count_jobs_by_status()
+    except Exception as exc:
+        logger.info("async recovery sweep could not read store: %s", type(exc).__name__)
+        return 0
+    outstanding = {
+        k: v for k, v in counts.items()
+        if k in (async_jobs.STATUS_QUEUED, async_jobs.STATUS_RETRY_WAIT,
+                 async_jobs.STATUS_PROCESSING)
+    }
+    if outstanding:
+        logger.info("async recovery sweep found outstanding jobs: %s", outstanding)
+    try:
+        due = async_jobs.due_deliveries(limit=100)
+        if due:
+            logger.info("async recovery sweep found %d due webhook deliveries", len(due))
+            _drain_webhook_retries()
+    except Exception:
+        pass
+    return sum(outstanding.values())
+
+
+def _drain_webhook_retries() -> int:
+    """Attempt every delivery whose backoff has elapsed (5K §14).
+
+    Bounded per call by ``WEBHOOK_BATCH_SIZE`` and by each delivery's own
+    attempt budget, so a failing endpoint cannot spin forever or grow the
+    queue without limit.
+    """
+    sent = 0
+    try:
+        due = async_jobs.due_deliveries(limit=WEBHOOK_BATCH_SIZE)
+    except Exception:
+        return 0
+    for delivery in due:
+        try:
+            record = async_jobs.get_job(delivery.tenant_id, delivery.job_id)
+            if record is None:
+                continue
+            endpoints = async_jobs.webhooks_for_event(
+                delivery.tenant_id, delivery.event
+            )
+            match = next(
+                (e for e in endpoints if e.webhook_id == delivery.webhook_id), None
+            )
+            if match is None:
+                continue
+            _attempt_delivery(record, delivery, match)
+            sent += 1
+        except Exception as exc:
+            logger.warning("webhook retry failed: %s", type(exc).__name__)
+    return sent
+
+
+def _attempt_delivery(record, delivery, endpoint) -> None:
+    """One signed POST for a queued delivery, with status classification."""
+    import json as _json
+
+    payload = async_jobs.build_event_payload(
+        event=delivery.event,
+        event_id_value=async_jobs.event_id(record.job_id, delivery.event),
+        job_id=record.job_id,
+        result_id=record.result_id,
+        request_id=record.request_id,
+        api_status=delivery.event.rsplit(".", 1)[-1].upper(),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+    body = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    ts = int(time.time())
+    secret = async_jobs.unseal_webhook_secret(endpoint.secret_sealed)
+    sig = async_jobs.sign_event(secret, ts, body)
+    headers = {
+        "Content-Type": "application/json",
+        "Platrixa-Event-Id": payload["id"],
+        "Platrixa-Signature": f"t={ts},v1={sig}",
+        "Platrixa-Event": delivery.event,
+    }
+    try:
+        resp = _post_webhook(endpoint.url, body, headers)
+        async_jobs.mark_delivery_attempt(
+            delivery.delivery_id,
+            http_status=resp.status_code,
+            error=None,
+            retryable=async_jobs.classify_webhook_failure(resp.status_code),
+        )
+    except Exception as exc:
+        async_jobs.mark_delivery_attempt(
+            delivery.delivery_id,
+            http_status=None,
+            error=type(exc).__name__,
+            retryable=True,
+        )
 
 
 def _resolve_engine_request_id(record: async_jobs.JobRecord) -> Optional[str]:
@@ -295,6 +513,26 @@ def _resolve_engine_request_id(record: async_jobs.JobRecord) -> Optional[str]:
 
 
 def _process_job(record: async_jobs.JobRecord) -> None:
+    """Process one claimed job under a RENEWED, FENCED lease (5K).
+
+    Wraps the entire body in :class:`_LeaseRenewal` so a job that runs
+    longer than the initial lease stays owned by this worker instead of
+    being duplicated, and refuses to publish anything if the lease was
+    lost mid-flight.
+
+    The pipeline itself is untouched: this function still calls the
+    EXISTING document path and the EXISTING Phase 5D serializer.
+    """
+    with _LeaseRenewal(record, async_jobs.JOB_LEASE_SECONDS) as renewal:
+        try:
+            _process_job_inner(record, renewal)
+        except Exception as exc:  # a keeper or pipeline fault must not kill the worker
+            logger.error("async job %s crashed: %s", record.job_id[:14], type(exc).__name__)
+
+
+def _process_job_inner(
+    record: async_jobs.JobRecord, renewal: _LeaseRenewal
+) -> None:
     """Process one claimed job through the EXISTING document pipeline.
 
     The async layer owns scheduling only: it reuses the same facade
@@ -368,13 +606,30 @@ def _process_job(record: async_jobs.JobRecord) -> None:
         notes=result.notes,
         duration_ms=int((time.perf_counter() - started) * 1000),
     )
+    # 5K §7: refuse to publish once the lease has been lost, and pass the
+    # ownership proof so the STORE also rejects a stale commit. Before
+    # 5K this write was guarded only on status='PROCESSING', which let a
+    # fenced-out worker overwrite the authoritative result.
+    if renewal.lost:
+        logger.warning(
+            "async job %s result discarded (lease lost during processing)",
+            record.job_id[:14],
+        )
+        return
     try:
-        async_jobs.complete_job(
+        accepted = async_jobs.complete_job(
             record.job_id,
             envelope=content,
             http_status=transport_status,
             request_id=content.get("request_id") or rid,
+            lease_owner=record.lease_owner,
+            lease_generation=record.lease_generation,
         )
+        if not accepted:
+            logger.warning(
+                "async job %s completion REJECTED (stale worker)", record.job_id[:14]
+            )
+            return
     except async_jobs.AsyncStoreUnavailableError:
         logger.warning("async job %s completion store write failed", record.job_id[:14])
         return
@@ -404,6 +659,75 @@ def _process_job(record: async_jobs.JobRecord) -> None:
     )
 
 
+class _LeaseRenewal:
+    """Keep a claimed job's lease alive while it is being processed (5K §6).
+
+    A fixed 120 s lease with no keepalive means any legitimately slow
+    document gets re-claimed by a second worker *while it is still
+    running* — duplicate processing, duplicate provider load, and a
+    second result fighting the first.
+
+    This renews at 1/3 of the lease so two consecutive failures are
+    absorbed before expiry. Properties that matter:
+
+      * renewal is CONDITIONAL on still owning the lease — a worker that
+        has been fenced out cannot extend a lease it no longer holds;
+      * ``lost`` flips when a renewal is refused, and the worker checks
+        it before committing, so a stale worker never publishes;
+      * it is ONE daemon thread per in-flight job, started and stopped
+        deterministically with the work — never an unbounded task pool;
+      * it always terminates, including on exception (``finally``).
+    """
+
+    def __init__(self, record: async_jobs.JobRecord, lease_seconds: int):
+        self._record = record
+        self._lease = max(5, int(lease_seconds))
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self.lost = False
+
+    def __enter__(self) -> "_LeaseRenewal":
+        interval = max(1.0, self._lease / async_jobs.LEASE_RENEW_FRACTION)
+        owner = self._record.lease_owner
+        gen = self._record.lease_generation
+
+        def _beat() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    ok = async_jobs.renew_lease(
+                        self._record.job_id,
+                        lease_owner=owner or "",
+                        lease_generation=gen,
+                        lease_seconds=self._lease,
+                    )
+                except async_jobs.AsyncStoreUnavailableError:
+                    # Transient store outage: keep trying until the lease
+                    # would actually expire, then report the loss.
+                    continue
+                except Exception as exc:  # never let the keeper die loudly
+                    logger.warning("lease renewal error: %s", type(exc).__name__)
+                    continue
+                if not ok:
+                    self.lost = True
+                    logger.warning(
+                        "lease renewal refused for job %s (ownership lost)",
+                        self._record.job_id[:14],
+                    )
+                    return
+
+        self._thread = threading.Thread(
+            target=_beat, name=f"platrixa-lease-{self._record.job_id[-8:]}", daemon=True
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        return False
+
+
 def _fail_job(
     record: async_jobs.JobRecord,
     code: str,
@@ -412,8 +736,19 @@ def _fail_job(
     *,
     retryable: bool,
 ) -> None:
-    """Mark a job FAILED with a deterministic error envelope."""
+    """Mark a job FAILED with a deterministic error envelope.
+
+    Phase 5K: ``retryable`` is now DERIVED from the explicit classifier
+    (``async_jobs.classify_failure``) rather than decided at each call
+    site, and the store decides between RETRY_WAIT and terminal FAILED
+    based on the remaining attempt budget. The commit is fenced on lease
+    ownership, so a worker that lost its lease cannot fail a job another
+    worker now owns.
+    """
     api_status = public_status_for_error_code(code)
+    # 5K §9: one deterministic classifier for the whole worker, so two
+    # call sites can never disagree about the same failure.
+    retryable = async_jobs.classify_failure(error_code=code, api_status=api_status)
     envelope = {
         "api_version": API_VERSION,
         "error": {
@@ -426,7 +761,21 @@ def _fail_job(
         },
     }
     try:
-        async_jobs.fail_job(record.job_id, envelope=envelope, http_status=503 if retryable else 400, retryable=retryable)
+        accepted = async_jobs.fail_job(
+            record.job_id,
+            envelope=envelope,
+            http_status=503 if retryable else 400,
+            retryable=retryable,
+            lease_owner=record.lease_owner,
+            lease_generation=record.lease_generation,
+        )
+        if not accepted:
+            # Fenced out: another worker owns this job now. Its work is
+            # no longer authoritative, so publish nothing for it.
+            logger.warning(
+                "async job %s failure NOT recorded (lease lost)", record.job_id[:14]
+            )
+            return
     except async_jobs.AsyncStoreUnavailableError:
         logger.warning("async job %s failure store write failed", record.job_id[:14])
         return
@@ -519,14 +868,36 @@ class _WorkerRequest:
 
 
 def _emit_webhooks(record: async_jobs.JobRecord, api_status: str) -> None:
-    """Emit the deterministic event for a terminal outcome (best effort).
+    """Emit the deterministic event for a terminal outcome (durable).
 
-    Never raises and never blocks the worker: delivery runs on a short
-    daemon thread; problems are logged, never surfaced as job failures.
+    Never raises and never blocks the worker. Phase 5K: a delivery ROW is
+    written first (durably), and the actual HTTP attempt happens on a
+    short daemon thread. If the process dies between the two, the row is
+    still PENDING and the webhook worker retries it — the pre-5K path
+    simply lost the event.
     """
     event = async_jobs.EVENT_BY_API_STATUS.get(api_status)
     if event is None:
         return
+    thread = threading.Thread(
+        target=_deliver_webhooks,
+        args=(record, event, api_status),
+        name=f"platrixa-webhook-{record.job_id[-8:]}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _emit_event_for_job(
+    record: async_jobs.JobRecord, event: str, api_status: str
+) -> None:
+    """Emit a NON-terminal lifecycle event (5K §15).
+
+    ``document.processing`` belongs to this: it is true only while the
+    job is claimed and executing, and it is the only point at which a
+    subscriber can learn that work has started. It was declared in
+    ``ALL_EVENTS`` but never emitted anywhere.
+    """
     thread = threading.Thread(
         target=_deliver_webhooks,
         args=(record, event, api_status),
@@ -559,6 +930,16 @@ def _deliver_webhooks(record: async_jobs.JobRecord, event: str, api_status: str)
         from urllib.parse import urlparse
 
         for endpoint in endpoints:
+            # 5K §13: persist the delivery BEFORE attempting it. A crash
+            # after this point leaves a PENDING row the webhook worker
+            # will pick up — instead of silently losing the event.
+            delivery = None
+            try:
+                delivery = async_jobs.record_delivery(
+                    record.job_id, record.tenant_id, endpoint.webhook_id, event
+                )
+            except async_jobs.AsyncStoreUnavailableError:
+                logger.warning("webhook delivery row not persisted (store down)")
             try:
                 secret = async_jobs.unseal_webhook_secret(endpoint.secret_sealed)
                 sig = async_jobs.sign_event(secret, ts, body)
@@ -569,20 +950,44 @@ def _deliver_webhooks(record: async_jobs.JobRecord, event: str, api_status: str)
                     "Platrixa-Event": event,
                 }
                 resp = _post_webhook(endpoint.url, body, headers)
+                status = resp.status_code
+                # 5K §14: retryability is CLASSIFIED, not guessed from the
+                # status at the call site. Retry-After is honoured within
+                # a bounded window (see store.mark_delivery_attempt).
+                retryable = async_jobs.classify_webhook_failure(status)
+                if delivery is not None:
+                    async_jobs.mark_delivery_attempt(
+                        delivery.delivery_id,
+                        http_status=status,
+                        error=None,
+                        retryable=retryable,
+                    )
                 logger.info(
                     "webhook delivered endpoint=%s job=%s status=%d",
                     urlparse(endpoint.url).netloc[:40],
                     record.job_id[:14],
-                    resp.status_code,
+                    status,
                 )
             except Exception as exc:
+                # 5K §14: a network/transport failure is retryable, and the
+                # attempt is recorded so a bounded retry is scheduled.
+                # Pre-5K this was a silent give-up after one attempt.
+                if delivery is not None:
+                    try:
+                        async_jobs.mark_delivery_attempt(
+                            delivery.delivery_id,
+                            http_status=None,
+                            error=type(exc).__name__,
+                            retryable=True,
+                        )
+                    except Exception:
+                        pass
                 logger.warning(
                     "webhook delivery failed endpoint=%s job=%s: %s",
                     urlparse(endpoint.url).netloc[:40] if endpoint.url else "?",
                     record.job_id[:14],
                     type(exc).__name__,
                 )
-                # Single attempt — no retry queue exists; documented.
     except Exception as exc:
         logger.warning("webhook emit failed: %s", type(exc).__name__)
 
@@ -1078,10 +1483,10 @@ async def register_webhook_endpoint(request: Request) -> JSONResponse:
     The signing secret is returned EXACTLY ONCE in this response; only a
     server-keyed seal is stored. Events: document.processing,
     document.completed, document.review_required, document.unsupported,
-    document.failed. Delivery in this deployment is best-effort,
-    single-attempt, signed (``Platrixa-Signature: t=...,v1=...``), with
-    deterministic event ids — NOT an at-least-once guarantee; polling
-    remains the reliable path.
+    document.failed. Delivery is signed
+    (``Platrixa-Signature: t=...,v1=...``) and at-least-once with bounded
+    retry; exactly-once is NOT claimed, so consumers deduplicate on the
+    deterministic event id. Polling remains the simplest reliable path.
     """
     rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
     if not async_jobs.async_configured():
@@ -1136,7 +1541,7 @@ async def register_webhook_endpoint(request: Request) -> JSONResponse:
             "secret": plain_secret,
             "created_at": record.created_at.isoformat() if record.created_at else "",
             "delivery": {
-                "semantics": "best-effort single attempt (not at-least-once)",
+                "semantics": "at-least-once (deduplicate on event id)",
                 "signature": "Platrixa-Signature: t=<unix>,v1=<hmac-sha256 over '{t}.{body}'>",
                 "signature_tolerance_seconds": async_jobs.SIGNATURE_TOLERANCE_SECONDS,
                 "event_ids": "deterministic per (job_id, event); deduplicate on id",

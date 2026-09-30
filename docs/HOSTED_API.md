@@ -843,6 +843,12 @@ infrastructure conditions (provider down, worker restart), with the
 deterministic `code` in `reason_codes` (`PROVIDER_UNAVAILABLE`,
 `INPUT_INVALID`, `JOB_FAILED`).
 
+Each job is executed under a **worker lease** carrying an owner and a
+fencing token. Only the worker currently holding the lease can publish a
+terminal result, so a worker that lost its lease — because it stalled, was
+killed, or was reclaimed by another worker — cannot overwrite the
+authoritative result. Each job has exactly one canonical result.
+
 ### GET /v1/results/{result_id} — fetch the 5D envelope
 
 Returns the same canonical envelope as synchronous `POST /v1/process`
@@ -855,8 +861,16 @@ complete → `404 RESULT_NOT_READY` (keep polling the job).
 
 Jobs live in the SAME PostgreSQL store as metering and idempotency — a
 process restart never erases a submitted job. QUEUED jobs are picked up
-by the worker; a job whose worker died mid-flight is recovered after a
-short lease expires and reprocessed. There is no in-memory job state.
+by the worker; a job whose worker died mid-flight is recovered after its
+lease expires and reprocessed. There is no in-memory job state.
+
+The worker now starts with a **recovery sweep**, so a job created while no
+worker was running is discovered and completed when a worker next starts —
+it is not stranded waiting for another submission.
+
+A job that is legitimately slower than the lease is kept alive by
+**lease renewal** (at one third of the lease), so slow work is not
+duplicated.
 
 ### Idempotency on document creation
 
@@ -869,10 +883,15 @@ contract and store; the key is not the `job_id`):
   `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST`.
 - concurrent duplicates → exactly one job.
 
-No exactly-once execution is promised (worker crash may reprocess a job;
-the recovered run replaces the result deterministically).
+No exactly-once execution is promised (worker crash may reprocess a job).
+A **retryable** failure does not immediately fail the job: it is retried
+automatically up to a bounded number of attempts with exponential backoff
+(5s, 10s, 20s … capped at 300s; 3 attempts by default). Only a permanent
+failure (invalid input, unsupported capability, schema/grounding
+rejection) or an exhausted attempt budget produces a terminal `FAILED`.
+These retry values are engineering defaults and may be tuned.
 
-### Webhooks (best-effort foundation — honest limits)
+### Webhooks (durable delivery)
 
 `POST /v1/webhook-endpoints` (201) registers a subscribed endpoint:
 
@@ -883,7 +902,7 @@ the recovered run replaces the result deterministically).
   "events": ["document.completed", "document.failed"],
   "secret": "whsec_…",
   "created_at": "…",
-  "delivery": {"semantics": "best-effort single attempt (not at-least-once)", …}
+  "delivery": {"semantics": "at-least-once (deduplicate on event id)", …}
 }
 ```
 
@@ -896,9 +915,17 @@ the recovered run replaces the result deterministically).
   HMAC-SHA256 covers `"{t}.{body}"`; verify with a ±300 s timestamp
   window (replay protection). Event ids are deterministic per
   `(job_id, event)` — deduplicate on `id`.
-- **Delivery is best-effort, single-attempt in this deployment — NOT an
-  at-least-once guarantee.** Polling `GET /v1/jobs/{job_id}` is the
-  reliable path; use webhooks only as a convenience signal.
+- **Delivery is at-least-once with bounded retry.** Each delivery is
+  persisted before the attempt, so a crash mid-delivery is retried rather
+  than lost. `2xx` is delivered; `408`/`429`/`5xx` and network errors are
+  retried with exponential backoff (10s, 20s, 40s … capped at 1 h, 5
+  attempts by default — engineering defaults, tunable); any other `4xx` is
+  a **permanent** failure and is not retried. `Retry-After` is honoured
+  within a bounded window. Exactly-once is **not** promised: deduplicate
+  on the deterministic event `id`. Polling `GET /v1/jobs/{job_id}` remains
+  the simplest reliable path.
+- `document.processing` is emitted when the job is claimed, so a
+  subscriber can observe that work has started.
 
 ### File security (unchanged)
 

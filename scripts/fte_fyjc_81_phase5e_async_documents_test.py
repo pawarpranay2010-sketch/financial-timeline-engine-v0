@@ -230,17 +230,49 @@ def section_b(engine) -> None:
     check("B4 claim_next_job atomically leases QUEUED → PROCESSING",
           claimed is not None and claimed.job_id == rec.job_id and claimed.status == "PROCESSING")
     check("B5 second claim gets nothing (no double-lease)", async_jobs.claim_next_job() is None)
-    ok = async_jobs.complete_job(rec.job_id, envelope={"status": "VERIFIED", "api_status": "VERIFIED"}, http_status=200)
+    ok = async_jobs.complete_job(
+        rec.job_id, envelope={"status": "VERIFIED", "api_status": "VERIFIED"}, http_status=200,
+        # Phase 5K: a terminal commit REQUIRES lease ownership proof
+        # (fencing). A commit without it is refused by design, so the
+        # test must present the ownership it got from the claim.
+        lease_owner=claimed.lease_owner, lease_generation=claimed.lease_generation)
     check("B6 complete_job stores terminal envelope (COMPLETED)", ok)
+    # 5K: the same commit WITHOUT ownership must be refused.
+    rec_unfenced = async_jobs.create_job("tenant-b", {"raw_input": "z"})
+    claimed_uf = async_jobs.claim_next_job()
+    unfenced = async_jobs.complete_job(
+        rec_unfenced.job_id, envelope={"status": "VERIFIED"}, http_status=200)
+    check("B6b complete_job WITHOUT lease ownership is refused (5K fencing)",
+          unfenced is False, f"{unfenced}")
     fetched = async_jobs.get_job("tenant-b", rec.job_id)
     check("B7 completed record holds the envelope",
           fetched.status == "COMPLETED" and json.loads(fetched.result_json)["api_status"] == "VERIFIED")
 
     rec2 = async_jobs.create_job("tenant-b", {"raw_input": "y", "source_name": "t.txt"})
-    async_jobs.claim_next_job()
-    ok2 = async_jobs.fail_job(rec2.job_id, envelope={"error": {"code": "PROVIDER_UNAVAILABLE"}}, http_status=503, retryable=True)
+    claimed2 = async_jobs.claim_next_job()
+    ok2 = async_jobs.fail_job(
+        rec2.job_id, envelope={"error": {"code": "PROVIDER_UNAVAILABLE"}},
+        http_status=503, retryable=True,
+        lease_owner=claimed2.lease_owner, lease_generation=claimed2.lease_generation)
     rec2b = async_jobs.get_job("tenant-b", rec2.job_id)
-    check("B8 fail_job marks FAILED with retryable=true", ok2 and rec2b.status == "FAILED" and rec2b.retryable is True)
+    # Phase 5K §10: a RETRYABLE failure no longer terminates the job on
+    # first occurrence — it defers to RETRY_WAIT while attempt budget
+    # remains, so a provider outage cannot exhaust a job immediately.
+    check("B8 fail_job with retryable=true defers to RETRY_WAIT (was FAILED)",
+          ok2 and rec2b.status == "RETRY_WAIT" and rec2b.retryable is True,
+          f"ok={ok2} status={rec2b.status if rec2b else None}")
+
+    # A PERMANENT failure is still immediately terminal.
+    rec2p = async_jobs.create_job("tenant-b", {"raw_input": "w"})
+    claimed2p = async_jobs.claim_next_job()
+    async_jobs.fail_job(
+        rec2p.job_id, envelope={"error": {"code": "INPUT_INVALID"}},
+        http_status=400, retryable=False,
+        lease_owner=claimed2p.lease_owner, lease_generation=claimed2p.lease_generation)
+    rec2pb = async_jobs.get_job("tenant-b", rec2p.job_id)
+    check("B8b a non-retryable failure is terminal FAILED immediately",
+          rec2pb is not None and rec2pb.status == "FAILED",
+          str(rec2pb.status if rec2pb else None))
 
     # Lease recovery: expired lease is claimable again
     rec3 = async_jobs.create_job("tenant-b", {"raw_input": "z", "source_name": "t.txt"})

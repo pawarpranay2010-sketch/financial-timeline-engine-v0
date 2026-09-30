@@ -110,6 +110,7 @@ from api.status import (
 from api.status import STATUS_FAILED as STATUS_FAILED
 from api.status import STATUS_VERIFIED as STATUS_VERIFIED_PUBLIC
 
+
 # Phase 16 metered gate — HTTP-agnostic admission control. Imported at
 # module scope is SAFE here (unlike the public interface): the auth
 # package touches no provider/model/persistence code at import time and
@@ -1014,14 +1015,14 @@ def _bulk_aggregate_status(item_api_statuses: List[str]) -> tuple[str, List[str]
     A batch is therefore never VERIFIED because *some* item was verified,
     and REVIEW_REQUIRED / UNSUPPORTED are never reported as success.
     """
-    from api.status import PUBLIC_STATES
+    from api.status import PUBLIC_STATES, STATUS_VERIFIED
 
     if not item_api_statuses:
         return "FAILED", ["BATCH_EMPTY"]
     if any(s == "PROCESSING" for s in item_api_statuses):
         return "PROCESSING", ["RESULT_PENDING"]
-    if all(s == "VERIFIED" for s in item_api_statuses):
-        return "VERIFIED", []
+    if all(s == STATUS_VERIFIED for s in item_api_statuses):
+        return STATUS_VERIFIED, []
     distinct = sorted(set(item_api_statuses))
     if len(distinct) == 1 and distinct[0] in PUBLIC_STATES:
         return distinct[0], []
@@ -1082,7 +1083,8 @@ def _bulk_fingerprint(payload: BulkProcessRequest) -> dict:
         "returns each item's canonical result envelope in input order. One "
         "quota unit per item, reserved atomically for the whole batch "
         "(all-or-nothing). The batch-level status reuses the existing "
-        "six-state public contract and is VERIFIED only when every item is."
+        "six-state public contract and reports the top public state only "
+        "when every item reached it."
     ),
 )
 def process_bulk_v1(
@@ -1323,7 +1325,7 @@ def process_bulk_v1(
     duration_ms = int((time.perf_counter() - started) * 1000)
     not_attempted = len(items) - attempted
     partial = bool(0 < sum(counts.values()) < len(items)) or any(
-        e["api_status"] not in {"VERIFIED"} for e in results
+        e["api_status"] != STATUS_VERIFIED_PUBLIC for e in results
     )
 
     from api.status import LABEL_BY_PUBLIC_STATUS as _labels
@@ -1341,7 +1343,7 @@ def process_bulk_v1(
         # of its own, so the verbatim engine field stays null rather than
         # inventing one.
         "engine_status": None,
-        "success": api_status == "VERIFIED",
+        "success": api_status == STATUS_VERIFIED_PUBLIC,
         "retryable": bool(_retryable.get(api_status, False)),
         "reason_code": reason_codes[0] if reason_codes else None,
         "reason_codes": reason_codes,
@@ -1384,7 +1386,7 @@ def process_bulk_v1(
     # failed/flagged item stays independently identifiable in the
     # request-history surface without flooding it with successes.
     for entry in results:
-        if entry.get("api_status") == "VERIFIED":
+        if entry.get("api_status") == STATUS_VERIFIED_PUBLIC:
             continue
         _record_request_metadata(
             admitted_ctx,
