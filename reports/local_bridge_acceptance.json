@@ -1,0 +1,102 @@
+{
+  "schema": "platrixa.local-bridge-acceptance/1",
+  "generated_at_utc": "2026-10-02T08:40:24Z",
+  "mode": "live_bridge",
+  "evidence_label": "live_bridge — real inference path",
+  "input": "Paid ₹1,250 cash for office stationery.",
+  "provenance": {
+    "verdict": "PROVENANCE_UNKNOWN",
+    "record": "reports/LOCAL_MODEL_PROVENANCE.md",
+    "device_artifact": "platrixa-phase-h-Q4_K_M.gguf (Android, ~941 MB reported)",
+    "sha256": "NOT_MEASURED (file lives on the device; run sha256sum there)",
+    "pinned_repository_identity": {
+      "base_model": "Qwen/Qwen2.5-1.5B-Instruct@989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "adapter": "Pranay-20/platrixa-financial-semantic-v0.1@b5c0a37cebc00e93144150dbbcaa7b28cadb259e",
+      "note": "the pinned adapter is documented (hf_space/README.md) as the Phase 6C artifact; it is NOT asserted to be the identity of the device GGUF"
+    },
+    "rule": "the filename 'phase-h' is assigned unconditionally by scripts/build_local_gguf_artifact.py and is not evidence of the training phase; no result from this artifact is attributed to any training phase"
+  },
+  "bridge": {
+    "url": "http://127.0.0.1:8081"
+  },
+  "layers": {
+    "1_inference_reached": {
+      "result": "FAIL",
+      "bridge_url": "http://127.0.0.1:8081",
+      "attempts": [
+        {
+          "path": "/interpret",
+          "error": "unreachable: HTTPConnectionPool(host='127.0.0.1', port=8081): Max retries exceeded with url: /interpret (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8081): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+        }
+      ],
+      "detail": "no HTTP 200 from the bridge — inference not reached"
+    },
+    "2_provider_contract": {
+      "result": "NOT_REACHED",
+      "detail": "inference not reached"
+    },
+    "3_schema_validation": {
+      "result": "NOT_REACHED",
+      "detail": "kernel failed before inference"
+    },
+    "4_grounding": {
+      "result": "NOT_REACHED"
+    },
+    "5_deterministic_kernel": {
+      "result": "NOT_REACHED"
+    },
+    "6_terminal_status": {
+      "result": "RECORDED",
+      "terminal_status": "MODEL_UNAVAILABLE",
+      "status_label": "Model Unavailable",
+      "next_action": "Check model availability and try again.",
+      "issues": [
+        "bridge unreachable: HTTPConnectionPool(host='127.0.0.1', port=8081): Max retries exceeded with url: /interpret (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8081): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+      ]
+    }
+  },
+  "summary": {
+    "deepest_layer_reached": 1,
+    "six_layer_record_complete": false
+  },
+  "provider_trace": {
+    "bridge_url": "http://127.0.0.1:8081",
+    "timeout_s": 120.0,
+    "attempts": [
+      {
+        "path": "/interpret",
+        "error": "unreachable: HTTPConnectionPool(host='127.0.0.1', port=8081): Max retries exceeded with url: /interpret (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8081): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+      }
+    ],
+    "http_ok": false,
+    "latency_ms": null,
+    "http_status": null,
+    "envelope": null,
+    "parse_mode": null,
+    "raw_response_text": null,
+    "contract": {
+      "passed": false,
+      "reject_reason": "",
+      "checked": false
+    },
+    "kernel_total_elapsed_ms": 2.1
+  },
+  "kernel_result": {
+    "request_id": "kernel:53429269",
+    "raw_input": "Paid ₹1,250 cash for office stationery.",
+    "status": "MODEL_UNAVAILABLE",
+    "status_label": "Model Unavailable",
+    "interpretation": null,
+    "interpretation_candidate": null,
+    "verification_status": null,
+    "grounding_issues": [],
+    "accounting_result": null,
+    "issues": [
+      "bridge unreachable: HTTPConnectionPool(host='127.0.0.1', port=8081): Max retries exceeded with url: /interpret (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8081): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+    ],
+    "next_action": "Check model availability and try again.",
+    "metadata": {},
+    "rule_evidence": [],
+    "evidence": null
+  }
+}

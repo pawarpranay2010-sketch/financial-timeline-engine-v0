@@ -1,0 +1,359 @@
+{
+  "schema": "platrixa.local-bridge-acceptance/1",
+  "generated_at_utc": "2026-10-02T08:40:24Z",
+  "mode": "wiring_check",
+  "evidence_label": "wiring_check_synthetic — NOT model evidence",
+  "input": "purchased furniture from raj for rs.25000",
+  "provenance": {
+    "verdict": "PROVENANCE_UNKNOWN",
+    "record": "reports/LOCAL_MODEL_PROVENANCE.md",
+    "device_artifact": "platrixa-phase-h-Q4_K_M.gguf (Android, ~941 MB reported)",
+    "sha256": "NOT_MEASURED (file lives on the device; run sha256sum there)",
+    "pinned_repository_identity": {
+      "base_model": "Qwen/Qwen2.5-1.5B-Instruct@989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "adapter": "Pranay-20/platrixa-financial-semantic-v0.1@b5c0a37cebc00e93144150dbbcaa7b28cadb259e",
+      "note": "the pinned adapter is documented (hf_space/README.md) as the Phase 6C artifact; it is NOT asserted to be the identity of the device GGUF"
+    },
+    "rule": "the filename 'phase-h' is assigned unconditionally by scripts/build_local_gguf_artifact.py and is not evidence of the training phase; no result from this artifact is attributed to any training phase"
+  },
+  "bridge": null,
+  "layers": {
+    "1_inference_reached": {
+      "result": "NOT_APPLICABLE",
+      "detail": "wiring check — in-process synthetic stub, no network"
+    },
+    "2_provider_contract": {
+      "checked": true,
+      "passed": true,
+      "reject_reason": "",
+      "missing_fields": [],
+      "forbidden_fields": [],
+      "suggested_status_raw": "REVIEW_REQUIRED",
+      "suggested_status_is_verified_claim": false,
+      "result": "PASS",
+      "source": "synthetic candidate evaluated by harness (not model output)"
+    },
+    "3_schema_validation": {
+      "result": "PASS",
+      "detail": "schema validation passed (kernel proceeded)"
+    },
+    "4_grounding": {
+      "result": "PASS",
+      "verification_status": "GROUNDED",
+      "grounding_issues": []
+    },
+    "5_deterministic_kernel": {
+      "result": "PASS",
+      "accounting_status": "VERIFIED",
+      "accounting_keys": [
+        "authority_state",
+        "bills",
+        "calculation_records",
+        "consignment",
+        "credit_lines",
+        "debit_lines",
+        "discrepancy",
+        "joint_venture",
+        "next_action",
+        "orchestration",
+        "rule",
+        "rule_key",
+        "single_entry",
+        "status",
+        "status_label",
+        "why_not"
+      ]
+    },
+    "6_terminal_status": {
+      "result": "RECORDED",
+      "terminal_status": "VERIFIED",
+      "status_label": "Verified",
+      "next_action": "",
+      "issues": []
+    }
+  },
+  "summary": {
+    "deepest_layer_reached": 6,
+    "six_layer_record_complete": true
+  },
+  "provider_trace": {
+    "synthetic": true,
+    "elapsed_ms": 48.4,
+    "contract": {
+      "checked": true,
+      "passed": true,
+      "reject_reason": "",
+      "missing_fields": [],
+      "forbidden_fields": [],
+      "suggested_status_raw": "REVIEW_REQUIRED",
+      "suggested_status_is_verified_claim": false
+    }
+  },
+  "kernel_result": {
+    "request_id": "kernel:3095681342",
+    "raw_input": "purchased furniture from raj for rs.25000",
+    "status": "VERIFIED",
+    "status_label": "Verified",
+    "interpretation": {
+      "raw_input": "purchased furniture from raj for rs.25000",
+      "candidate": {
+        "transaction_type": "PURCHASE",
+        "parties": [
+          "raj"
+        ],
+        "amounts": [
+          {
+            "value": "25000",
+            "currency": "INR",
+            "source": "explicit"
+          }
+        ],
+        "payment_method": "UNKNOWN",
+        "references": [],
+        "ambiguities": [
+          "payment method not stated"
+        ],
+        "grounding": {
+          "all_fields_explicitly_grounded": false,
+          "inferred_fields": []
+        },
+        "transaction_type_enum": "PURCHASE",
+        "payment_method_enum": "UNKNOWN",
+        "ambiguity_flags": [
+          "MISSING_PAYMENT_MODE"
+        ],
+        "referenced_transaction_index": null,
+        "referenced_party": null,
+        "referenced_amount": null,
+        "field_confidences": [],
+        "overall_confidence": "0.50",
+        "suggested_status": "REVIEW_REQUIRED",
+        "safety_flags": [
+          "NONE"
+        ],
+        "scope_flags": [
+          "SINGLE_TRANSACTION"
+        ]
+      },
+      "model_id": "wiring-check-stub",
+      "provider_revision": "SYNTHETIC",
+      "generated_profile": {
+        "synthetic": true
+      }
+    },
+    "interpretation_candidate": {
+      "transaction_type": "PURCHASE",
+      "parties": [
+        "raj"
+      ],
+      "amounts": [
+        {
+          "value": "25000",
+          "currency": "INR",
+          "source": "explicit"
+        }
+      ],
+      "payment_method": "UNKNOWN",
+      "references": [],
+      "ambiguities": [
+        "payment method not stated"
+      ],
+      "grounding": {
+        "all_fields_explicitly_grounded": false,
+        "inferred_fields": []
+      },
+      "transaction_type_enum": "PURCHASE",
+      "payment_method_enum": "UNKNOWN",
+      "ambiguity_flags": [
+        "MISSING_PAYMENT_MODE"
+      ],
+      "referenced_transaction_index": null,
+      "referenced_party": null,
+      "referenced_amount": null,
+      "field_confidences": [],
+      "overall_confidence": "0.50",
+      "suggested_status": "REVIEW_REQUIRED",
+      "safety_flags": [
+        "NONE"
+      ],
+      "scope_flags": [
+        "SINGLE_TRANSACTION"
+      ]
+    },
+    "verification_status": "GROUNDED",
+    "grounding_issues": [],
+    "accounting_result": {
+      "status": "VERIFIED",
+      "status_label": "Verified - reported in an approved source",
+      "debit_lines": [
+        {
+          "account": "Furniture",
+          "side": "debit",
+          "amount": "25000",
+          "role": "asset",
+          "side_hint": "Furniture (Real A/c): it comes in - Debit what comes in.",
+          "class": "Real",
+          "rule": "Debit what comes in, credit what goes out."
+        }
+      ],
+      "credit_lines": [
+        {
+          "account": "Raj",
+          "side": "credit",
+          "amount": "25000",
+          "role": null,
+          "side_hint": "Raj (Personal A/c): Raj is the giver - Credit the giver.",
+          "class": "Personal",
+          "rule": "Debit the receiver, credit the giver."
+        }
+      ],
+      "rule": "Debit what comes in, credit what goes out.",
+      "rule_key": null,
+      "why_not": null,
+      "next_action": "Post this entry in your journal and verify it.",
+      "authority_state": "bookkeeping",
+      "calculation_records": [
+        {
+          "calculation_id": "BK_LIST_PRICE",
+          "label": "Total / List Price",
+          "formula": "List price from the question",
+          "inputs": {
+            "list_price": "25000"
+          },
+          "result": "25000"
+        },
+        {
+          "calculation_id": "BK_NET_TRANSACTION_VALUE",
+          "label": "Net Transaction Value",
+          "formula": "Net = List price - Trade discount",
+          "inputs": {
+            "list_price": "25000",
+            "trade_discount": null
+          },
+          "result": "25000"
+        },
+        {
+          "calculation_id": "BK_PAID_CREDIT_SPLIT",
+          "label": "Split paid vs credit portion",
+          "formula": "Credit = Net - Paid",
+          "inputs": {
+            "net_value": "25000",
+            "paid_amount": "25000"
+          },
+          "result": {
+            "paid": "25000",
+            "credit": "0"
+          }
+        }
+      ],
+      "orchestration": {
+        "authority": "transaction-orchestrator",
+        "normalization": [],
+        "segments": [
+          {
+            "index": 0,
+            "text": "purchased furniture from raj for rs.25000",
+            "classification": "PURCHASE_ASSET_CREDIT",
+            "base_authority": "ASSET_AUTHORITY",
+            "cooperating": [],
+            "facts": [
+              {
+                "kind": "amount",
+                "value": "25000",
+                "original": "25000",
+                "role": "transaction_value",
+                "authority": "ASSET_AUTHORITY"
+              },
+              {
+                "kind": "party",
+                "value": "Raj",
+                "original": "Raj",
+                "role": null,
+                "authority": null
+              }
+            ],
+            "status": null,
+            "unresolved": []
+          }
+        ],
+        "dependencies": [],
+        "ownership": [
+          {
+            "amount": "25000",
+            "segment": 0,
+            "role": "transaction_value",
+            "authority": "ASSET_AUTHORITY",
+            "text": "purchased furniture from raj for rs.25000"
+          }
+        ],
+        "contradictions": [],
+        "violations": [],
+        "merge": {
+          "lines": [
+            {
+              "account": "Furniture",
+              "side": "debit",
+              "amount": "25000",
+              "segment": 0,
+              "authority": "ASSET_AUTHORITY"
+            },
+            {
+              "account": "Raj",
+              "side": "credit",
+              "amount": "25000",
+              "segment": 0,
+              "authority": "ASSET_AUTHORITY"
+            }
+          ],
+          "conflicts": [],
+          "balanced": true
+        },
+        "invariants": {
+          "unsafe_confident": 0,
+          "dropped_valid_segments": 0,
+          "unresolved_amounts_guessed": 0,
+          "duplicated_amount_ownership": 0,
+          "authority_conflicts_verified": 0,
+          "invented_accounts": 0,
+          "unbalanced_verified": 0,
+          "flow_verdict_eq_hardened": true,
+          "deterministic": true
+        }
+      },
+      "discrepancy": null,
+      "bills": null,
+      "consignment": null,
+      "joint_venture": null,
+      "single_entry": null
+    },
+    "issues": [],
+    "next_action": "",
+    "metadata": {
+      "model_id": "wiring-check-stub",
+      "provider_revision": "SYNTHETIC"
+    },
+    "rule_evidence": [],
+    "evidence": {
+      "evidence_schema_version": "exec-evidence-1",
+      "request_id": "kernel:3095681342",
+      "input_hash": "4fc63e543a078bc5892ddbe4f1b35f1335aec1cab6b46867d0a96c2059bc0ddc",
+      "candidate_interpretation_hash": "eb9e2ac9805addd940a3b539b885a17ee5dffa4be6ad8c3d743c03eef0c582ed",
+      "grounded_interpretation_hash": "7d28f4cdc77398399249e99854eb09e72ad7fa047670f79ad92d90cb6fbac02f",
+      "model_identity": {
+        "model_id": "wiring-check-stub",
+        "provider_revision": "SYNTHETIC"
+      },
+      "adapter_identity": {
+        "adapter_repo_id": "SYNTHETIC",
+        "adapter_revision": "SYNTHETIC"
+      },
+      "schema_version": "sem-ir-1",
+      "prompt_version": "",
+      "grounding_version": "expanded-gate-1",
+      "accounting_version": "hardened-bk-15i",
+      "rule_pack_hash": "",
+      "rule_evidence": [],
+      "final_state": "VERIFIED"
+    }
+  }
+}
