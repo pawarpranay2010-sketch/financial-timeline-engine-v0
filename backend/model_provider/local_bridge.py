@@ -100,6 +100,164 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default).strip()
 
 
+# ---------------------------------------------------------------------------
+# Envelope construction — the exact provider contract shape
+# ---------------------------------------------------------------------------
+# The device bridge answers {"interpretation_text": "<raw model JSON text>"}.
+# RemoteHFModelProvider consumes {"interpretation": {...}, "model": {...}}.
+# The functions below are the ONE place that gap is closed: parse the model
+# response as JSON, construct the exact envelope, preserve the raw output for
+# audit — and fabricate nothing.
+
+def parse_model_json(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Parse raw model text into a dict. Returns (dict|None, parse_mode).
+
+    Extraction only (markdown fences / surrounding prose via the repo's
+    base.extract_json_candidate): it never repairs, defaults, or rewrites a
+    value, and it never invents a key.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None, "empty"
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, dict):
+            return parsed, "plain_json"
+    except (json.JSONDecodeError, ValueError):
+        pass
+    extracted = extract_json_candidate(text)
+    if extracted is not None:
+        return extracted, "extracted_json (fences/surrounding prose)"
+    return None, "unparseable"
+
+
+def build_provider_envelope(body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Bridge response body → the EXACT provider envelope:
+
+        {"interpretation": {...18-field candidate...}, "model": {...audit...}}
+
+    Accepts, in order:
+      1. {"interpretation": {...}, "model": {...}}  (Platrixa envelope)
+      2. {"interpretation_text": "<json string>"}   (device bridge envelope)
+         → strict JSON parse first
+
+    Audit: the verbatim raw model output is preserved in
+    envelope["model"]["raw_model_output"] (None only when the bridge already
+    parsed the model output server-side).
+
+    Fail-closed:
+      - neither key present          → MalformedOutputError (keys recorded)
+      - interpretation_text not JSON → MalformedOutputError
+
+    This function does NOT add, default, or repair any interpretation field;
+    enforce_interpretation_contract() owns the 18-field contract. Raised
+    errors carry a `.contract` audit dict for the caller's trace.
+    """
+    if not isinstance(body, dict):
+        err = MalformedOutputError("bridge response body is not a JSON object")
+        err.contract = {"checked": True, "passed": False, "reject_reason": str(err)}
+        raise err
+
+    candidate = body.get("interpretation")
+    if isinstance(candidate, dict):
+        raw = body.get("interpretation_text")
+        envelope_name = "interpretation"
+        raw_model_output = raw if isinstance(raw, str) else None
+        parse_mode = "passthrough_envelope"
+    else:
+        text = body.get("interpretation_text")
+        if not isinstance(text, str):
+            reason = (
+                "bridge response has neither 'interpretation' nor "
+                f"'interpretation_text'; keys={sorted(body.keys())}"
+            )
+            err = MalformedOutputError(reason)
+            err.contract = {"checked": True, "passed": False, "reject_reason": reason}
+            raise err
+        parsed, parse_mode = parse_model_json(text)
+        if parsed is None:
+            reason = (
+                "bridge interpretation_text is not valid JSON "
+                f"(length={len(text)}); raw text preserved in audit fields"
+            )
+            err = MalformedOutputError(reason)
+            err.contract = {"checked": True, "passed": False, "reject_reason": reason}
+            raise err
+        candidate = parsed
+        envelope_name = "interpretation_text"
+        raw_model_output = text
+
+    model_info = dict(body.get("model") or {})
+    model_info["source_envelope"] = envelope_name
+    model_info["parse_mode"] = parse_mode
+    model_info["raw_model_output"] = raw_model_output
+    return {"interpretation": candidate, "model": model_info}
+
+
+def enforce_interpretation_contract(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fail-closed contract checks on a parsed candidate — the provider's
+    Layer-2 duty. NEVER adds, defaults, or repairs a field and never
+    substitutes an accounting value.
+
+      - any of the 18 required fields missing
+            → MalformedOutputError naming exactly the missing fields
+              (e.g. a model that omits `suggested_status` is rejected, not
+              silently completed)
+      - forbidden accounting-authority keys (journal / ledger / balances / …)
+            → ForbiddenAccountingFieldError
+      - suggested_status == "VERIFIED"
+            → normalized to "REVIEW_REQUIRED": the model may never declare a
+              trusted final status. The normalization is recorded in the
+              returned contract info (never silent); the grounding gate and
+              the Kernel remain the downstream backstops.
+
+    Returns the contract info dict for the audit trace. Raised errors carry
+    the same dict on `.contract`.
+    """
+    missing = [f for f in REQUIRED_FIELDS_18 if f not in (candidate or {})]
+    if missing:
+        reason = "missing required fields: " + ", ".join(missing)
+        err = MalformedOutputError(
+            "bridge interpretation missing required fields: " + ", ".join(missing)
+        )
+        err.contract = {
+            "checked": True,
+            "passed": False,
+            "reject_reason": reason,
+            "missing_fields": missing,
+        }
+        raise err
+
+    forbidden = contains_forbidden_accounting_fields(candidate)
+    if forbidden:
+        reason = "forbidden accounting fields present: " + ", ".join(forbidden)
+        err = ForbiddenAccountingFieldError(reason)
+        err.contract = {
+            "checked": True,
+            "passed": False,
+            "reject_reason": reason,
+            "forbidden_fields": forbidden,
+        }
+        raise err
+
+    status_raw = str(candidate.get("suggested_status", "")).strip().upper()
+    clamped = status_raw == "VERIFIED"
+    if clamped:
+        candidate["suggested_status"] = "REVIEW_REQUIRED"
+
+    return {
+        "checked": True,
+        "passed": True,
+        "reject_reason": "",
+        "missing_fields": [],
+        "forbidden_fields": [],
+        "suggested_status_raw": status_raw,
+        "suggested_status_clamped_to_review_required": clamped,
+    }
+
+
 class LocalBridgeModelProvider:
     """
     ModelProvider over the device-side llama.cpp bridge.
@@ -188,6 +346,7 @@ class LocalBridgeModelProvider:
             "envelope": None,
             "parse_mode": None,
             "raw_response_text": None,
+            "raw_http_body": None,
             "contract": {"passed": False, "reject_reason": "", "checked": False},
         }
 
@@ -198,51 +357,47 @@ class LocalBridgeModelProvider:
         self.last_trace["http_ok"] = True
         self.last_trace["latency_ms"] = latency_ms
 
-        candidate, model_info, envelope = self._unwrap(body)
-        self.last_trace["envelope"] = envelope
-
-        # --- Layer 2: provider contract, fail closed, never repair ---------
-        missing = [f for f in REQUIRED_FIELDS_18 if f not in candidate]
-        if missing:
-            self.last_trace["contract"] = {
-                "checked": True,
-                "passed": False,
-                "reject_reason": "missing required fields: " + ", ".join(missing),
-                "missing_fields": missing,
-            }
-            raise MalformedOutputError(
-                "bridge interpretation missing required fields: " + ", ".join(missing)
+        # --- Layer 2a: parse the model response as JSON and construct the
+        # exact provider envelope {"interpretation": ..., "model": ...}.
+        # The verbatim raw model output is preserved for audit, never rewritten.
+        try:
+            envelope = build_provider_envelope(body)
+        except MalformedOutputError as exc:
+            self.last_trace["contract"] = getattr(
+                exc,
+                "contract",
+                {"checked": True, "passed": False, "reject_reason": str(exc)},
             )
-
-        forbidden = contains_forbidden_accounting_fields(candidate)
-        if forbidden:
-            self.last_trace["contract"] = {
-                "checked": True,
-                "passed": False,
-                "reject_reason": "forbidden accounting fields present: " + ", ".join(forbidden),
-                "forbidden_fields": forbidden,
-            }
-            raise ForbiddenAccountingFieldError(
-                "forbidden accounting fields present: " + ", ".join(forbidden)
+            # Audit: preserve the raw model output even when it is rejected.
+            raw = body.get("interpretation_text") if isinstance(body, dict) else None
+            self.last_trace["raw_response_text"] = (
+                raw if isinstance(raw, str) else self.last_trace.get("raw_http_body")
             )
+            raise
 
-        # Status-authority contract: the model never declares VERIFIED.
-        # Normalization is mirrored from RemoteHFModelProvider and is
-        # recorded, not hidden.
-        status_raw = str(candidate.get("suggested_status", "")).strip().upper()
-        clamped = status_raw == "VERIFIED"
-        if clamped:
-            candidate["suggested_status"] = "REVIEW_REQUIRED"
+        candidate = envelope["interpretation"]
+        model_info = envelope["model"]
+        raw_model_output = model_info.get("raw_model_output")
+        if raw_model_output is None:
+            # Bridge already parsed the model output server-side (passthrough
+            # envelope): the auditable raw is the full HTTP body, verbatim.
+            raw_model_output = self.last_trace.get("raw_http_body")
+        self.last_trace["envelope"] = model_info.get("source_envelope")
+        self.last_trace["parse_mode"] = model_info.get("parse_mode")
+        self.last_trace["raw_response_text"] = raw_model_output
 
-        self.last_trace["contract"] = {
-            "checked": True,
-            "passed": True,
-            "reject_reason": "",
-            "missing_fields": [],
-            "forbidden_fields": [],
-            "suggested_status_raw": status_raw,
-            "suggested_status_clamped_to_review_required": clamped,
-        }
+        # --- Layer 2b: 18-field contract, forbidden accounting fields, and
+        # the VERIFIED ban — fail closed, never repair, never invent.
+        try:
+            contract_info = enforce_interpretation_contract(candidate)
+        except (MalformedOutputError, ForbiddenAccountingFieldError) as exc:
+            self.last_trace["contract"] = getattr(
+                exc,
+                "contract",
+                {"checked": True, "passed": False, "reject_reason": str(exc)},
+            )
+            raise
+        self.last_trace["contract"] = contract_info
         self._last_call_ok = True
 
         return InterpretationResult(
@@ -253,8 +408,10 @@ class LocalBridgeModelProvider:
             generated_profile={
                 "bridge_url": self._url,
                 "latency_ms": latency_ms,
-                "envelope": envelope,
+                "envelope": model_info.get("source_envelope"),
                 "artifact_identity": self._config.adapter_revision,
+                # Auditable field: the model's raw output, verbatim.
+                "raw_model_output": raw_model_output,
             },
         )
 
@@ -299,6 +456,8 @@ class LocalBridgeModelProvider:
             })
 
             if resp.status_code == 200:
+                # Full verbatim body — audit only, never rewritten/truncated.
+                self.last_trace["raw_http_body"] = resp.text
                 try:
                     body = resp.json()
                 except ValueError:
@@ -311,7 +470,6 @@ class LocalBridgeModelProvider:
                     raise MalformedOutputError(
                         f"bridge 200 response on {path} is not a JSON object"
                     )
-                self.last_trace["raw_response_text"] = body_excerpt
                 return body, elapsed_ms
             if resp.status_code in (404, 405):
                 continue  # wrong mount point — try the next candidate path
@@ -334,84 +492,12 @@ class LocalBridgeModelProvider:
             or f"no bridge route matched; tried paths {[a.get('path') for a in attempts]}"
         )
 
-    # ------------------------------------------------------------------
-    # Envelope → candidate (strict, no repair)
-    # ------------------------------------------------------------------
-
-    def _unwrap(
-        self, body: Dict[str, Any]
-    ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
-        """
-        Return (candidate, model_info, envelope_name).
-
-        Accepts, in order:
-          1. {"interpretation": {...}, "model": {...}}   (Platrixa envelope)
-          2. {"interpretation_text": "<json string>"}    (device bridge envelope)
-        Anything else is rejected with the actual keys recorded.
-        """
-        candidate = body.get("interpretation")
-        if isinstance(candidate, dict):
-            model_info = body.get("model", {})
-            return candidate, model_info if isinstance(model_info, dict) else {}, "interpretation"
-
-        text = body.get("interpretation_text")
-        if isinstance(text, str):
-            self.last_trace["raw_response_text"] = text
-            parsed = self._parse_strict(text)
-            if parsed is None:
-                self.last_trace["contract"] = {
-                    "checked": True,
-                    "passed": False,
-                    "reject_reason": "interpretation_text is not valid JSON",
-                }
-                raise MalformedOutputError(
-                    "bridge interpretation_text is not valid JSON "
-                    f"(length={len(text)}); raw text recorded in trace"
-                )
-            self.last_trace["parse_mode"] = self._parse_mode(text)
-            return parsed, {}, "interpretation_text"
-
-        self.last_trace["contract"] = {
-            "checked": True,
-            "passed": False,
-            "reject_reason": "bridge response has neither 'interpretation' nor "
-            f"'interpretation_text'; keys={sorted(body.keys())}",
-        }
-        raise MalformedOutputError(
-            "bridge response has neither 'interpretation' nor 'interpretation_text'; "
-            f"keys={sorted(body.keys())}"
-        )
-
-    @staticmethod
-    def _parse_strict(text: str) -> Optional[Dict[str, Any]]:
-        """Parse the model's JSON text. Extraction only — never repair."""
-        stripped = (text or "").strip()
-        if not stripped:
-            return None
-        try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-        # Repo-sanctioned extraction (markdown fences / surrounding prose).
-        # base.extract_json_candidate only locates a JSON object; it never
-        # alters values or invents keys.
-        return extract_json_candidate(text)
-
-    @staticmethod
-    def _parse_mode(text: str) -> str:
-        stripped = (text or "").strip()
-        try:
-            if isinstance(json.loads(stripped), dict):
-                return "plain_json"
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return "extracted_json (fences/surrounding prose)"
-
 
 __all__ = [
     "LocalBridgeModelProvider",
+    "build_provider_envelope",
+    "enforce_interpretation_contract",
+    "parse_model_json",
     "BRIDGE_URL_ENV",
     "BRIDGE_PATH_ENV",
     "BRIDGE_TIMEOUT_ENV",
