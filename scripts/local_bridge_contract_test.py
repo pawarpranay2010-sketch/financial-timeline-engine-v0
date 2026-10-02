@@ -362,6 +362,35 @@ check(
     f"raw={provider.last_trace.get('raw_response_text')}",
 )
 
+# ---------------------------------------------------------------------------
+# D. regression: missing `suggested_status` rejected; complete candidate passes
+# ---------------------------------------------------------------------------
+
+print("--- D. regression: suggested_status presence contract ---")
+
+provider_d, result_d = run_provider("valid")
+check(
+    "D1 regression: complete valid candidate PASSES the provider contract",
+    provider_d.last_trace.get("contract", {}).get("passed") is True
+    and all(f in result_d.candidate for f in REQUIRED_FIELDS_18),
+    f"fields={sum(f in result_d.candidate for f in REQUIRED_FIELDS_18)}/18",
+)
+
+MODE["mode"] = "missing_suggested_status"
+provider_d2 = LocalBridgeModelProvider(url=f"http://127.0.0.1:{SERVER.server_port}")
+expect_raises(
+    "D2 regression: candidate missing ONLY suggested_status remains REJECTED",
+    lambda: provider_d2.interpret("Paid 1250 cash"),
+    MalformedOutputError,
+    "suggested_status",
+)
+check(
+    "D3 regression: rejection audit records exactly the single gap",
+    provider_d2.last_trace.get("contract", {}).get("missing_fields")
+    == ["suggested_status"],
+    f"missing_fields={provider_d2.last_trace.get('contract', {}).get('missing_fields')}",
+)
+
 SERVER.shutdown()
 
 # ---------------------------------------------------------------------------

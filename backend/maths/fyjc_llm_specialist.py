@@ -124,6 +124,9 @@ Return ONLY a JSON object matching this exact schema. No markdown, no explanatio
 
 Rules:
 - suggested_status MUST ALWAYS be "REVIEW_REQUIRED". Never set VERIFIED.
+- Every response must contain all 18 keys — never omit a key, including
+  suggested_status. An undeterminable fact stays explicitly unresolved
+  (null/empty with low confidence); it is never deleted from the object.
 - If a field is not determinable, leave null/empty with low confidence.
 - Do NOT fabricate information not present in the input.
 - Return ONLY the JSON object.
