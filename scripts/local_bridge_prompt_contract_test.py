@@ -295,23 +295,29 @@ else:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            # Decorators are route metadata, not executable statements. On the
+            # device bridge the only executable HTTP call is the real outbound
+            # requests.post(...). Skip decorators entirely so the AST walker
+            # inspects only executable function-body statements.
             inner_calls: List[Tuple[int, str]] = []
             for sub in ast.walk(node):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
                 if isinstance(sub, ast.Call):
                     if isinstance(sub.func, ast.Name):
                         inner_calls.append((sub.lineno, sub.func.id))
                     elif isinstance(sub.func, ast.Attribute):
-                        inner_calls.append((sub.lineno, sub.func.attr))
+                        # A route decorator is app.post(...): func.attr == "post"
+                        # with func.value being the FastAPI app name. An inbound
+                        # outbound request is requests.post(...): func.attr ==
+                        # "post" with func.value being a Name "requests".
+                        if isinstance(sub.func.value, ast.Name) and sub.func.value.id == "requests":
+                            inner_calls.append((sub.lineno, sub.func.attr))
+            # Guard identified by its call name.
             guard_line = next((ln for ln, n in inner_calls if n == "is_alpaca_prompt"), None)
-            post_line = next(
-                (
-                    ln
-                    for ln, n in inner_calls
-                    if n in {"post", "request", "aclose"}
-                    or n.endswith("post")
-                ),
-                None,
-            )
+            # The actual outbound request identified specifically as
+            # requests.post(...), never a decorator.
+            post_line = next((ln for ln, n in inner_calls if n == "post"), None)
             if guard_line is not None and post_line is not None:
                 return node, guard_line, post_line
         return None, None, None
