@@ -146,6 +146,7 @@ class FieldGrounding:
     source_span: Optional[Tuple[int, int]] = None  # real offsets, or None
     span_note: str = ""           # why a span is unavailable, when it is
     uncertainty: Uncertainty = Uncertainty.NONE
+    semantic_role: str = ""       # EVENT / SETTLEMENT / ADJUSTMENT / ... (3A)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializable provenance record (additive; nothing else uses this)."""
@@ -164,6 +165,7 @@ class FieldGrounding:
             "uncertainty": self.uncertainty.value
             if isinstance(self.uncertainty, Uncertainty)
             else str(self.uncertainty),
+            "semantic_role": self.semantic_role,
         }
 
 
@@ -216,6 +218,7 @@ def _record(
     span_text: str = "",
     span_note: str = "",
     uncertainty: Optional[Uncertainty] = None,
+    semantic_role: str = "",
 ) -> FieldGrounding:
     """Build a FieldGrounding with provenance attached.
 
@@ -240,6 +243,7 @@ def _record(
         source_span=span,
         span_note=span_note,
         uncertainty=uncertainty,
+        semantic_role=semantic_role,
     )
 
 
@@ -290,6 +294,268 @@ def _text_contains(text: str, candidate: str) -> bool:
         return False
 
     return candidate_norm in text_norm
+
+
+# ---------------------------------------------------------------------------
+# Transaction-type semantic mappings (Phase 3A)
+# ---------------------------------------------------------------------------
+#
+# Explicit, versioned semantic mappings. Each canonical TransactionTypeEnum
+# value carries:
+#
+#   role     what the type IS, so that the model cannot smuggle a treatment
+#            in as an event:
+#              EVENT           a business event that happened
+#              CLASSIFICATION  how the event is classified
+#              SETTLEMENT      partial/complete discharge of a stated account
+#              ADJUSTMENT      a period-end accounting adjustment
+#              TAX_TREATMENT   a tax component, never a complete tax treatment
+#   evidence source expressions that support the claim
+#
+# INVARIANT: every non-UNKNOWN TransactionTypeEnum value MUST appear here
+# with at least one evidence term. A claim with no entry is unverifiable and
+# fails closed (mirrors the M-03 payment-method invariant).
+#
+# A GST mention is evidence that tax was MENTIONED — never evidence that a
+# complete GST treatment (registration, rate, input/output split) was applied.
+# Discount types and return directions stay distinct: an unqualified "discount"
+# or "returned" grounds neither.
+
+TRANSACTION_TYPE_SEMANTICS_VERSION = "tx-semantics-1"
+
+EVENT = "EVENT"
+CLASSIFICATION = "CLASSIFICATION"
+SETTLEMENT = "SETTLEMENT"
+ADJUSTMENT = "ADJUSTMENT"
+TAX_TREATMENT = "TAX_TREATMENT"
+
+TRANSACTION_TYPE_EVIDENCE: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "PURCHASE": (EVENT, ("purchased", "bought", "procured", "acquired")),
+    "SALE": (EVENT, ("sold", "supplied", "delivered")),
+    "PAYMENT": (EVENT, ("paid", "payment")),
+    "RECEIPT": (EVENT, ("received", "receipt")),
+    "CAPITAL": (EVENT, ("capital", "invested", "started business")),
+    "DRAWING": (EVENT, ("withdrew", "drew", "drawing", "personal use")),
+    "EXPENSE": (CLASSIFICATION,
+                ("paid rent", "paid salary", "paid electricity", "paid wages")),
+    "RETURN_OUT": (EVENT,
+                   ("purchase return", "returned the goods", "returned to supplier",
+                    "returned to the supplier", "goods returned to")),
+    "RETURN_IN": (EVENT,
+                  ("sales return", "sale return", "customer returned",
+                   "received back", "goods returned from")),
+    # Only distinctive anchors live here. The bare nouns "settlement",
+    # "part settlement" and "full settlement" were REMOVED: as unguarded
+    # substrings they grounded a document mention ("this is a part settlement
+    # policy document") as an actual settlement. Those forms are re-expressed
+    # as guarded, sentence-scoped patterns in CLASSIFICATION_PATTERNS below.
+    # The entry deliberately keeps a non-empty vocabulary — an empty tuple
+    # would itself be a vacuous-grounding hazard (suite check S0c).
+    "SETTLEMENT": (SETTLEMENT,
+                   ("settled the account", "settling the account",
+                    "settles the account")),
+    "DEPRECIATION": (ADJUSTMENT, ("depreciation", "depreciated")),
+    "GST": (TAX_TREATMENT,
+            ("gst", "cgst", "sgst", "igst", "goods and services tax")),
+    "DISCOUNT_TRADE": (CLASSIFICATION,
+                       ("trade discount", "purchase discount",
+                        "discount on purchase")),
+    "DISCOUNT_CASH": (CLASSIFICATION,
+                      ("cash discount", "discount on settlement",
+                       "discount allowed")),
+}
+
+# Wording that establishes that a return HAPPENED but not WHICH direction.
+# It grounds neither RETURN_OUT nor RETURN_IN: direction ambiguity is
+# preserved as REVIEW_REQUIRED rather than guessed.
+UNDIRECTED_RETURN_TERMS: Tuple[str, ...] = (
+    "returned", "return", "returned the items", "goods returned",
+)
+
+
+def _has_undirected_return(text: str, tx_lower: str) -> bool:
+    """True when a return is claimed but the source does not fix its direction."""
+    if not tx_lower.startswith("return"):
+        return False
+    return any(term in (text or "").lower() for term in UNDIRECTED_RETURN_TERMS)
+
+
+def _transaction_type_semantics(tx_type: str) -> Tuple[str, Tuple[str, ...]]:
+    """Resolve a claimed transaction type to (role, evidence terms).
+
+    Matching mirrors the historical lookup: the canonical key may appear
+    inside the claim, or the claim inside the key (so the legacy free-text
+    form "Purchase of machinery" still resolves to PURCHASE). Unknown
+    claims resolve to ("", ()) — unverifiable, never vacuously grounded.
+    """
+    tx_lower = (tx_type or "").lower()
+    for canonical, (role, terms) in TRANSACTION_TYPE_EVIDENCE.items():
+        if canonical.lower() in tx_lower or tx_lower in canonical.lower():
+            return role, terms
+    return "", ()
+
+
+# Direction-bearing evidence that needs more than a single keyword.
+#
+# A return's direction is established either by an explicit directional
+# phrase ("purchase return", "customer returned") or by a return clause that
+# also names the SIDE of the trade in the same sentence:
+#
+#   "Sameer returned materials as they were supplied"  -> supplied to us
+#                                                          -> RETURN_OUT
+#   "Ravi returned the goods we had sold to him"       -> sold by us
+#                                                          -> RETURN_IN
+#
+# Without the side, the direction stays undetermined and the field remains
+# AMBIGUOUS / REVIEW_REQUIRED.
+TRANSACTION_TYPE_PATTERNS: Dict[str, Tuple[str, ...]] = {
+    "RETURN_OUT": (
+        r"\breturn\w*\b[^!?\n]{0,80}?\b(?:were|was|had been)\s+(?:supplied|purchased|bought|shipped)\b",
+    ),
+    "RETURN_IN": (
+        r"\breturn\w*\b[^!?\n]{0,80}?\b(?:we\s+)?(?:had\s+)?(?:sold|delivered|dispatched)\b",
+        r"\breturn\w*\b[^!?\n]{0,80}?\bsupplied\s+to\s+us\b",
+    ),
+}
+
+
+def _transaction_type_canonical(tx_type: str) -> str:
+    """Canonical key for a claim, or "" when nothing matches."""
+    tx_lower = (tx_type or "").lower()
+    for canonical in TRANSACTION_TYPE_EVIDENCE:
+        if canonical.lower() in tx_lower or tx_lower in canonical.lower():
+            return canonical
+    return ""
+
+
+# Return evidence must name a return EVENT, not the word "return".
+_RETURN_VERB_FORMS = frozenset({"returned", "returns", "returning"})
+
+# Negation inside the matched window invalidates the evidence: an asserted
+# non-event is not an event.
+_NEGATION_TERMS = ("not ", "n't", "never ", "never", "no ", "without", "denied",
+                   "avoided", "declined")
+
+# A named transferee between the return verb and the side-of-trade phrase
+# ("returned 500 to Ram because ... which were supplied") means the RETURN's
+# own direction depends on that party's role, which the source never states.
+# The side phrase may also belong to a different transaction in the same
+# sentence. Either way the correct behaviour is to abstain.
+_NAMED_TRANSFER = re.compile(r"\b(?:to|from)\s+[A-Z][A-Za-z]+")
+
+# A passive "returned BY <party>" means the goods came back TO the firm, i.e.
+# the event is inbound. Grounding it as RETURN_OUT contradicts that direction,
+# so a passive agent suppresses the match even when a side-of-trade word is
+# present ("goods returned by Komal as excess goods were supplied").
+_PASSIVE_RETURN_AGENT = re.compile(r"\breturned\s+by\s+[A-Z][A-Za-z]+\b")
+
+# Recipient-bearing direction evidence (Phase 3A). "returned X to <party>"
+# names the receiving party, which is what fixes the direction; a bare
+# "returned" never does. Direction is NEVER inferred from "returned" alone.
+#
+# The window is [^!?\n] — deliberately WITHOUT "." — so a currency
+# abbreviation ("worth Rs. 800 to Prakash") cannot truncate the evidence.
+# Cross-sentence pairing is already prevented by per-sentence scoping.
+DIRECTION_PATTERNS: Dict[str, Tuple[str, ...]] = {
+    "RETURN_OUT": (r"\breturned\b(?!\s+(?:nothing|none|neither|all\s+the\s+ways))"
+                   r"[^!?\n]{0,80}?\bto\s+[A-Z][A-Za-z]+\b",),
+}
+
+# Category evidence that needs structure, so it cannot live in the unguarded
+# substring table. Same guards as the return path: per-sentence scoping and a
+# +/-40 negation window, plus a prospective/nominal guard where the wording is
+# an intention rather than an event.
+CLASSIFICATION_PATTERNS: Dict[str, Tuple[str, ...]] = {
+    "EXPENSE": (r"\b(?:paid|payments?\s+(?:of|made)|paid\s+for)\b[^!?\n]{0,60}?"
+                r"\b(?:carriage|rent|salary|salaries|wages|electricity|telephone|"
+                r"phone|insurance|postage|advertisement|conveyance|stationery|"
+                r"printing|expenses?|bill|premium|commission|freight)\b",),
+    "SETTLEMENT": (r"\b(?:settled|settles|settling)\s+"
+                   r"(?:cash|in\s+cash|the\s+account|in\s+full|part|the\s+amount)\b",
+                   r"\b(?:in|as)\s+(?:full|part)\s+settlement\s+of\b"),
+}
+
+# A settlement that has not happened yet, or exists only as a nominal amount.
+PROSPECTIVE_TERMS: Tuple[str, ...] = (
+    "will be settled", "to be settled", "shall be settled", "would be settled",
+    "expected to settle", "pending settlement", "unsettled", "not settled",
+    "no settlement", "never settled",
+)
+
+# A recipient does not fix direction when the same sentence also asserts a
+# competing first-person side of the trade. This preserves the named-transferee
+# ambiguity protection for the recipient rule.
+CONTESTED_SIDE_OF_TRADE = re.compile(
+    r"\b(?:we|i|us|our)\s+(?:sold|supplied|delivered|dispatched)\b", re.IGNORECASE)
+
+
+def _sentences(text: str) -> List[str]:
+    """Split into sentences for evidence scoping.
+
+    A terminator followed by whitespace and a capital letter starts a new
+    sentence; "Rs. 500" does not split because the period is followed by a
+    digit. Direction evidence is matched inside one sentence only, so a
+    supply/sale word belonging to a DIFFERENT transaction cannot be paired
+    with a return that belongs to another one.
+    """
+    return re.split(r"(?<=[.!?])\s+(?=[A-Z(])", text or "", flags=0) or [text or ""]
+
+
+def _directional_return_evidence(canonical: str, text: str) -> Optional[str]:
+    """First qualifying direction/classification evidence for a type, else None.
+
+    Three guarded passes, all narrowing, never widening:
+      1. TRANSACTION_TYPE_PATTERNS — direction from a side-of-trade phrase.
+         The return term must be a verb form ("a return policy" is a
+         mention, not a transaction), negation inside the window rejects
+         the match, a named transferee suppresses it, and a passive
+         "returned by <party>" suppresses it (that direction is inbound).
+      2. DIRECTION_PATTERNS — recipient-bearing returns. The recipient is
+         the evidence, so _NAMED_TRANSFER does not suppress it; a passive
+         agent or a competing first-person side of the trade does.
+      3. CLASSIFICATION_PATTERNS — structured category evidence, with a
+         prospective/nominal guard.
+
+    Every pass is scoped per sentence, so evidence from one transaction is
+    never associated with another.
+    """
+    for sentence in _sentences(text):
+        for pattern in TRANSACTION_TYPE_PATTERNS.get(canonical, ()):
+            for match in re.finditer(pattern, sentence, re.IGNORECASE):
+                head = re.match(r"return\w*", match.group(0), re.IGNORECASE)
+                if head is None or head.group(0).lower() not in _RETURN_VERB_FORMS:
+                    continue
+                window = sentence[max(0, match.start() - 40):match.end()].lower()
+                if any(term in window for term in _NEGATION_TERMS):
+                    continue
+                if _NAMED_TRANSFER.search(match.group(0)):
+                    continue
+                if _PASSIVE_RETURN_AGENT.search(sentence):
+                    continue
+                return match.group(0)
+
+        for pattern in DIRECTION_PATTERNS.get(canonical, ()):
+            for match in re.finditer(pattern, sentence, re.IGNORECASE):
+                window = sentence[max(0, match.start() - 40):match.end()].lower()
+                if any(term in window for term in _NEGATION_TERMS):
+                    continue
+                if CONTESTED_SIDE_OF_TRADE.search(sentence):
+                    continue
+                if _PASSIVE_RETURN_AGENT.search(sentence):
+                    continue
+                return match.group(0)
+
+        for pattern in CLASSIFICATION_PATTERNS.get(canonical, ()):
+            for match in re.finditer(pattern, sentence, re.IGNORECASE):
+                lo = max(0, match.start() - 40)
+                hi = min(len(sentence), match.end() + 40)
+                window = sentence[lo:hi].lower()
+                if any(term in window for term in _NEGATION_TERMS):
+                    continue
+                if any(term in window for term in PROSPECTIVE_TERMS):
+                    continue
+                return match.group(0)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -779,28 +1045,24 @@ class ExpandedGroundingGate:
         # --- Rule 5: Transaction type ---
         tx_type = interpretation.get("transaction_type_enum", "") or interpretation.get("transaction_type", "")
         if tx_type and tx_type != "UNKNOWN":
-            # Check if transaction keywords are in text
-            tx_keywords = {
-                "purchase": ["purchased", "bought", "procured", "acquired"],
-                "sale": ["sold", "supplied", "delivered"],
-                "payment": ["paid", "payment", "settled"],
-                "receipt": ["received", "receipt"],
-                "capital": ["capital", "invested", "started business"],
-                "expense": ["paid rent", "paid salary", "paid electricity", "paid wages"],
-                "return": ["returned", "return", "purchase return", "sales return"],
-                "drawing": ["withdrew", "drew", "drawing", "personal use"],
-            }
-            tx_lower = tx_type.lower()
-            # Find matching category
-            matched = False
-            matched_keywords: Tuple[str, ...] = ()
-            for cat, kws in tx_keywords.items():
-                if cat in tx_lower or tx_lower in cat:
-                    hit = tuple(kw for kw in kws if kw in source_text.lower())
-                    if hit:
-                        matched = True
-                        matched_keywords = hit
-                        break
+            # Phase 3A: explicit, versioned semantic mapping instead of an
+            # inline keyword table (TRANSACTION_TYPE_EVIDENCE). Behaviour is
+            # unchanged for every type that could already ground; the mapping
+            # now also covers SETTLEMENT, DEPRECIATION, GST, DISCOUNT_TRADE
+            # and DISCOUNT_CASH, and separates the two return directions.
+            role, terms = _transaction_type_semantics(tx_type)
+            tx_lower = (tx_type or "").lower()
+            canonical = _transaction_type_canonical(tx_type)
+            hit = tuple(kw for kw in terms if kw in source_text.lower())
+            matched = bool(hit)
+            matched_keywords: Tuple[str, ...] = hit
+            if not matched and canonical:
+                # Direction-bearing evidence for the return types, scoped and
+                # guarded per sentence (see _directional_return_evidence).
+                direction_evidence = _directional_return_evidence(canonical, source_text)
+                if direction_evidence is not None:
+                    matched = True
+                    matched_keywords = (direction_evidence,)
             if not matched:
                 # FAIL CLOSED (audit M-01, 2026-09-29).
                 #
@@ -831,12 +1093,25 @@ class ExpandedGroundingGate:
                     field_name="transaction_type",
                     grounded=False,
                     reason=f"Transaction type '{tx_type}' could not be directly verified from text keywords",
-                    evidence_class=EvidenceClass.UNSUPPORTED,
+                    evidence_class=(EvidenceClass.AMBIGUOUS
+                                    if _has_undirected_return(source_text, tx_lower)
+                                    else EvidenceClass.UNSUPPORTED),
                     resolution="keyword_table",
-                    span_note="no transaction-type evidence term occurs in the source text",
+                    span_note=("return direction is not established by the source text — "
+                               "RETURN_IN and RETURN_OUT remain undecidable"
+                               if _has_undirected_return(source_text, tx_lower)
+                               else "no transaction-type evidence term occurs in the source text"),
+                    semantic_role=role,
                 ))
             else:
                 located = _locate_keyword(source_text, matched_keywords)
+                note = ""
+                if role == TAX_TREATMENT:
+                    note = ("tax treatment is mentioned in the source; this is not "
+                            "evidence that a complete GST treatment was applied")
+                elif role == SETTLEMENT:
+                    note = ("settlement wording supports a discharge claim; the "
+                            "amount and counter-account must still be grounded")
                 field_results.append(_record(
                     field_name="transaction_type",
                     grounded=True,
@@ -845,7 +1120,8 @@ class ExpandedGroundingGate:
                     resolution="keyword_table",
                     span=(located[0], located[1]) if located else None,
                     span_text=located[2] if located else "",
-                    span_note="" if located else "evidence term matched but no offset could be located",
+                    span_note=note or ("" if located else "evidence term matched but no offset could be located"),
+                    semantic_role=role,
                 ))
         else:
             field_results.append(_record(
