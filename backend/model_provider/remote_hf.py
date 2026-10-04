@@ -65,10 +65,12 @@ TOKEN_ENV = "PLATRIXA_MODEL_ENDPOINT_TOKEN"
 # HTTP timeout for interpret calls (seconds).
 TIMEOUT_ENV = "PLATRIXA_MODEL_TIMEOUT"
 DEFAULT_TIMEOUT = 60.0
-# Transport selection: "http" (default — POST <url>/interpret, Modal service)
-# or "gradio" (gradio_client → HF ZeroGPU Space named API /interpret_core).
+# Transport selection: "http" (default — POST <url>/interpret, Modal service),
+# "gradio" (gradio_client → HF ZeroGPU Space named API /interpret_core), or
+# "local" (self-hosted llama.cpp GGUF artifact loaded in this worker process;
+# requires NO endpoint URL and no external inference compute).
 TRANSPORT_ENV = "PLATRIXA_MODEL_TRANSPORT"
-VALID_TRANSPORTS = ("http", "gradio")
+VALID_TRANSPORTS = ("http", "gradio", "local", "local_bridge")
 
 # The 18-field interpretation contract (names only — semantics are enforced
 # downstream by schema validation, grounding, and the deterministic kernel).
@@ -119,7 +121,7 @@ def endpoint_timeout() -> float:
 
 
 def transport_mode() -> str:
-    """Configured remote transport ('http' | 'gradio'; anything else → 'http')."""
+    """Configured transport ('http' | 'gradio' | 'local'; unknown → 'http')."""
     mode = _env(TRANSPORT_ENV).lower()
     return mode if mode in VALID_TRANSPORTS else "http"
 
@@ -342,15 +344,32 @@ def get_model_provider(
     """
     Single selection point for the ModelProvider implementation.
 
-    Selection (Phase 7R Part 6, transport seam added Phase 7S):
+    Selection (Phase 7R Part 6, transport seam added Phase 7S, self-hosted
+    local transport added for the ZeroGPU-independence work):
+        PLATRIXA_MODEL_TRANSPORT=local                → LocalLlamaCppModelProvider
         PLATRIXA_MODEL_ENDPOINT_URL unset            → LocalHFModelProvider
         set + PLATRIXA_MODEL_TRANSPORT=gradio        → HFGradioModelProvider
         set + anything else (default "http")         → RemoteHFModelProvider
+
+    "local" is checked first and needs no endpoint URL: the artifact lives
+    on this host, so selecting it must not be gated on an external service
+    being configured. It is still an explicit opt-in — the default path is
+    byte-for-byte unchanged.
 
     Explicit `provider` argument wins (tests / advanced wiring).
     """
     if provider is not None:
         return provider
+
+    if transport_mode() == "local":
+        from backend.model_provider.llamacpp_local import LocalLlamaCppModelProvider
+
+        return LocalLlamaCppModelProvider(config=config)
+
+    if transport_mode() == "local_bridge":
+        from backend.model_provider.local_bridge import LocalBridgeModelProvider
+
+        return LocalBridgeModelProvider()
 
     if endpoint_url():
         if transport_mode() == "gradio":
@@ -370,4 +389,6 @@ __all__ = [
     "REQUIRED_FIELDS_18",
     "ENDPOINT_URL_ENV",
     "TRANSPORT_ENV",
+    "VALID_TRANSPORTS",
+    "transport_mode",
 ]
