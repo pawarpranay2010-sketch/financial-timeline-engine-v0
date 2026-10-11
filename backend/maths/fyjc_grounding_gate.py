@@ -794,9 +794,75 @@ class ExpandedGroundingGate:
             # Find matching category
             matched = False
             matched_keywords: Tuple[str, ...] = ()
+
+            def has_unnegated_keyword(keyword: str) -> bool:
+                pattern = r"(?<!\w)" + re.escape(keyword) + r"(?!\w)"
+
+                for occurrence in re.finditer(pattern, source_text, re.IGNORECASE):
+                    left = source_text.rfind(".", 0, occurrence.start()) + 1
+                    left = max(left, source_text.rfind(";", 0, occurrence.start()) + 1)
+                    but_boundary = source_text.rfind(" but ", 0, occurrence.start())
+                    if but_boundary >= 0:
+                        left = max(left, but_boundary + 5)
+
+                    right_candidates = [
+                        pos for pos in (
+                            source_text.find(".", occurrence.end()),
+                            source_text.find(";", occurrence.end()),
+                            source_text.find(" but ", occurrence.end()),
+                        ) if pos >= 0
+                    ]
+                    right = min(right_candidates) if right_candidates else len(source_text)
+                    clause = source_text[left:right].strip()
+
+                    # Reject explicit negation of the transaction event itself.
+                    negated_event = re.search(
+                        r"\b(?:not|never|no)\b.{0,35}\b"
+                        r"(?:paid|purchased|bought|procured|acquired|sold|supplied|"
+                        r"delivered|received|returned|invested|withdrew|drew|"
+                        r"made|completed|settled|occurred|executed)\b"
+                        r"|\b(?:hasn't|haven't|hadn't|wasn't|weren't|isn't|aren't|didn't)"
+                        r"\b.{0,35}\b(?:paid|purchased|bought|procured|acquired|sold|"
+                        r"supplied|delivered|received|returned|invested|withdrew|drew|"
+                        r"made|completed|settled|occurred|executed)\b",
+                        clause,
+                        re.IGNORECASE,
+                    )
+                    if negated_event:
+                        continue
+
+                    # A noun or plan alone does not prove an executed transaction.
+                    non_actual_context = re.search(
+                        r"\b(?:proposed|expected|scheduled|planned|discussed|"
+                        r"pending|intended|upcoming)\b",
+                        clause,
+                        re.IGNORECASE,
+                    )
+                    if non_actual_context:
+                        continue
+
+                    if keyword.lower() in {"payment", "paid", "settled"}:
+                        if re.search(
+                            r"\bpayment\b.{0,25}\b(?:not|never|no)\b",
+                            clause,
+                            re.IGNORECASE,
+                        ):
+                            continue
+
+                    if keyword.lower() in {"receipt"} and re.search(
+                        r"\bno\s+(?:customer\s+)?receipt\b",
+                        clause,
+                        re.IGNORECASE,
+                    ):
+                        continue
+
+                    return True
+
+                return False
+
             for cat, kws in tx_keywords.items():
                 if cat in tx_lower or tx_lower in cat:
-                    hit = tuple(kw for kw in kws if kw in source_text.lower())
+                    hit = tuple(kw for kw in kws if has_unnegated_keyword(kw))
                     if hit:
                         matched = True
                         matched_keywords = hit

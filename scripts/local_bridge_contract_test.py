@@ -147,10 +147,19 @@ class FakeBridge(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body.encode("utf-8"))
             return
+        elif mode == "truncated":
+            inner = '{"transaction_type":"PURCHASE",'
         else:  # pragma: no cover
             inner = json.dumps(make_candidate())
 
-        body = json.dumps({"interpretation_text": inner, "model": {}})
+        body = json.dumps({
+            "interpretation_text": inner,
+            "completion_status": (
+                "TRUNCATED" if mode == "truncated" else "COMPLETE"
+            ),
+            "finish_reason": "length" if mode == "truncated" else "stop",
+            "model": {},
+        })
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -360,6 +369,28 @@ check(
     "C9b wrong-shape raw body preserved for audit",
     bool(provider.last_trace.get("raw_response_text")),
     f"raw={provider.last_trace.get('raw_response_text')}",
+)
+
+MODE["mode"] = "truncated"
+provider_t = LocalBridgeModelProvider(
+    url=f"http://127.0.0.1:{SERVER.server_port}"
+)
+expect_raises(
+    "C10 truncated generation rejected as incomplete output",
+    lambda: provider_t.interpret("Paid 1250 cash"),
+    MalformedOutputError,
+    "incomplete model output",
+)
+check(
+    "C10b partial text preserved and marked truncated",
+    provider_t.last_trace.get("raw_response_text")
+    == '{"transaction_type":"PURCHASE",'
+    and provider_t.last_trace.get("completion", {}).get("status")
+    == "TRUNCATED"
+    and provider_t.last_trace.get("contract", {}).get("failure_type")
+    == "INCOMPLETE_OUTPUT",
+    f"completion={provider_t.last_trace.get('completion')}, "
+    f"contract={provider_t.last_trace.get('contract')}",
 )
 
 # ---------------------------------------------------------------------------

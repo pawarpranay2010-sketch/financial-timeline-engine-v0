@@ -87,6 +87,7 @@ BRIDGE_URL_ENV = "PLATRIXA_LOCAL_BRIDGE_URL"
 BRIDGE_PATH_ENV = "PLATRIXA_LOCAL_BRIDGE_PATH"
 BRIDGE_TIMEOUT_ENV = "PLATRIXA_LOCAL_BRIDGE_TIMEOUT"
 BRIDGE_ARTIFACT_ENV = "PLATRIXA_LOCAL_BRIDGE_ARTIFACT"
+BRIDGE_KEY_ENV = "PLATRIXA_LOCAL_BRIDGE_KEY"
 
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:8081"
 DEFAULT_TIMEOUT = 120.0
@@ -296,6 +297,8 @@ class LocalBridgeModelProvider:
             except ValueError:
                 self._timeout = DEFAULT_TIMEOUT
 
+        self._bridge_key = _env(BRIDGE_KEY_ENV) or None
+
         # Identity: PROVENANCE_UNKNOWN by default (see module docstring).
         artifact = _env(BRIDGE_ARTIFACT_ENV) or "PROVENANCE_UNKNOWN"
         self._config = config or ProviderConfig(
@@ -356,6 +359,34 @@ class LocalBridgeModelProvider:
         body, latency_ms = self._call_bridge(raw_input)
         self.last_trace["http_ok"] = True
         self.last_trace["latency_ms"] = latency_ms
+
+        # Preserve incomplete generation for diagnostics, but never parse
+        # or accept it as a financial interpretation.
+        completion_status = (
+            body.get("completion_status")
+            if isinstance(body, dict)
+            else None
+        )
+        if completion_status == "TRUNCATED":
+            raw = body.get("interpretation_text")
+            self.last_trace["raw_response_text"] = (
+                raw if isinstance(raw, str) else None
+            )
+            self.last_trace["completion"] = {
+                "status": "TRUNCATED",
+                "finish_reason": body.get("finish_reason"),
+            }
+            reason = (
+                "incomplete model output: generation stopped at token limit; "
+                "partial text preserved for diagnostics"
+            )
+            self.last_trace["contract"] = {
+                "checked": True,
+                "passed": False,
+                "reject_reason": reason,
+                "failure_type": "INCOMPLETE_OUTPUT",
+            }
+            raise MalformedOutputError(reason)
 
         # --- Layer 2a: parse the model response as JSON and construct the
         # exact provider envelope {"interpretation": ..., "model": ...}.
@@ -429,10 +460,13 @@ class LocalBridgeModelProvider:
             url = f"{self._url}{path}"
             started = time.monotonic()
             try:
+                headers = {"Content-Type": "application/json"}
+                if self._bridge_key:
+                    headers["X-Platrixa-Android-Bridge-Key"] = self._bridge_key
                 resp = requests.post(
                     url,
                     json={"text": raw_input},
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=self._timeout,
                 )
             except requests.Timeout:
