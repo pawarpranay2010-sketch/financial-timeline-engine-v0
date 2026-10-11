@@ -155,9 +155,16 @@ def test_p1_public_contract_preserved() -> None:
     cases = [
         ("clean payment", candidate(parties=["Acme Corp"]), True, True),
         ("fabricated party", candidate(parties=["Ravikesh"]), False, False),
+        # Phase 3A: EXPENSE was previously the "unevidenced tx type" fixture,
+        # but SOURCE ("Paid Rs. 1,250 cash for office stationery") DOES
+        # support EXPENSE under tx-semantics-1 (payment verb + expense
+        # category in one sentence), so the case no longer represented an
+        # unevidenced claim. CAPITAL is genuinely unevidenced by SOURCE, so
+        # the case still asserts REFUSAL of an unevidenced type — assertion
+        # strength unchanged.
         ("unevidenced tx type",
-         candidate(transaction_type="Expense on stationery",
-                   transaction_type_enum="EXPENSE"), False, False),
+         candidate(transaction_type="Capital introduced by partner",
+                   transaction_type_enum="CAPITAL"), False, False),
         ("claimed VERIFIED", candidate(suggested_status="VERIFIED"), False, False),
         ("forbidden field", candidate(journal="x"), False, False),
         ("neft vs cash", candidate(payment_method_enum="NEFT",
@@ -442,8 +449,9 @@ def test_p5_metadata_cannot_grant_admission() -> None:
                              "source": "explicit"}]), "amount:999999"),
         (candidate(payment_method_enum="NEFT", payment_method="NEFT"),
          "payment_method"),
-        (candidate(transaction_type="Expense on stationery",
-                   transaction_type_enum="EXPENSE"), "transaction_type"),
+        # Same fixture correction as P1e above — see the note there.
+        (candidate(transaction_type="Capital introduced by partner",
+                   transaction_type_enum="CAPITAL"), "transaction_type"),
     ]
     bad = []
     for cand, name in asserted_cases:
