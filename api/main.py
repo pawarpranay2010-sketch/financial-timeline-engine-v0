@@ -229,6 +229,13 @@ def create_app() -> FastAPI:
     from api.routes import async_api
 
     app.include_router(async_api.router)
+    # Outbound inference bridge: authenticated inference-job creation plus the
+    # device-worker claim / lease / result endpoints. Shares the async job
+    # store and the admission boundary; nothing here changes the behavior of
+    # any existing route or the production model transport.
+    from api.routes import inference_api
+
+    app.include_router(inference_api.router)
     # Phase 5G: developer API-key lifecycle (management plane — separate
     # credential from the data-plane key; same metering PostgreSQL,
     # same error envelope, raw keys shown exactly once).

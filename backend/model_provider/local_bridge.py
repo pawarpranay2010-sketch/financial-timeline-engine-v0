@@ -21,10 +21,15 @@ llama.cpp bridge to Platrixa's EXISTING provider and validation architecture.
 
 BOUNDARY RULES (this is an experiment path; production is untouched)
 --------------------------------------------------------------------
-  - NOT registered in `get_model_provider()`. Production provider selection
+  - Selection is an EXPLICIT opt-in: `get_model_provider()` returns this
+    class only when `PLATRIXA_MODEL_TRANSPORT=local_bridge` is set. Nothing
+    sets that variable on this path, so the default selection
     (`PLATRIXA_MODEL_ENDPOINT_URL` → remote, else local in-process) is
-    byte-for-byte unchanged. This class is instantiated explicitly by
-    `scripts/local_bridge_acceptance.py` (and tests), never implicitly.
+    byte-for-byte unchanged. The class is otherwise instantiated explicitly
+    by `scripts/local_bridge_acceptance.py` (and tests), never implicitly.
+    Asynchronous result submission (`api/routes/inference_api.py`) does NOT
+    construct or select a provider at all — it calls
+    `Kernel.process_from_source()`, which performs no provider resolution.
   - Reuses the existing FYJC prompt contract indirectly: the bridge/model side
     is responsible for building the byte-exact Alpaca prompt
     (`backend/model_provider/platrixa_prompt.py`); this adapter transports the
@@ -82,6 +87,12 @@ from backend.model_provider.base import (
     extract_json_candidate,
 )
 from backend.model_provider.remote_hf import REQUIRED_FIELDS_18
+
+# Default identity reported when the device supplied none. This is the
+# HONEST value: the device GGUF is PROVENANCE_UNKNOWN (reports/
+# LOCAL_MODEL_PROVENANCE.md) and nothing here may borrow a pinned revision.
+DEFAULT_BRIDGE_MODEL_ID = "llama.cpp local bridge (local experiment)"
+PROVENANCE_UNKNOWN = "PROVENANCE_UNKNOWN"
 
 BRIDGE_URL_ENV = "PLATRIXA_LOCAL_BRIDGE_URL"
 BRIDGE_PATH_ENV = "PLATRIXA_LOCAL_BRIDGE_PATH"
@@ -259,6 +270,175 @@ def enforce_interpretation_contract(candidate: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
+def interpretation_from_bridge_body(
+    body: Any,
+    raw_input: str,
+    *,
+    model_id: str = DEFAULT_BRIDGE_MODEL_ID,
+    provider_revision: str = PROVENANCE_UNKNOWN,
+    generated_profile: Optional[Dict[str, Any]] = None,
+    audit: Optional[Dict[str, Any]] = None,
+) -> InterpretationResult:
+    """Bridge response body → :class:`InterpretationResult` (SHARED contract).
+
+    This is the ONE implementation of the device-bridge body contract. It is
+    used by BOTH:
+
+      * ``LocalBridgeModelProvider.interpret`` — the synchronous path, where
+        THIS process called the bridge; and
+      * the asynchronous result-submission route — where an authenticated
+        device worker uploads the bridge response it produced on-device.
+
+    Having one function is what guarantees the asynchronous path cannot be a
+    weaker parser: the same truncation rejection, the same envelope
+    construction, the same 18-field presence check, the same forbidden-
+    accounting-field rejection, and the same VERIFIED → REVIEW_REQUIRED
+    clamp all run for a submitted device result exactly as they do inline.
+
+    Fail-closed behaviour (unchanged from the inline implementation):
+
+      * non-object body, unparseable ``interpretation_text``, missing 18-field
+        contract → ``MalformedOutputError`` (with ``.contract`` audit info)
+      * ``completion_status == "TRUNCATED"`` → ``MalformedOutputError``
+        (incomplete generation is never parsed as a financial interpretation)
+      * forbidden accounting-truth keys → ``ForbiddenAccountingFieldError``
+      * nothing is ever added, defaulted, repaired, or invented
+
+    ``audit`` is an optional trace sink: when supplied, the same keys the
+    synchronous provider recorded in ``last_trace`` are written to it
+    (``envelope``, ``parse_mode``, ``raw_response_text``, ``contract``, and
+    ``completion`` on truncation).
+    """
+
+    def _note(key: str, value: Any) -> None:
+        if audit is not None:
+            audit[key] = value
+
+    if not isinstance(body, dict):
+        reason = "bridge response body is not a JSON object"
+        err = MalformedOutputError(reason)
+        err.contract = {"checked": True, "passed": False, "reject_reason": reason}
+        _note("contract", err.contract)
+        raise err
+
+    # Preserve incomplete generation for diagnostics, but never parse or
+    # accept it as a financial interpretation.
+    if body.get("completion_status") == "TRUNCATED":
+        raw = body.get("interpretation_text")
+        _note("raw_response_text", raw if isinstance(raw, str) else None)
+        _note(
+            "completion",
+            {"status": "TRUNCATED", "finish_reason": body.get("finish_reason")},
+        )
+        reason = (
+            "incomplete model output: generation stopped at token limit; "
+            "partial text preserved for diagnostics"
+        )
+        err = MalformedOutputError(reason)
+        err.contract = {
+            "checked": True,
+            "passed": False,
+            "reject_reason": reason,
+            "failure_type": "INCOMPLETE_OUTPUT",
+        }
+        _note("contract", err.contract)
+        raise err
+
+    # --- Layer 2a: parse the model response as JSON and construct the exact
+    # provider envelope {"interpretation": ..., "model": ...}. The verbatim
+    # raw model output is preserved for audit, never rewritten.
+    try:
+        envelope = build_provider_envelope(body)
+    except MalformedOutputError as exc:
+        contract = getattr(
+            exc,
+            "contract",
+            {"checked": True, "passed": False, "reject_reason": str(exc)},
+        )
+        _note("contract", contract)
+        raw = body.get("interpretation_text")
+        _note(
+            "raw_response_text",
+            raw if isinstance(raw, str) else _audit_get(audit, "raw_http_body"),
+        )
+        raise
+
+    candidate = envelope["interpretation"]
+    model_info = envelope["model"]
+
+    raw_model_output = model_info.get("raw_model_output")
+    if raw_model_output is None:
+        # The bridge already parsed the model output server-side (passthrough
+        # envelope): the auditable raw is the full HTTP body, verbatim.
+        raw_model_output = _audit_get(audit, "raw_http_body")
+    _note("envelope", model_info.get("source_envelope"))
+    _note("parse_mode", model_info.get("parse_mode"))
+    _note("raw_response_text", raw_model_output)
+
+    # --- Layer 2b: 18-field contract, forbidden accounting fields, and the
+    # VERIFIED ban — fail closed, never repair, never invent.
+    try:
+        contract_info = enforce_interpretation_contract(candidate)
+    except (MalformedOutputError, ForbiddenAccountingFieldError) as exc:
+        _note(
+            "contract",
+            getattr(
+                exc,
+                "contract",
+                {"checked": True, "passed": False, "reject_reason": str(exc)},
+            ),
+        )
+        raise
+    _note("contract", contract_info)
+
+    profile = dict(generated_profile or {})
+    profile["envelope"] = model_info.get("source_envelope")
+    profile.setdefault("artifact_identity", provider_revision)
+    profile["raw_model_output"] = raw_model_output
+
+    return InterpretationResult(
+        raw_input=raw_input,
+        candidate=candidate,
+        model_id=model_id,
+        provider_revision=provider_revision,
+        generated_profile=profile,
+    )
+
+
+def _audit_get(audit: Optional[Dict[str, Any]], key: str) -> Any:
+    """Read a value from the optional trace sink (None when absent)."""
+    if audit is None:
+        return None
+    return audit.get(key)
+
+
+def device_reported_model_identity(body: Any) -> Tuple[str, str]:
+    """``(model_id, provider_revision)`` AS REPORTED BY THE DEVICE.
+
+    Nothing here is verified by Platrixa: the values are whatever the device
+    bridge said, and the caller MUST label them ``device-reported-unverified``
+    in the evidence chain. Only string fields the device actually reported are
+    used; anything absent or empty becomes ``PROVENANCE_UNKNOWN`` — no pinned
+    production revision is ever borrowed for an unverified artifact.
+    """
+    if not isinstance(body, dict):
+        return DEFAULT_BRIDGE_MODEL_ID, PROVENANCE_UNKNOWN
+    info = body.get("model")
+    if not isinstance(info, dict):
+        return DEFAULT_BRIDGE_MODEL_ID, PROVENANCE_UNKNOWN
+    provider = info.get("provider")
+    model_id = (
+        provider.strip()
+        if isinstance(provider, str) and provider.strip()
+        else DEFAULT_BRIDGE_MODEL_ID
+    )
+    for key in ("artifact_identity", "adapter_revision", "adapter_loaded"):
+        value = info.get(key)
+        if isinstance(value, str) and value.strip():
+            return model_id, value.strip()
+    return model_id, PROVENANCE_UNKNOWN
+
+
 class LocalBridgeModelProvider:
     """
     ModelProvider over the device-side llama.cpp bridge.
@@ -360,91 +540,22 @@ class LocalBridgeModelProvider:
         self.last_trace["http_ok"] = True
         self.last_trace["latency_ms"] = latency_ms
 
-        # Preserve incomplete generation for diagnostics, but never parse
-        # or accept it as a financial interpretation.
-        completion_status = (
-            body.get("completion_status")
-            if isinstance(body, dict)
-            else None
-        )
-        if completion_status == "TRUNCATED":
-            raw = body.get("interpretation_text")
-            self.last_trace["raw_response_text"] = (
-                raw if isinstance(raw, str) else None
-            )
-            self.last_trace["completion"] = {
-                "status": "TRUNCATED",
-                "finish_reason": body.get("finish_reason"),
-            }
-            reason = (
-                "incomplete model output: generation stopped at token limit; "
-                "partial text preserved for diagnostics"
-            )
-            self.last_trace["contract"] = {
-                "checked": True,
-                "passed": False,
-                "reject_reason": reason,
-                "failure_type": "INCOMPLETE_OUTPUT",
-            }
-            raise MalformedOutputError(reason)
-
-        # --- Layer 2a: parse the model response as JSON and construct the
-        # exact provider envelope {"interpretation": ..., "model": ...}.
-        # The verbatim raw model output is preserved for audit, never rewritten.
-        try:
-            envelope = build_provider_envelope(body)
-        except MalformedOutputError as exc:
-            self.last_trace["contract"] = getattr(
-                exc,
-                "contract",
-                {"checked": True, "passed": False, "reject_reason": str(exc)},
-            )
-            # Audit: preserve the raw model output even when it is rejected.
-            raw = body.get("interpretation_text") if isinstance(body, dict) else None
-            self.last_trace["raw_response_text"] = (
-                raw if isinstance(raw, str) else self.last_trace.get("raw_http_body")
-            )
-            raise
-
-        candidate = envelope["interpretation"]
-        model_info = envelope["model"]
-        raw_model_output = model_info.get("raw_model_output")
-        if raw_model_output is None:
-            # Bridge already parsed the model output server-side (passthrough
-            # envelope): the auditable raw is the full HTTP body, verbatim.
-            raw_model_output = self.last_trace.get("raw_http_body")
-        self.last_trace["envelope"] = model_info.get("source_envelope")
-        self.last_trace["parse_mode"] = model_info.get("parse_mode")
-        self.last_trace["raw_response_text"] = raw_model_output
-
-        # --- Layer 2b: 18-field contract, forbidden accounting fields, and
-        # the VERIFIED ban — fail closed, never repair, never invent.
-        try:
-            contract_info = enforce_interpretation_contract(candidate)
-        except (MalformedOutputError, ForbiddenAccountingFieldError) as exc:
-            self.last_trace["contract"] = getattr(
-                exc,
-                "contract",
-                {"checked": True, "passed": False, "reject_reason": str(exc)},
-            )
-            raise
-        self.last_trace["contract"] = contract_info
-        self._last_call_ok = True
-
-        return InterpretationResult(
-            raw_input=raw_input,
-            candidate=candidate,
+        # Layer 2 (parse + contract + clamp) is SHARED with the asynchronous
+        # device-result submission path — one implementation, never two.
+        interpretation = interpretation_from_bridge_body(
+            body,
+            raw_input,
             model_id=self._config.model_id,
             provider_revision=self._config.adapter_revision,
             generated_profile={
                 "bridge_url": self._url,
                 "latency_ms": latency_ms,
-                "envelope": model_info.get("source_envelope"),
                 "artifact_identity": self._config.adapter_revision,
-                # Auditable field: the model's raw output, verbatim.
-                "raw_model_output": raw_model_output,
             },
+            audit=self.last_trace,
         )
+        self._last_call_ok = True
+        return interpretation
 
     # ------------------------------------------------------------------
     # Transport
@@ -530,8 +641,12 @@ class LocalBridgeModelProvider:
 __all__ = [
     "LocalBridgeModelProvider",
     "build_provider_envelope",
+    "device_reported_model_identity",
     "enforce_interpretation_contract",
+    "interpretation_from_bridge_body",
     "parse_model_json",
+    "DEFAULT_BRIDGE_MODEL_ID",
+    "PROVENANCE_UNKNOWN",
     "BRIDGE_URL_ENV",
     "BRIDGE_PATH_ENV",
     "BRIDGE_TIMEOUT_ENV",

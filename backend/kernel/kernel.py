@@ -56,7 +56,7 @@ truth. Kernel organizes and orchestrates it.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from backend.model_provider.base import (
     ForbiddenAccountingFieldError,
@@ -113,6 +113,10 @@ VALIDATION_FAILED = "VALIDATION_FAILED"
 GROUNDING_FAILED = "GROUNDING_FAILED"
 FORBIDDEN_OUTPUT = "FORBIDDEN_OUTPUT"
 UNSUPPORTED_TRANSACTION = "UNSUPPORTED_TRANSACTION"
+
+# Evidence label for identity reported by a runtime that is NOT this process
+# (the outbound inference bridge's device worker). Never server-verified.
+IDENTITY_SOURCE_DEVICE_REPORTED = "device-reported-unverified"
 
 
 # ---------------------------------------------------------------------------
@@ -366,9 +370,144 @@ class Kernel:
                 metadata={"provider_status": status.to_dict()},
             )
 
+        # Everything from the interpretation candidate onward is ONE shared
+        # implementation (see _run_interpretation_pipeline). This path keeps
+        # its exact historical order: request-id defaulting → empty-input
+        # check → provider resolution → provider availability check →
+        # interpretation.
+        return self._run_interpretation_pipeline(
+            raw_input=raw_input,
+            request_id=request_id,
+            interpret=lambda: provider.interpret(raw_input),
+            adapter_identity=self._server_adapter_identity(),
+            device_reported=False,
+        )
+
+    def process_from_source(
+        self,
+        raw_input: str,
+        interpret: Callable[[], InterpretationResult],
+        *,
+        request_id: Optional[str] = None,
+        adapter_identity: Optional[Mapping[str, Any]] = None,
+    ) -> KernelResult:
+        """Process an ALREADY-PRODUCED interpretation candidate.
+
+        This is the second, equally supported entry point into the SAME
+        deterministic pipeline as :meth:`process`. ``interpret`` is a
+        zero-argument callable returning an :class:`InterpretationResult`
+        that some other runtime already generated (for Platrixa's outbound
+        inference bridge: a device running the Phase H model behind its own
+        loopback llama.cpp bridge).
+
+        Contract:
+
+          * NO model provider is resolved, NO provider availability check is
+            performed, and NO inference happens here — a provider is never
+            constructed or called on this path, so exactly one model
+            invocation occurs per job (on the device).
+          * Everything downstream is the SAME code as :meth:`process`: the
+            interpretation exception mapping, CandidateSemanticIR
+            construction and forbidden-output rejection, schema validation,
+            deterministic grounding, GroundedSemanticIR conversion,
+            deterministic accounting, the downgrade-only rule boundary,
+            execution-evidence generation, and the final KernelResult.
+            There is no second, weaker validator anywhere in this class.
+          * A missing/malformed caller or candidate fails closed with the
+            EXISTING taxonomy (a non-InterpretationResult return becomes a
+            ``MalformedOutputError`` → VALIDATION_FAILED); a bad candidate can
+            never accidentally become a success.
+          * Device-reported model/adapter identity is labelled
+            ``device-reported-unverified`` in the evidence chain. It is never
+            presented as server-verified provenance, and unknown artifact
+            provenance stays unknown.
+
+        The empty-input check is intentionally repeated here (it is the same
+        fail-closed return ``process`` gives) so this entry point is safe to
+        call directly without going through ``process``.
+        """
+        request_id = request_id or "kernel:" + str(hash(raw_input) & 0xFFFFFFFF)
+
+        if not raw_input or not raw_input.strip():
+            return self._failed(
+                status=VALIDATION_FAILED,
+                request_id=request_id,
+                raw_input=raw_input,
+                issues=["Empty input"],
+                next_action="Type a transaction description.",
+            )
+
+        if not callable(interpret):
+            return self._failed(
+                status=MODEL_UNAVAILABLE,
+                request_id=request_id,
+                raw_input=raw_input,
+                issues=["no interpretation source supplied"],
+                next_action="Check model availability and try again.",
+            )
+
+        def _checked() -> InterpretationResult:
+            result = interpret()
+            if not isinstance(result, InterpretationResult):
+                raise MalformedOutputError(
+                    "interpretation source returned "
+                    f"{type(result).__name__}; expected InterpretationResult"
+                )
+            return result
+
+        return self._run_interpretation_pipeline(
+            raw_input=raw_input,
+            request_id=request_id,
+            interpret=_checked,
+            adapter_identity=adapter_identity,
+            device_reported=True,
+        )
+
+    def _server_adapter_identity(self) -> Optional[Dict[str, Any]]:
+        """Adapter identity of the configured provider (synchronous path).
+
+        Unchanged derivation: ``{}`` when no provider config exists, else the
+        configured adapter repo/revision. Only the device path introduces a
+        labelled, untrusted identity.
+        """
+        if self._provider_config is None:
+            return None
+        return {
+            "adapter_repo_id": getattr(self._provider_config, "adapter_repo_id", "") or "",
+            "adapter_revision": getattr(self._provider_config, "adapter_revision", "") or "",
+        }
+
+    def _run_interpretation_pipeline(
+        self,
+        *,
+        raw_input: str,
+        request_id: Optional[str],
+        interpret: Callable[[], InterpretationResult],
+        adapter_identity: Optional[Mapping[str, Any]] = None,
+        device_reported: bool = False,
+    ) -> KernelResult:
+        """THE one downstream pipeline (shared by both entry points).
+
+        Order and semantics are the historical ones, unchanged:
+
+          1. interpretation exception mapping
+          2. CandidateSemanticIR construction + forbidden-output rejection
+          3. StructuredInterpretationValidator.validate
+          4. ExpandedGroundingGate.ground
+          5. GroundedSemanticIR.from_candidate
+          6. deterministic process_accounting(grounded)
+          7. unsupported-transaction handling
+          8. downgrade-only Phase 10 rules
+          9. ExecutionEvidence generation
+         10. final KernelResult
+
+        ``device_reported`` only affects HOW identity is recorded in the
+        evidence chain; it can never skip or soften a validation step.
+        """
+
         # 2. Semantic interpretation candidate.
         try:
-            interpretation = provider.interpret(raw_input)
+            interpretation = interpret()
         except ModelUnavailableError as e:
             return self._failed(
                 status=MODEL_UNAVAILABLE,
@@ -515,6 +654,28 @@ class Kernel:
         # policy is downgrade-only: a blocking rule outcome downgrades
         # VERIFIED to REVIEW_REQUIRED/BLOCKED per its decision hint; no
         # decision can upgrade any state or produce VERIFIED.
+        # Identity recorded in the evidence chain. The synchronous path is
+        # unchanged (provider-config derived, no extra keys). The device path
+        # is explicitly labelled: the interpreter ran elsewhere, so its
+        # reported identity is device-reported and UNVERIFIED. Unknown GGUF
+        # provenance stays unknown — nothing is invented.
+        if device_reported:
+            model_identity: Dict[str, Any] = {
+                "model_id": interpretation.model_id,
+                "provider_revision": interpretation.provider_revision,
+                "identity_source": IDENTITY_SOURCE_DEVICE_REPORTED,
+            }
+            adapter_identity_evidence: Dict[str, Any] = dict(adapter_identity or {})
+            adapter_identity_evidence.setdefault("adapter_repo_id", "PROVENANCE_UNKNOWN")
+            adapter_identity_evidence.setdefault("adapter_revision", "PROVENANCE_UNKNOWN")
+            adapter_identity_evidence["identity_source"] = IDENTITY_SOURCE_DEVICE_REPORTED
+        else:
+            model_identity = {
+                "model_id": interpretation.model_id,
+                "provider_revision": interpretation.provider_revision,
+            }
+            adapter_identity_evidence = dict(adapter_identity or {})
+
         rule_evidence: List[Dict[str, Any]] = []
         flow_label = self._label_for(flow_status)
         engine = self._get_rule_engine()
@@ -540,16 +701,8 @@ class Kernel:
             input_hash=sha256_of_text(raw_input),
             candidate_interpretation_hash=candidate_ir.content_digest,
             grounded_interpretation_hash=grounded_ir.content_digest,
-            model_identity={
-                "model_id": interpretation.model_id,
-                "provider_revision": interpretation.provider_revision,
-            },
-            adapter_identity={
-                "adapter_repo_id": getattr(self._provider_config, "adapter_repo_id", "") or "",
-                "adapter_revision": getattr(self._provider_config, "adapter_revision", "") or "",
-            }
-            if self._provider_config is not None
-            else {},
+            model_identity=model_identity,
+            adapter_identity=adapter_identity_evidence,
             schema_version=SCHEMA_VERSION,
             prompt_version=self._prompt_version(),
             rule_pack_hash=rule_pack_identity(self._rule_pack_path),
@@ -566,10 +719,14 @@ class Kernel:
             verification_status="GROUNDED",
             accounting_result=accounting_result,
             next_action="",
-            metadata={
-                "model_id": interpretation.model_id,
-                "provider_revision": interpretation.provider_revision,
-            },
+            metadata=(
+                dict(model_identity)
+                if device_reported
+                else {
+                    "model_id": interpretation.model_id,
+                    "provider_revision": interpretation.provider_revision,
+                }
+            ),
             rule_evidence=rule_evidence,
             evidence=evidence,
             candidate_ir=candidate_ir,

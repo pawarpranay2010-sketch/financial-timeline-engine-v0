@@ -76,6 +76,50 @@ RETRY_MAX_ATTEMPTS = 3
 # consecutive renewal failures are still absorbed before expiry.
 LEASE_RENEW_FRACTION = 3.0
 
+# Outbound inference (device) jobs get their OWN, CONFIGURABLE lease.
+#
+# This is a PROVISIONAL ENGINEERING DEFAULT, not a measured production value.
+# The device model runs off-process, so the correct lease depends on device
+# hardware that Platrixa cannot observe; no number here is claimed to be
+# production-proven. The default deliberately REUSES the existing document
+# lease rather than inventing a fresh figure — a deployment that has measured
+# its device must tune it with PLATRIXA_INFERENCE_LEASE_SECONDS.
+#
+# Why a lease is safe even when inference is slow: the worker heartbeats
+# (renewing at LEASE_RENEW_FRACTION of the lease), so a legitimately long
+# inference is never re-claimed; and a lease that IS lost can never commit
+# (the fencing generation must still match). A larger value trades faster
+# crash recovery for fewer duplicate inferences.
+INFERENCE_LEASE_ENV_VAR = "PLATRIXA_INFERENCE_LEASE_SECONDS"
+
+
+def inference_lease_seconds() -> int:
+    """Lease used for inference (device) jobs — configurable, provisional.
+
+    Returns ``PLATRIXA_INFERENCE_LEASE_SECONDS`` when it is a positive
+    integer, else the shared document lease default (``JOB_LEASE_SECONDS``).
+    A malformed/zero value is logged and ignored rather than accepted, so a
+    typo cannot create an unusable (zero-length) lease.
+    """
+    raw = (os.getenv(INFERENCE_LEASE_ENV_VAR, "") or "").strip()
+    if not raw:
+        return JOB_LEASE_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "invalid %s=%r; using the default lease %ds",
+            INFERENCE_LEASE_ENV_VAR, raw[:20], JOB_LEASE_SECONDS,
+        )
+        return JOB_LEASE_SECONDS
+    if value <= 0:
+        logger.warning(
+            "non-positive %s=%d; using the default lease %ds",
+            INFERENCE_LEASE_ENV_VAR, value, JOB_LEASE_SECONDS,
+        )
+        return JOB_LEASE_SECONDS
+    return value
+
 
 def retry_backoff_seconds(attempt: int) -> int:
     """Deterministic bounded exponential backoff for a 1-based attempt."""
@@ -347,6 +391,7 @@ CREATE TABLE IF NOT EXISTS platrixa_async_jobs (
     result_id     VARCHAR(64)  NOT NULL,
     request_hash  VARCHAR(64)  NOT NULL,
     status        VARCHAR(16)  NOT NULL DEFAULT 'QUEUED',
+    kind          VARCHAR(16)  NOT NULL DEFAULT 'document',
     request_json  TEXT         NOT NULL,
     result_json   TEXT,
     http_status   INTEGER,
@@ -361,6 +406,10 @@ CREATE TABLE IF NOT EXISTS platrixa_async_jobs (
 CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant ON platrixa_async_jobs (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_status ON platrixa_async_jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_result ON platrixa_async_jobs (result_id);
+-- NOTE: the kind index is created by _MIGRATION_INFERENCE (after its
+-- ADD COLUMN), never here: this DDL block runs against an ALREADY EXISTING
+-- table on an upgraded store, where CREATE TABLE IF NOT EXISTS is a no-op and
+-- an index on the not-yet-added column would abort startup.
 CREATE TABLE IF NOT EXISTS platrixa_webhook_endpoints (
     webhook_id    VARCHAR(64) NOT NULL,
     tenant_id     VARCHAR(64) NOT NULL,
@@ -424,6 +473,31 @@ _MIGRATION_5K = [
     "platrixa_async_jobs (status, next_attempt_at, created_at)",
 ]
 
+# Outbound-inference-bridge additive migration. Same mechanism and same
+# idempotence as _MIGRATION_5K above (ADD COLUMN IF NOT EXISTS / CREATE INDEX
+# IF NOT EXISTS, applied once per store URL in _session_factory), so an
+# upgraded deployment converges to the fresh-install shape and re-running it
+# is a no-op.
+#
+#   kind — job-kind discriminator. NOT NULL DEFAULT 'document', so every row
+#          that existed before this migration (and every caller that does not
+#          pass a kind) remains a DOCUMENT job byte-for-byte. The inference
+#          worker claims only kind='inference' and the document worker only
+#          kind='document', so the two queues share one durable store without
+#          ever consuming each other's work.
+_MIGRATION_INFERENCE = [
+    "ALTER TABLE platrixa_async_jobs ADD COLUMN IF NOT EXISTS "
+    "kind VARCHAR(16) NOT NULL DEFAULT 'document'",
+    "CREATE INDEX IF NOT EXISTS idx_async_jobs_kind_claimable ON "
+    "platrixa_async_jobs (kind, status, next_attempt_at, created_at)",
+]
+
+# The closed job-kind vocabulary. An unknown kind is not accepted by
+# create_job (fail closed) — a typo must not create an unclaimable row.
+JOB_KIND_DOCUMENT = "document"
+JOB_KIND_INFERENCE = "inference"
+JOB_KINDS = (JOB_KIND_DOCUMENT, JOB_KIND_INFERENCE)
+
 def async_configured() -> bool:
     """Async documents require the durable store (the metering store)."""
     from backend.auth.gate import METERING_ENV_VAR
@@ -464,6 +538,8 @@ def _session_factory():
             with engine.begin() as conn:
                 conn.execute(text(_DDL))
                 for stmt in _MIGRATION_5K:
+                    conn.execute(text(stmt))
+                for stmt in _MIGRATION_INFERENCE:
                     conn.execute(text(stmt))
                 _ensure_result_uniqueness(conn)
         except Exception as exc:
@@ -757,6 +833,13 @@ class JobRecord:
     attempt_count: int = 0
     max_attempts: int = 3
     next_attempt_at: Optional[datetime] = None
+    # Outbound inference bridge. ``kind`` defaults to the pre-existing
+    # document behaviour so every historical construction site is unchanged;
+    # ``request_json`` is populated ONLY by the claim query (which returns the
+    # claimed job's payload directly, so no unscoped payload lookup is needed
+    # after claiming).
+    kind: str = JOB_KIND_DOCUMENT
+    request_json: Optional[str] = None
 
 
 # Phase 5K job state machine. QUEUED/PROCESSING/COMPLETED/FAILED are the
@@ -853,17 +936,24 @@ def _row_to_record(row: Any) -> JobRecord:
         attempt_count=int(_get("attempt_count") or 0),
         max_attempts=int(_get("max_attempts") or 0) or 3,
         next_attempt_at=_get("next_attempt_at"),
+        kind=str(_get("kind") or JOB_KIND_DOCUMENT),
+        request_json=_get("request_json"),
     )
 
 
 # Every SELECT that feeds _row_to_record must project the 5K columns, or
 # the record silently loses its ownership fields and a commit would be
 # rejected. Kept as one constant so the projection cannot drift.
+# ``kind`` belongs here (it is a 16-byte discriminator every reader must see,
+# or a record silently reports the wrong queue). ``request_json`` deliberately
+# does NOT: a document payload can be ~16 MiB, so it is read only by the
+# claim statement (which returns the payload it just claimed) and by the
+# tenant-scoped get_job_request_json helper.
 _JOB_COLUMNS = (
     "job_id, tenant_id, result_id, status, http_status, result_json, "
     "error_json, retryable, request_id, created_at, updated_at, "
     "lease_owner, lease_expires_at, lease_generation, attempt_count, "
-    "max_attempts, next_attempt_at"
+    "max_attempts, next_attempt_at, kind"
 )
 
 
@@ -872,9 +962,20 @@ def create_job(
     request_payload: Dict[str, Any],
     *,
     request_id: Optional[str] = None,
+    kind: str = JOB_KIND_DOCUMENT,
 ) -> JobRecord:
-    """Insert one QUEUED job. Raises AsyncStoreUnavailableError if down."""
+    """Insert one QUEUED job. Raises AsyncStoreUnavailableError if down.
+
+    ``kind`` selects the queue this job belongs to. It defaults to the
+    pre-existing document kind, so every existing caller is unchanged; the
+    outbound inference bridge passes ``kind=JOB_KIND_INFERENCE``. An unknown
+    kind is rejected here (fail closed) rather than creating a row no worker
+    would ever claim.
+    """
     from sqlalchemy import text
+
+    if kind not in JOB_KINDS:
+        raise ValueError(f"unknown job kind: {kind!r}")
 
     job_id = new_job_id()
     result_id = new_result_id()
@@ -885,14 +986,15 @@ def create_job(
                 session.execute(
                     text(
                         "INSERT INTO platrixa_async_jobs "
-                        "(job_id, tenant_id, result_id, request_hash, status, request_json, request_id, created_at, updated_at) "
-                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :req, :rid, now(), now())"
+                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at) "
+                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now())"
                     ),
                     {
                         "j": job_id,
                         "t": tenant_id,
                         "r": result_id,
                         "rh": hashlib.sha256(job_id.encode()).hexdigest(),
+                        "k": kind,
                         "req": json.dumps(request_payload, ensure_ascii=False),
                         "rid": request_id,
                     },
@@ -959,9 +1061,44 @@ def get_result_record(tenant_id: str, result_id: str) -> Optional[JobRecord]:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
+def get_job_request_json(tenant_id: str, job_id: str) -> Optional[str]:
+    """The stored request payload for a job — TENANT-SCOPED.
+
+    Deliberately a separate, tenant-scoped read rather than projecting
+    ``request_json`` into ``_JOB_COLUMNS``: a document job's payload can be
+    ~16 MiB of base64, and every status read must not have to carry it.
+    """
+    from sqlalchemy import text
+
+    try:
+        SessionLocal = _session_factory()
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+    try:
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT request_json FROM platrixa_async_jobs "
+                    "WHERE tenant_id = :t AND job_id = :j"
+                ),
+                {"t": tenant_id, "j": job_id},
+            ).first()
+        return row[0] if row else None
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("async job payload read failed: %s", type(exc).__name__)
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+
 def claim_next_job(
     lease_seconds: int = JOB_LEASE_SECONDS,
     owner: Optional[str] = None,
+    *,
+    kind: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> Optional[JobRecord]:
     """Atomically claim the next runnable job (worker side).
 
@@ -980,8 +1117,22 @@ def claim_next_job(
     Claimable means: QUEUED, or RETRY_WAIT whose backoff has elapsed, or
     PROCESSING with an absent/expired lease (crash recovery) — and
     always with retry budget remaining. Terminal jobs are never claimed.
+
+    ``kind`` / ``tenant_id`` narrow the claim to ONE queue and (for a device
+    worker) ONE authenticated tenant. Both are SERVER-derived: ``kind`` is a
+    module constant and ``tenant_id`` comes from the authenticated API key,
+    never from the request. The conditions are appended as fixed literal
+    clauses (values always bound), so a narrowed claim can never widen into
+    another tenant's or another kind's work.
+
+    The claim RETURNS the claimed job's payload (``request_json``) from this
+    same scoped statement, so no separate unscoped payload lookup by job id
+    is needed — or possible — after claiming.
     """
     from sqlalchemy import text
+
+    if kind is not None and kind not in JOB_KINDS:
+        raise ValueError(f"unknown job kind: {kind!r}")
 
     try:
         SessionLocal = _session_factory()
@@ -990,6 +1141,26 @@ def claim_next_job(
     except Exception as exc:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
     owner = owner or _default_worker_id()
+
+    # Fixed literal clauses only; every value is bound. A kind/tenant filter
+    # is a NARROWING of the same atomic claim, never a second code path.
+    clauses = [
+        "(status = 'QUEUED' "
+        " OR status = 'RETRY_WAIT' "
+        " OR (status = 'PROCESSING' "
+        "     AND (lease_expires_at IS NULL OR lease_expires_at < now())))",
+        "(next_attempt_at IS NULL OR next_attempt_at <= now())",
+        "attempt_count < max_attempts",
+    ]
+    params: Dict[str, Any] = {"lease": lease_seconds, "owner": owner}
+    if kind is not None:
+        clauses.append("kind = :kind")
+        params["kind"] = kind
+    if tenant_id is not None:
+        clauses.append("tenant_id = :tenant")
+        params["tenant"] = tenant_id
+    where = " AND ".join(clauses)
+
     try:
         with SessionLocal() as session:
             with session.begin():
@@ -1003,19 +1174,14 @@ def claim_next_job(
                         "updated_at = now() "
                         "WHERE j.job_id IN ("
                         "  SELECT job_id FROM platrixa_async_jobs "
-                        "  WHERE (status = 'QUEUED' "
-                        "         OR status = 'RETRY_WAIT' "
-                        "         OR (status = 'PROCESSING' "
-                        "             AND (lease_expires_at IS NULL OR lease_expires_at < now()))) "
-                        "    AND (next_attempt_at IS NULL OR next_attempt_at <= now()) "
-                        "    AND attempt_count < max_attempts "
+                        f"  WHERE {where} "
                         "  ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"
                         ") RETURNING j.job_id, j.tenant_id, j.result_id, j.status, j.http_status, "
                         "j.result_json, j.error_json, j.retryable, j.request_id, j.created_at, "
                         "j.updated_at, j.lease_owner, j.lease_expires_at, j.lease_generation, "
-                        "j.attempt_count, j.max_attempts, j.next_attempt_at"
+                        "j.attempt_count, j.max_attempts, j.next_attempt_at, j.kind, j.request_json"
                     ),
-                    {"lease": lease_seconds, "owner": owner},
+                    params,
                 ).mappings().fetchall()
                 if not rows:
                     return None
@@ -1163,7 +1329,7 @@ def renew_lease(
     *,
     lease_owner: str,
     lease_generation: int,
-    lease_seconds: int = JOB_LEASE_SECONDS,
+    lease_seconds: Optional[int] = None,
 ) -> bool:
     """Extend the lease ONLY while this worker still owns it (5K §6).
 
@@ -1177,6 +1343,8 @@ def renew_lease(
 
     if not lease_owner or lease_generation is None:
         return False
+    if lease_seconds is None:
+        lease_seconds = JOB_LEASE_SECONDS
     try:
         SessionLocal = _session_factory()
         with SessionLocal() as session:

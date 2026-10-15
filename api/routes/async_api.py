@@ -296,7 +296,12 @@ def _worker_loop(stop_event=None) -> None:
         active = [t for t in active if t.is_alive()]
         if sem.acquire(blocking=False):
             try:
-                record = async_jobs.claim_next_job()
+                # The document worker claims ONLY document jobs. Inference
+                # jobs share the same durable queue (job-kind discriminator)
+                # but are claimed exclusively by the outbound inference
+                # bridge's worker endpoint, so the two never consume each
+                # other's work.
+                record = async_jobs.claim_next_job(kind=async_jobs.JOB_KIND_DOCUMENT)
             except async_jobs.AsyncStoreUnavailableError:
                 sem.release()
                 if _stopped(stop_event):

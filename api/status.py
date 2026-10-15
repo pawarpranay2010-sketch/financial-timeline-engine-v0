@@ -190,6 +190,14 @@ STATUS_BY_ERROR_CODE: Final[Dict[str, str]] = {
     # reasoning as RESULT_PENDING on the async job plane — retryable, and
     # retrying (or polling) can still produce a different outcome.
     "RESULT_PENDING": STATUS_PROCESSING,
+    # Outbound inference bridge (device-worker plane). A submission that
+    # cannot prove the CURRENT lease — missing proof, a superseded
+    # generation, or a job that is no longer PROCESSING — is non-retryable
+    # by definition: the same proof can never become valid again, and the
+    # work now belongs to whichever worker holds the current lease. It is
+    # published as FAILED, never as PROCESSING (which would invite a retry
+    # loop) and never as INVALID_INPUT (the request was well formed).
+    "LEASE_LOST": STATUS_FAILED,
 }
 
 # Human-readable labels for the six public states.

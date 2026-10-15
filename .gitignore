@@ -4,6 +4,10 @@ __pycache__/
 .env.local
 *.log
 
+# Local virtual environments (development/test only)
+.venv/
+venv/
+
 # Sprint scratch / diagnostic probes - never commit
 _fte_patch_*
 _patch_*
