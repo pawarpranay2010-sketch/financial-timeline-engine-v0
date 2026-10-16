@@ -31,6 +31,9 @@ eight hardening cases this suite adds):
     17  oversized and non-object bodies fail closed at the decode/submit guard
     18  lease endpoints are validated (absolute, query/fragment, traversal,
         mismatched job id, wrong suffix)
+    19  the poll loop is bounded: NO_WORK pacing hints are honoured and clamped,
+        transport failures back off exponentially under a cap and reset after a
+        success, and a stop request ends an unbounded loop (no real waiting)
 
 Run:
     python scripts/platrixa_outbound_inference_worker_test.py
@@ -203,7 +206,7 @@ def no_work_body(retry_after_seconds: float = 3.0) -> dict:
     }
 
 
-def make_worker(handler, *, bridge_handler=None, now=time.monotonic, tick=0.01, config=None):
+def make_worker(handler, *, bridge_handler=None, now=time.monotonic, tick=0.01, config=None, sleep=None):
     """Worker wired to fake transports only — never a real ``requests.Session``."""
     if config is None:
         config = WorkerConfig(
@@ -220,7 +223,11 @@ def make_worker(handler, *, bridge_handler=None, now=time.monotonic, tick=0.01, 
     api_session = FakeSession(handler)
     bridge_session = FakeSession(bridge_handler)
     worker = OutboundInferenceWorker(
-        config, session=api_session, bridge_session=bridge_session, now=now
+        config,
+        session=api_session,
+        bridge_session=bridge_session,
+        now=now,
+        sleep=sleep,  # injected so the poll loop never really waits
     )
     return worker, api_session, bridge_session
 
@@ -396,6 +403,81 @@ def test_result_409_fences() -> None:
     assert job.state.is_lost, "a 409 must mark the lease lost locally too"
     assert "409" in (job.state.lost_reason or "") or "LEASE_LOST" in (job.state.lost_reason or "")
     assert len(only(api.calls, "/result")) == 1, "a fenced submission must never be retried"
+
+
+def test_run_forever_is_bounded_and_backs_off() -> None:
+    """The poll loop never spins: it paces itself, backs off, and can be stopped.
+
+    ``sleep`` is injected, so this asserts the pacing POLICY (values and order)
+    with no real waiting at all.
+    """
+
+    def config(**overrides):
+        base = dict(
+            api_base_url=API_BASE,
+            api_key=API_KEY,
+            worker_id=WORKER_ID,
+            bridge_url=BRIDGE_BASE,
+            heartbeat_tick_s=0.01,
+            poll_interval_s=5.0,
+            max_backoff_s=12.0,
+            max_poll_interval_s=60.0,
+        )
+        base.update(overrides)
+        return WorkerConfig(**base)
+
+    # -- NO_WORK honours the server's hint, clamped to a bounded window -------
+    for hint, expected in [(3.0, 3.0), (10_000.0, 60.0), (None, 5.0), (0, 5.0)]:
+        sleeps = []
+        body = no_work_body(hint) if hint is not None else {
+            "api_version": "v1", "status": "NO_WORK", "job": None
+        }
+        worker, api, _bridge = make_worker(
+            lambda call, body=body: FakeResponse(200, body),
+            config=config(),
+            sleep=sleeps.append,
+        )
+        completed = worker.run_forever(max_polls=2)
+        assert completed == 0
+        assert len(api.calls) == 2, f"max_polls must bound the loop (got {len(api.calls)})"
+        assert sleeps == [expected, expected], f"hint {hint}: slept {sleeps}, expected {expected}"
+        assert all(0 < s <= 60.0 for s in sleeps), "every wait must be positive and bounded"
+
+    # -- transport failures back off exponentially, up to the cap, then reset --
+    sleeps = []
+    calls = {"n": 0}
+
+    def flaky(call):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise requests.ConnectionError("api down")
+        return FakeResponse(200, no_work_body(3.0))
+
+    worker, api, _bridge = make_worker(flaky, config=config(), sleep=sleeps.append)
+    worker.run_forever(max_polls=6)
+    # Three failures: 5 → 10 → 12 (the cap). The successful fourth claim resets
+    # the backoff, and the server's NO_WORK hint (3s) paces the rest.
+    assert sleeps == [5.0, 10.0, 12.0, 3.0, 3.0, 3.0], f"unexpected backoff sequence: {sleeps}"
+    assert sleeps[0] < sleeps[1] and sleeps[1] < sleeps[2], "backoff must grow, never shrink"
+    assert max(sleeps) <= 12.0, "backoff must stay under max_backoff_s"
+    assert len(api.calls) == 6, "max_polls must bound the loop"
+
+    # -- a stop request ends the loop even with no jobs and no max_polls ------
+    holder = {}
+    stopped = []
+
+    def stop_on_sleep(seconds):
+        stopped.append(seconds)
+        holder["worker"].stop()
+
+    worker, api, _bridge = make_worker(
+        lambda call: FakeResponse(200, no_work_body(1.0)),
+        config=config(),
+        sleep=stop_on_sleep,
+    )
+    holder["worker"] = worker
+    assert worker.run_forever() == 0, "stop() must end an unbounded poll loop"
+    assert len(stopped) == 1 and len(api.calls) == 1, "the loop must exit on the first stop signal"
 
 
 def test_result_409_becomes_lease_lost() -> None:
@@ -747,6 +829,7 @@ TESTS = (
     test_blocked_renewal_and_shutdown,
     test_response_size_and_type_validation,
     test_endpoint_validation,
+    test_run_forever_is_bounded_and_backs_off,
 )
 
 
