@@ -34,6 +34,22 @@ eight hardening cases this suite adds):
     19  the poll loop is bounded: NO_WORK pacing hints are honoured and clamped,
         transport failures back off exponentially under a cap and reset after a
         success, and a stop request ends an unbounded loop (no real waiting)
+    20  the poll loop serves job after job (audit regression: per-job heartbeat
+        teardown used to set the worker-wide shutdown signal)
+    21  a deterministic terminal rejection (422) does not kill the poll loop,
+        while a bad credential on the claim path still does (audit regression)
+    22  per-job teardown is a distinct lifecycle event from worker shutdown:
+        a normally finished job and a fenced-off job both leave the worker
+        running, and stop() is what actually ends the loop (assertion review)
+    23  a fresh acceptance (no replay marker) is reported as a fresh commit
+    24  `Idempotent-Replayed: true` is reported as a REPLAY, never counted as a
+        completed job and never resubmitted (Stage 2 O2)
+    25  the replay marker is parsed strictly: case/whitespace tolerated, an
+        undefined value is refused instead of guessed
+    26  a submission whose transport failed has an UNKNOWN outcome: not counted
+        as accepted, not resubmitted, and the poll loop survives it
+    27  the log distinguishes ACCEPTED from REPLAYED and never carries a
+        credential
 
 Run:
     python scripts/platrixa_outbound_inference_worker_test.py
@@ -59,6 +75,7 @@ from platrixa_outbound_inference_worker import (  # noqa: E402
     API_KEY_HEADER,
     BRIDGE_KEY_HEADER,
     WORKER_ID_HEADER,
+    ApiError,
     BridgeResponseError,
     LeaseLost,
     MalformedResponseError,
@@ -405,6 +422,160 @@ def test_result_409_fences() -> None:
     assert len(only(api.calls, "/result")) == 1, "a fenced submission must never be retried"
 
 
+def test_terminal_rejection_does_not_kill_the_poll_loop() -> None:
+    """A deterministic 422 is the server's verdict on ONE job, not a shutdown.
+
+    Regression for the audit finding: the result endpoint answers a refused
+    candidate with HTTP 422 + the engine's terminal envelope and the job is
+    COMPLETED, but the worker re-raised a non-retryable ApiError out of
+    run_forever, tearing the device worker down and leaving every later job
+    QUEUED forever.
+    """
+    state = {"claims": 0, "submissions": 0}
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            state["claims"] += 1
+            return FakeResponse(200, claim_body()) if state["claims"] == 1 \
+                else FakeResponse(200, no_work_body(1.0))
+        state["submissions"] += 1
+        return FakeResponse(422, {
+            "api_version": "v1", "status": "VALIDATION_FAILED", "api_status": "FAILED",
+            "retryable": False, "success": False,
+        })
+
+    worker, api, _bridge = make_worker(handler, sleep=lambda seconds: None)
+    completed = worker.run_forever(max_polls=2)
+
+    assert completed == 0, "a refused candidate is never a completed job"
+    assert state["claims"] == 2, "the loop must go on to the next claim after a rejection"
+    assert len(only(api.calls, "/claim")) == 2
+    assert state["submissions"] == 1, "a refused candidate must not be resubmitted"
+    assert only(api.calls, "/result")[0]["json"]["bridge_body"] == BRIDGE_BODY
+
+    # A direct caller still sees the rejection, with the engine's own code — the
+    # fix is scoped to the poll loop, not to the evidence.
+    def direct_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return FakeResponse(422, {"api_version": "v1", "status": "VALIDATION_FAILED",
+                                  "api_status": "FAILED", "retryable": False})
+
+    direct_worker, _a, _b = make_worker(direct_handler)
+    job = direct_worker.claim().job
+    exc = expect_raises(
+        ApiError,
+        lambda: direct_worker.submit_result(job, BRIDGE_BODY),
+    )
+    assert exc.status_code == 422 and exc.retryable is False, str(exc)
+    assert exc.code == "VALIDATION_FAILED", exc.code
+
+    # A bad CREDENTIAL on the claim path is still fatal: retrying it would spin.
+    auth_worker, _c, _d = make_worker(lambda call: FakeResponse(401, error_body("UNAUTHORIZED", "bad key")))
+    auth_exc = expect_raises(ApiError, lambda: auth_worker.run_forever(max_polls=1))
+    assert auth_exc.status_code == 401 and auth_exc.retryable is False
+
+
+def test_poll_loop_serves_more_than_one_job() -> None:
+    """A long-running worker must serve job after job, not exactly one.
+
+    Regression for the audit finding that per-JOB heartbeat teardown set the
+    worker-wide shutdown event, so ``run_forever`` exited after the first job it
+    processed (success or rejection) and every later job stayed QUEUED.
+    """
+    state = {"claims": 0, "submissions": 0}
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            state["claims"] += 1
+            if state["claims"] <= 2:
+                return FakeResponse(200, claim_body(job_id=f"job-{state['claims']}"))
+            return FakeResponse(200, no_work_body(1.0))
+        state["submissions"] += 1
+        return FakeResponse(200, RESULT_ENVELOPE)
+
+    worker, api, _bridge = make_worker(handler, sleep=lambda seconds: None)
+    completed = worker.run_forever(max_polls=3)
+
+    assert completed == 2, f"expected two served jobs, got {completed}"
+    assert state["claims"] == 3, f"expected a third claim after two jobs, got {state['claims']}"
+    assert state["submissions"] == 2
+    assert worker.stop_event.is_set() is False, "serving a job must not set the shutdown signal"
+    assert not any(t.name == "platrixa-lease-heartbeat" and t.is_alive() for t in threading.enumerate())
+    assert worker.stop_event.wait(0) is False
+
+
+def test_job_lifecycle_is_distinct_from_worker_shutdown() -> None:
+    """Per-job teardown vs. worker shutdown — the LIFECYCLE, not an event value.
+
+    The audit review asked for proof that the replacement assertion in
+    ``test_result_409_becomes_lease_lost`` checks the intended invariant and not
+    merely the current boolean of an event. This test drives the real loop
+    through the real claim/submit interface and proves the contract underneath:
+
+      * a job that finishes NORMALLY leaves the worker-wide shutdown signal
+        unset and no heartbeat thread alive;
+      * a job whose submission is FENCED OFF (409, lease lost) is likewise NOT a
+        shutdown — the same worker goes on to serve the next job;
+      * the real shutdown mechanism (``stop()``) then sets the signal, ends the
+        loop without issuing one further claim, and leaves no owned thread.
+
+    Everything is asserted at the actual job boundaries, and the negative
+    control (``stop()`` really does set the flag) shows the flag is meaningful.
+    """
+    state = {"claims": 0, "submissions": 0}
+    boundaries: list = []
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            state["claims"] += 1
+            if state["claims"] <= 3:
+                return FakeResponse(
+                    200,
+                    claim_body(job_id=f"job-{state['claims']}", generation=state["claims"]),
+                )
+            return FakeResponse(200, no_work_body(1.0))
+        state["submissions"] += 1
+        if state["submissions"] == 2:
+            # The middle job loses its lease to a newer generation.
+            return FakeResponse(409, error_body("LEASE_LOST", "a newer generation owns this job"))
+        return FakeResponse(200, RESULT_ENVELOPE)
+
+    def on_result(job, _envelope):
+        # Observed BETWEEN jobs, i.e. after per-job teardown has already run.
+        boundaries.append({
+            "job": job.job_id,
+            "shutdown_set": worker.stop_event.is_set(),
+            "heartbeat_alive": any(
+                t.name == "platrixa-lease-heartbeat" and t.is_alive() for t in threading.enumerate()
+            ),
+        })
+
+    worker, api, _bridge = make_worker(handler, sleep=lambda seconds: None)
+    completed = worker.run_forever(max_polls=4, on_result=on_result)
+
+    # The fenced job (job-2) is NOT completed and did NOT end the loop.
+    assert completed == 2, f"expected two committed jobs, got {completed}"
+    assert state["claims"] == 4, f"expected four claims (3 jobs + NO_WORK), got {state['claims']}"
+    assert [b["job"] for b in boundaries] == ["job-1", "job-3"], str(boundaries)
+    assert all(b["shutdown_set"] is False for b in boundaries), \
+        "finishing a job must not set the worker-wide shutdown signal"
+    assert all(b["heartbeat_alive"] is False for b in boundaries), \
+        "each job's heartbeat must be stopped and joined at the job boundary"
+    # Lease loss (job-2) abandoned only that job: job-3 was still served, and the
+    # shutdown signal is STILL unset after three jobs, one of them fenced.
+    assert worker.stop_event.is_set() is False
+    assert not any(t.name == "platrixa-lease-heartbeat" and t.is_alive() for t in threading.enumerate())
+
+    # -- the real shutdown mechanism, and its negative control -----------------
+    worker.stop()
+    assert worker.stop_event.is_set() is True, "stop() is the ONE writer of the shutdown signal"
+    claims_before = len(only(api.calls, "/claim"))
+    assert worker.run_forever(max_polls=5) == 0, "a stopped worker must not serve anything"
+    assert len(only(api.calls, "/claim")) == claims_before, "a stopped loop must not even claim"
+    assert not any(t.name == "platrixa-lease-heartbeat" and t.is_alive() for t in threading.enumerate())
+
+
 def test_run_forever_is_bounded_and_backs_off() -> None:
     """The poll loop never spins: it paces itself, backs off, and can be stopped.
 
@@ -497,8 +668,11 @@ def test_result_409_becomes_lease_lost() -> None:
     assert len(submits) == 1, f"the fence must stop the second attempt (got {len(submits)})"
     assert submits[0]["json"]["bridge_body"] == BRIDGE_BODY
     assert len(bridge.calls) == 1, "the bridge is called once per claimed job"
-    assert job.state.is_lost and worker.stop_event.is_set(), "the heartbeat was stopped and the lease lost"
+    assert job.state.is_lost, "the lease must be marked lost"
     assert not any(t.name == "platrixa-lease-heartbeat" and t.is_alive() for t in threading.enumerate())
+    # Per-job teardown must NOT set the worker-wide shutdown signal — otherwise a
+    # worker stops after its first job (audit finding).
+    assert worker.stop_event.is_set() is False
 
 
 # ---------------------------------------------------------------------------
@@ -806,6 +980,218 @@ def test_endpoint_validation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 23-27  Stage 2 O2 — fresh acceptance vs idempotent replay
+# ---------------------------------------------------------------------------
+
+
+def _log_capture():
+    """Collect this module's log records (used to prove what the worker says)."""
+    import logging
+
+    records: list = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("platrixa.worker")
+    handler = _Collect()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    return logger, handler, records, previous_level
+
+
+def test_fresh_acceptance_is_a_fresh_commit() -> None:
+    """O2: no replay marker + 200 == THIS candidate became authoritative."""
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return FakeResponse(200, RESULT_ENVELOPE)  # the server sends no marker
+
+    worker, api, _bridge = make_worker(handler)
+    job = worker.claim().job
+
+    outcome = worker.submit_result(job, BRIDGE_BODY)
+
+    assert outcome.replayed is False, "a response with no replay marker is not a replay"
+    assert outcome.accepted is True, "this candidate is the one that was committed"
+    # The outcome is still the server's envelope, duck-typed for every caller.
+    assert outcome == RESULT_ENVELOPE, "the envelope must be returned unchanged"
+    assert json.loads(json.dumps(outcome)) == RESULT_ENVELOPE, "the outcome must stay JSON-encodable"
+    assert len(only(api.calls, "/result")) == 1
+
+    # Through the loop: one fresh acceptance, no replay.
+    claims = {"n": 0}
+
+    def one_job_handler(call):
+        if call["url"].endswith("/claim"):
+            claims["n"] += 1
+            return FakeResponse(200, claim_body()) if claims["n"] == 1 \
+                else FakeResponse(200, no_work_body(1.0))
+        return FakeResponse(200, RESULT_ENVELOPE)
+
+    loop_worker, _a, _b = make_worker(one_job_handler, sleep=lambda seconds: None)
+    assert loop_worker.run_forever(max_polls=2) == 1
+    assert loop_worker.last_run_stats == {"accepted": 1, "replayed": 0}, loop_worker.last_run_stats
+
+
+
+def test_replay_is_never_reported_as_acceptance() -> None:
+    """O2: `Idempotent-Replayed: true` means an OLDER result was replayed."""
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return FakeResponse(200, RESULT_ENVELOPE, headers={"Idempotent-Replayed": "true"})
+
+    worker, api, _bridge = make_worker(handler)
+    job = worker.claim().job
+
+    outcome = worker.submit_result(job, BRIDGE_BODY)
+
+    assert outcome.replayed is True, "the server said this was a replay"
+    assert outcome.accepted is False, "a replay is NOT a fresh acceptance"
+    assert outcome == RESULT_ENVELOPE, "the replayed envelope is still the server's own bytes"
+
+    # The loop must not count it, must not resubmit, and must keep serving.
+    state = {"claims": 0}
+
+    def loop_handler(call):
+        if call["url"].endswith("/claim"):
+            state["claims"] += 1
+            return FakeResponse(200, claim_body(job_id=f"job-{state['claims']}")) \
+                if state["claims"] <= 2 else FakeResponse(200, no_work_body(1.0))
+        return FakeResponse(200, RESULT_ENVELOPE, headers={"Idempotent-Replayed": "true"})
+
+    loop_worker, loop_api, _c = make_worker(loop_handler, sleep=lambda seconds: None)
+    completed = loop_worker.run_forever(max_polls=3)
+
+    assert completed == 0, "a replay must never be counted as a completed (accepted) job"
+    assert loop_worker.last_run_stats == {"accepted": 0, "replayed": 2}, loop_worker.last_run_stats
+    assert len(only(loop_api.calls, "/result")) == 2, "one submission per job, never a retry"
+    assert state["claims"] == 3, "the loop continues after a replay"
+
+
+
+def test_replay_marker_parsing_is_strict() -> None:
+    """O2: the marker is authoritative — case/whitespace tolerated, junk refused."""
+
+    def worker_for(headers):
+        def handler(call):
+            if call["url"].endswith("/claim"):
+                return FakeResponse(200, claim_body())
+            return FakeResponse(200, RESULT_ENVELOPE, headers=headers)
+        worker, _api, _b = make_worker(handler)
+        return worker, worker.claim().job
+
+    # Values the contract defines.
+    for headers, expected in [
+        ({"Idempotent-Replayed": "true"}, True),
+        ({"idempotent-replayed": "TRUE"}, True),
+        ({"Idempotent-Replayed": " true "}, True),
+        ({"Idempotent-Replayed": "false"}, False),
+        ({}, False),
+    ]:
+        worker, job = worker_for(headers)
+        assert worker.submit_result(job, BRIDGE_BODY).replayed is expected, f"{headers} → {expected}"
+
+    # A value the contract does not define must NOT be guessed at: either guess
+    # would be a claim about whether this candidate was committed.
+    for bad in ["yes", "1", "maybe", ""]:
+        worker, job = worker_for({"Idempotent-Replayed": bad})
+        expect_raises(MalformedResponseError, lambda w=worker, j=job: w.submit_result(j, BRIDGE_BODY))
+
+    # Through the loop the loop must survive it, count nothing, and not retry.
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return FakeResponse(200, RESULT_ENVELOPE, headers={"Idempotent-Replayed": "maybe"})
+
+    worker, api, _b = make_worker(handler, sleep=lambda seconds: None)
+    assert worker.run_forever(max_polls=1) == 0, "unusable metadata is not an acceptance"
+    assert worker.last_run_stats == {"accepted": 0, "replayed": 0}, worker.last_run_stats
+    assert len(only(api.calls, "/result")) == 1, "the candidate must not be resubmitted"
+
+
+
+def test_ambiguous_submission_is_not_acceptance() -> None:
+    """O2: a transport failure during submit has an UNKNOWN outcome.
+
+    Nothing is inferred in either direction: the loop does not die, the job is
+    not counted as accepted, and the candidate is not blindly resubmitted at the
+    same generation. If the commit did land, the server replays it later; if it
+    did not, the lease expires and the job is reclaimed.
+    """
+    state = {"claims": 0, "submits": 0}
+
+    def handler(call):
+        if call["url"].endswith("/claim"):
+            state["claims"] += 1
+            return FakeResponse(200, claim_body())
+        state["submits"] += 1
+        raise requests.ConnectionError("connection reset after the request was sent")
+
+    worker, api, _bridge = make_worker(handler, sleep=lambda seconds: None)
+    completed = worker.run_forever(max_polls=2)
+
+    assert completed == 0, "an unknown outcome must never be reported as accepted"
+    assert worker.last_run_stats == {"accepted": 0, "replayed": 0}, worker.last_run_stats
+    assert state["submits"] == 2, f"one submission attempt per claim (got {state['submits']})"
+    assert worker.stop_event.is_set() is False, "a dropped connection must not stop the worker"
+    assert len(only(api.calls, "/result")) == 2
+
+    # A direct caller gets the typed transport error, not a fabricated envelope.
+    def direct_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        raise requests.ConnectionError("reset")
+
+    direct, _a, _b = make_worker(direct_handler)
+    job = direct.claim().job
+    from platrixa_outbound_inference_worker import TransportError  # noqa: PLC0415
+
+    expect_raises(TransportError, lambda: direct.submit_result(job, BRIDGE_BODY))
+    assert job.state.is_lost is False, "an unacknowledged submission is not a lost lease"
+
+
+
+def test_outcome_logging_is_distinct_and_secret_free() -> None:
+    """O2: the log says which happened, and never carries a credential."""
+    logger, handler, records, previous_level = _log_capture()
+    try:
+        def replay_handler(call):
+            if call["url"].endswith("/claim"):
+                return FakeResponse(200, claim_body())
+            return FakeResponse(200, RESULT_ENVELOPE, headers={"Idempotent-Replayed": "true"})
+
+        worker, _api, _b = make_worker(replay_handler, sleep=lambda seconds: None)
+        worker.run_forever(max_polls=1)
+
+        def fresh_handler(call):
+            if call["url"].endswith("/claim"):
+                return FakeResponse(200, claim_body())
+            return FakeResponse(200, RESULT_ENVELOPE)
+
+        fresh, _c, _d = make_worker(fresh_handler, sleep=lambda seconds: None)
+        fresh.run_forever(max_polls=1)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    messages = [r.getMessage() for r in records]
+    replays = [m for m in messages if "REPLAYED" in m]
+    accepted = [m for m in messages if "ACCEPTED" in m]
+    assert len(replays) == 1, messages
+    assert len(accepted) == 1, messages
+    assert replays[0] != accepted[0]
+    blob = "\n".join(messages)
+    for secret in (API_KEY, BRIDGE_KEY):
+        assert secret not in blob, "a log line leaked a credential"
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -830,6 +1216,14 @@ TESTS = (
     test_response_size_and_type_validation,
     test_endpoint_validation,
     test_run_forever_is_bounded_and_backs_off,
+    test_poll_loop_serves_more_than_one_job,
+    test_job_lifecycle_is_distinct_from_worker_shutdown,
+    test_terminal_rejection_does_not_kill_the_poll_loop,
+    test_fresh_acceptance_is_a_fresh_commit,
+    test_replay_is_never_reported_as_acceptance,
+    test_replay_marker_parsing_is_strict,
+    test_ambiguous_submission_is_not_acceptance,
+    test_outcome_logging_is_distinct_and_secret_free,
 )
 
 

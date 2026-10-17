@@ -555,7 +555,7 @@ async def claim_inference_job(request: Request) -> JSONResponse:
     responses={
         200: {"description": "Lease renewed for the current owner/generation."},
         404: {"description": "JOB_NOT_FOUND — no such inference job for this tenant (non-disclosing)."},
-        409: {"description": "LEASE_LOST — the caller no longer holds the current lease."},
+        409: {"description": "LEASE_LOST — the caller no longer holds the current lease, or LEASE_EXPIRED — its lease already lapsed and cannot be renewed."},
         503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
     },
 )
@@ -607,6 +607,21 @@ async def renew_inference_lease(job_id: str, request: Request) -> JSONResponse:
         return _async_not_ready("ASYNC_UNAVAILABLE", None, "async store unavailable")
 
     if not renewed:
+        # Expiry is a real revocation (renewal cannot resurrect it), so name it
+        # separately from "another worker owns this job now".
+        try:
+            reason = async_jobs.lease_commit_refusal_reason(
+                job_id, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            reason = None
+        if reason == "EXPIRED":
+            return _error_response(
+                409,
+                "LEASE_EXPIRED",
+                "this worker's lease expired; it cannot be renewed (claim the job again)",
+                request_id=None,
+            )
         return _error_response(409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=None)
 
     return JSONResponse(
@@ -639,7 +654,7 @@ async def renew_inference_lease(job_id: str, request: Request) -> JSONResponse:
         200: {"description": "The authoritative 5D envelope (engine terminal state verbatim)."},
         400: {"description": "Malformed submission (missing lease proof / bridge_body)."},
         404: {"description": "JOB_NOT_FOUND — no such inference job for this tenant (non-disclosing)."},
-        409: {"description": "LEASE_LOST — stale or unproven worker; nothing was committed."},
+        409: {"description": "LEASE_LOST (stale/unproven worker) or LEASE_EXPIRED (this worker's own lease lapsed before the commit point) — nothing was committed."},
         413: {"description": "REQUEST_TOO_LARGE — submission exceeds the accepted size."},
         415: {"description": "CONTENT_TYPE_UNSUPPORTED — the body must be application/json."},
         422: {"description": "The deterministic pipeline's own terminal state was VALIDATION_FAILED / GROUNDING_FAILED / FORBIDDEN_OUTPUT / UNSUPPORTED_TRANSACTION."},
@@ -697,6 +712,10 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
     so a stale worker cannot overwrite the result of the worker that holds
     the current lease, and a duplicate submission returns the stored envelope
     without re-running the kernel.
+
+    Stage 2 O1: the fence also requires the lease to be UNEXPIRED on the
+    server's own clock at the commit point, so an expired lease cannot
+    authorize a commit merely because nobody has reclaimed the job yet.
     """
     rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
     started = time.perf_counter()
@@ -770,6 +789,10 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
         return _error_response(
             409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=rid
         )
+    # NOTE: this pre-check deliberately does NOT judge EXPIRY. Lease freshness
+    # is decided by the server's own clock inside the fenced commit statement
+    # (async_jobs.complete_job), which is atomic with the write; comparing a
+    # Python timestamp here would be a second, non-authoritative clock.
 
     # ---- the SERVER's stored input (never a client-supplied one) ----------
     try:
@@ -896,9 +919,10 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
     except async_jobs.AsyncStoreUnavailableError:
         return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
     if not accepted:
-        # Fenced out (or lost the race to a concurrent submission by the same
-        # generation). Never claim a commit that did not happen: surface the
-        # stored authoritative result when one exists, else LEASE_LOST.
+        # Fenced out (superseded generation, lost the race to a concurrent
+        # submission, or this worker's own lease expired). Never claim a commit
+        # that did not happen: surface the stored authoritative result when one
+        # exists, else name the refusal.
         try:
             latest = async_jobs.get_job(tenant, job_id)
         except async_jobs.AsyncStoreUnavailableError:
@@ -914,6 +938,22 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
                     content=stored,
                     headers={"Idempotent-Replayed": "true"},
                 )
+        # The commit already refused; this only NAMES the reason so the worker
+        # can tell "someone else owns this job now" (LEASE_LOST) from "my own
+        # lease ran out" (LEASE_EXPIRED). Both are 409 with nothing stored.
+        try:
+            reason = async_jobs.lease_commit_refusal_reason(
+                job_id, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            reason = None
+        if reason == "EXPIRED":
+            return _error_response(
+                409,
+                "LEASE_EXPIRED",
+                "this worker's lease expired before the commit point; nothing was stored",
+                request_id=rid,
+            )
         return _error_response(409, "LEASE_LOST", "the lease was lost before commit; nothing was stored", request_id=rid)
 
     api_status = content.get("api_status")

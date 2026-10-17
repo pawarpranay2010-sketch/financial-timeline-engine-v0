@@ -104,6 +104,13 @@ STATUS_CLAIMED = "CLAIMED"
 CODE_LEASE_LOST = "LEASE_LOST"
 CODE_JOB_NOT_FOUND = "JOB_NOT_FOUND"
 
+# The server's idempotent-replay marker on the RESULT route. It is the only
+# signal that distinguishes "your candidate became authoritative just now"
+# from "a result was already authoritative and is being shown to you again".
+# Source of truth: api/routes/inference_api.py sets it to "true" on the two
+# duplicate/late paths and to nothing at all on a fresh fenced commit.
+REPLAY_HEADER = "Idempotent-Replayed"
+
 # Mirrors api/routes/inference_api.py::MAX_INFERENCE_RESULT_BYTES (64 KiB): the
 # server's fail-closed ceiling for a result submission.
 MAX_RESULT_BYTES = 64 * 1024
@@ -353,6 +360,29 @@ def _response_text(response: Any) -> str:
     return text if isinstance(text, str) else ""
 
 
+def rejection_code_of(response: Any) -> str:
+    """A diagnostic code for a REJECTED submission.
+
+    A deterministic rejection (HTTP 422) is answered with the engine's 5D
+    envelope rather than an ``error`` envelope, so ``error.code`` is absent.
+    Prefer the real code when there is one, else the engine's own terminal
+    status, and only then a generic label.
+    """
+    code = error_code_of(response)
+    if code:
+        return code
+    try:
+        body = response.json()
+    except Exception:
+        return "CANDIDATE_REJECTED"
+    if isinstance(body, dict):
+        for key in ("status", "api_status"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return "CANDIDATE_REJECTED"
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -523,9 +553,18 @@ class LeaseState:
 class LeaseHeartbeat(threading.Thread):
     """Renews ONE lease on its own thread until it is lost or stopped.
 
+    TWO signals, deliberately kept apart:
+
+      ``stop_event``    per-JOB. Set when this heartbeat's own job is finished
+                        (``stop_heartbeat``). It must never be the worker-wide
+                        shutdown event: a job ending is not the worker ending.
+      ``shutdown_event`` worker-wide. Set by ``OutboundInferenceWorker.stop()``,
+                        so an operator shutdown still tears down a heartbeat
+                        that is in flight.
+
     The thread never touches the candidate, and stopping it is always safe: it
-    waits on the same ``stop_event`` the worker uses, so shutdown does not
-    depend on a renewal returning.
+    waits on an event rather than on a network call, so shutdown does not depend
+    on a renewal returning.
     """
 
     def __init__(
@@ -536,6 +575,7 @@ class LeaseHeartbeat(threading.Thread):
         stop_event: threading.Event,
         tick_s: float = 0.25,
         now: Callable[[], float] = time.monotonic,
+        shutdown_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__(name="platrixa-lease-heartbeat", daemon=True)
         self.state = state
@@ -544,14 +584,19 @@ class LeaseHeartbeat(threading.Thread):
         # ``_stop()`` method that ``join()`` calls, and shadowing it breaks the
         # join with "TypeError: 'Event' object is not callable".
         self._stop_signal = stop_event
+        self._shutdown = shutdown_event if shutdown_event is not None else threading.Event()
         self._tick = max(0.001, float(tick_s))
         self._now = now
 
+    def request_stop(self) -> None:
+        """Ask this heartbeat to exit (per-job teardown)."""
+        self._stop_signal.set()
+
     def run(self) -> None:  # pragma: no cover - exercised via events in tests
-        while not self._stop_signal.is_set():
+        while not self._stop_signal.is_set() and not self._shutdown.is_set():
             if self._stop_signal.wait(self._tick):
                 return
-            if self.state.is_lost:
+            if self._shutdown.is_set() or self.state.is_lost:
                 return
             self._tick_once()
 
@@ -605,6 +650,33 @@ class ClaimResult:
     job: Optional[ClaimedJob] = None
 
 
+class SubmitOutcome(dict):
+    """What the result endpoint actually did with a candidate (Stage 2 O2).
+
+    ``replayed`` is decided ONLY by the server's ``Idempotent-Replayed``
+    header; the worker never infers it. ``True`` means the envelope is a
+    previously committed authoritative result being replayed — this candidate
+    did not become authoritative. ``False`` means no replay was claimed, i.e.
+    the server performed a fresh fenced commit at this owner/generation.
+
+    A ``dict`` subclass on purpose: every existing caller still receives the
+    server's envelope unchanged (equality, indexing, ``json.dumps`` all behave
+    exactly as before), while the replay decision travels ALONGSIDE the payload
+    instead of being guessed from it. The distinction is reporting-only —
+    nothing on the device can change what was committed — but a device operator
+    must not be told that a discarded candidate was accepted.
+    """
+
+    def __init__(self, envelope: Dict[str, Any], replayed: bool) -> None:
+        super().__init__(envelope)
+        self.replayed = bool(replayed)
+
+    @property
+    def accepted(self) -> bool:
+        """True only for a FRESH acceptance (never for a replay)."""
+        return not self.replayed
+
+
 # ---------------------------------------------------------------------------
 # The worker
 # ---------------------------------------------------------------------------
@@ -643,6 +715,9 @@ class OutboundInferenceWorker:
         # also stops renewals without waiting on a network call.
         self._stop_event = threading.Event()
         self._sleep = sleep if sleep is not None else self._stop_event.wait
+        # Stage 2 O2 reporting: fresh acceptances vs idempotent replays, kept
+        # apart so a run log cannot claim more committed results than it made.
+        self._last_run_stats: Dict[str, int] = {"accepted": 0, "replayed": 0}
 
     # -- introspection ----------------------------------------------------
 
@@ -658,6 +733,11 @@ class OutboundInferenceWorker:
     def stop_event(self) -> threading.Event:
         """The shutdown signal. Shared with the heartbeat by design."""
         return self._stop_event
+
+    @property
+    def last_run_stats(self) -> Dict[str, int]:
+        """``{accepted, replayed}`` from the last ``run_forever`` (Stage 2 O2)."""
+        return dict(self._last_run_stats)
 
     # -- secret hygiene ---------------------------------------------------
 
@@ -847,25 +927,33 @@ class OutboundInferenceWorker:
     # -- heartbeat lifecycle ----------------------------------------------
 
     def start_heartbeat(self, state: LeaseState) -> LeaseHeartbeat:
-        """Start renewing ``state`` on its own thread."""
+        """Start renewing ``state`` on its own thread.
+
+        The heartbeat gets its OWN stop event (per job) plus the worker-wide
+        shutdown event, so finishing one job cannot stop the worker and stopping
+        the worker still tears down an in-flight heartbeat.
+        """
         heartbeat = LeaseHeartbeat(
             state=state,
             renew=lambda: self.renew_lease(state),
-            stop_event=self._stop_event,
+            stop_event=threading.Event(),
             tick_s=float(self._config.heartbeat_tick_s),
             now=self._now,
+            shutdown_event=self._stop_event,
         )
         heartbeat.start()
         return heartbeat
 
     def stop_heartbeat(self, heartbeat: LeaseHeartbeat) -> bool:
-        """Signal and join the heartbeat. Returns True when it exited cleanly.
+        """Signal and join THIS job's heartbeat. True when it exited cleanly.
 
-        Shutdown never waits on a renewal: the thread polls the same stop event
-        the worker is setting, so it returns promptly even if a renewal is in
-        flight or the network is black-holing packets.
+        Deliberately does NOT set the worker-wide shutdown event: this runs on
+        every job boundary, and setting the shutdown signal there would end the
+        poll loop after a single job. Shutdown never waits on a renewal either —
+        the thread waits on an event, so it returns promptly even if a renewal is
+        in flight or the network is black-holing packets.
         """
-        self._stop_event.set()
+        heartbeat.request_stop()
         heartbeat.join(timeout=float(self._config.shutdown_timeout_s))
         return not heartbeat.is_alive()
 
@@ -941,13 +1029,19 @@ class OutboundInferenceWorker:
 
     # -- submission -------------------------------------------------------
 
-    def submit_result(self, job: ClaimedJob, bridge_body: Dict[str, Any]) -> Dict[str, Any]:
+    def submit_result(self, job: ClaimedJob, bridge_body: Dict[str, Any]) -> SubmitOutcome:
         """Submit the COMPLETE bridge body under this lease.
 
         The payload is ``{"lease": {...}, "bridge_body": {...}}`` exactly as the
         route documents. A 409 means the server fence refused the commit: the
         result is discarded and :class:`LeaseLost` is raised — never retried at
         the same generation.
+
+        Stage 2 O2: the answer is a :class:`SubmitOutcome`, so a 200 that the
+        server labelled as an idempotent replay is never reported as a fresh
+        acceptance. An uninterpretable replay marker fails closed
+        (:class:`MalformedResponseError`): the worker will not guess whether its
+        own candidate became the authoritative result.
         """
         state = job.state
         if not isinstance(bridge_body, dict):
@@ -973,9 +1067,14 @@ class OutboundInferenceWorker:
         if status == 404:
             raise ApiError(404, error_code_of(response) or CODE_JOB_NOT_FOUND,
                            "no such job for this tenant", retryable=False)
-        if status in (400, 413, 415):
-            raise ApiError(status, error_code_of(response) or "REQUEST_REJECTED",
-                           _response_text(response)[:200], retryable=False)
+        if status in (400, 413, 415, 422):
+            # 400/413/415: the request shape was refused. 422: the deterministic
+            # pipeline REFUSED the candidate and the server stored that terminal
+            # envelope, so the job is finished — the candidate is discarded, not
+            # retried, and the worker keeps serving other jobs.
+            raise ApiError(status, rejection_code_of(response),
+                           "the server rejected this submission; nothing was committed",
+                           retryable=False)
         if status == 503:
             raise ApiError(503, error_code_of(response) or "SERVICE_UNAVAILABLE",
                            "the API could not validate the submission", retryable=True)
@@ -983,11 +1082,42 @@ class OutboundInferenceWorker:
             raise ApiError(status, error_code_of(response) or "UNEXPECTED_STATUS",
                            _response_text(response)[:200], retryable=status >= 500)
 
-        return self._decode_json_object(response, what="result response")
+        envelope = self._decode_json_object(response, what="result response")
+        return SubmitOutcome(envelope, self._replay_flag(response))
+
+    def _replay_flag(self, response: Any) -> bool:
+        """Read the server's replay marker. Absent means "not replayed".
+
+        The result route sets ``Idempotent-Replayed: true`` on exactly the two
+        paths that return a previously committed envelope, and sets the header
+        to nothing on a fresh commit (inference_api.py:757-763 and 900-912), so
+        "absent" is the route's statement that this response was not a replay.
+        Any OTHER value is undefined by the contract and is refused rather than
+        guessed at.
+        """
+        headers = getattr(response, "headers", None) or {}
+        raw = headers.get(REPLAY_HEADER)
+        if raw is None:
+            # requests' headers mapping is case-insensitive, but a test double's
+            # plain dict is not: look up the canonical spelling as a fallback.
+            for key, value in dict(headers).items():
+                if str(key).lower() == REPLAY_HEADER.lower():
+                    raw = value
+                    break
+        if raw is None:
+            return False
+        text = str(raw).strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+        raise MalformedResponseError(
+            f"the server sent an unusable {REPLAY_HEADER} marker: {raw!r}"
+        )
 
     # -- orchestration ----------------------------------------------------
 
-    def process_job(self, job: ClaimedJob) -> Dict[str, Any]:
+    def process_job(self, job: ClaimedJob) -> SubmitOutcome:
         """Bridge, then submit, while the heartbeat keeps the lease alive.
 
         On ANY exit path the heartbeat is stopped and joined, so no renewal
@@ -1013,8 +1143,13 @@ class OutboundInferenceWorker:
 
         Never spins: NO_WORK honours the server's pacing hint (clamped), and a
         transport failure backs off exponentially up to ``max_backoff_s``.
+
+        Returns the number of FRESH acceptances (Stage 2 O2). A replayed result
+        is counted separately in :attr:`last_run_stats` and never added here, so
+        "N jobs accepted" cannot silently mean "N candidates committed".
         """
         completed = 0
+        replayed = 0
         polls = 0
         backoff = float(self._config.poll_interval_s)
         while not self._stop_event.is_set():
@@ -1058,18 +1193,59 @@ class OutboundInferenceWorker:
                 logger.warning("job %s: unusable bridge response, nothing submitted (%s)", job.job_id, exc)
                 continue
             except ApiError as exc:
-                if not exc.retryable:
-                    raise
-                logger.warning("job %s: submission failed (retryable): %s", job.job_id, exc)
+                # A SUBMISSION-stage rejection is the server's decision about this
+                # one job: 4xx means the candidate was processed and refused (the
+                # job is terminal), 5xx is retryable. Neither is a reason to stop
+                # serving, so the worker moves on to the next claim. Only the
+                # CLAIM stage treats a non-retryable ApiError as fatal, because a
+                # bad credential must not spin in a hot loop.
+                logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
+                continue
+            except TransportError as exc:
+                # Stage 2 O2: the submission may or may not have reached the
+                # server. The outcome is UNKNOWN, so this is neither an
+                # acceptance nor a rejection — it is not counted. The server is
+                # idempotent on a committed result, so if the commit did land the
+                # job is COMPLETED and any later observation replays it; if it
+                # did not, the lease expires and the job is reclaimed. Nothing
+                # is inferred from the silence.
+                logger.warning(
+                    "job %s: submission outcome UNKNOWN (transport failure); "
+                    "not counted as accepted (%s)", job.job_id, exc,
+                )
+                continue
+            except MalformedResponseError as exc:
+                # A 200 we cannot interpret (bad envelope or undefined replay
+                # marker) is not evidence of acceptance either. The candidate is
+                # never resubmitted at this generation.
+                logger.warning(
+                    "job %s: submission response unusable; outcome not claimed (%s)",
+                    job.job_id, exc,
+                )
                 continue
 
-            completed += 1
+            # The server decides; this only reports what it said.
+            if envelope.replayed:
+                replayed += 1
+                logger.info(
+                    "job %s: result REPLAYED (an authoritative result already existed; "
+                    "this candidate was not committed)", job.job_id,
+                )
+            else:
+                completed += 1
+                logger.info("job %s: result ACCEPTED (fresh fenced commit)", job.job_id)
             if on_result is not None:
                 on_result(job, envelope)
+        self._last_run_stats = {"accepted": completed, "replayed": replayed}
         return completed
 
     def stop(self) -> None:
-        """Ask the poll loop and any heartbeat to exit."""
+        """Ask the poll loop and any in-flight heartbeat to exit.
+
+        This is the ONLY place the worker-wide shutdown signal is set, so it
+        always means "the operator wants this worker to stop" and never "a job
+        finished".
+        """
         self._stop_event.set()
 
     # -- helpers ----------------------------------------------------------

@@ -800,22 +800,28 @@ def _fail_job(
 
 
 def _release_lease(record: async_jobs.JobRecord) -> None:
-    """Give a leased job back (store hiccup mid-flight — not a failure)."""
-    from sqlalchemy import text
+    """Give a leased job back (store hiccup mid-flight — not a failure).
 
+    Stage 2 O6: this used to be an UNFENCED ``UPDATE ... WHERE job_id = :j``,
+    so a stale record could re-queue a job that a newer worker already owned
+    and destroy that worker's in-flight lease. It now goes through the store's
+    ownership-fenced :func:`async_jobs.release_job`, which touches the row only
+    while this worker still holds the claim it was given.
+    """
     try:
-        SessionLocal = async_jobs._session_factory()
-        with SessionLocal() as session:
-            with session.begin():
-                session.execute(
-                    text(
-                        "UPDATE platrixa_async_jobs SET status = 'QUEUED', "
-                        "lease_expires_at = NULL, updated_at = now() WHERE job_id = :j"
-                    ),
-                    {"j": record.job_id},
-                )
-    except Exception:
+        released = async_jobs.release_job(
+            record.job_id,
+            lease_owner=record.lease_owner,
+            lease_generation=record.lease_generation,
+        )
+    except async_jobs.AsyncStoreUnavailableError:
         logger.warning("async job %s lease release failed", record.job_id[:14])
+        return
+    if not released:
+        logger.warning(
+            "async job %s lease NOT released (no longer held at this owner/generation)",
+            record.job_id[:14],
+        )
 
 
 def _transport_status_for(engine_status: str) -> int:

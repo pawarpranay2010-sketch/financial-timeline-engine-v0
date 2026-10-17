@@ -1215,6 +1215,33 @@ def complete_job(
     how a stale worker that lost its lease is prevented from overwriting
     the authoritative result of the worker that reclaimed the job.
 
+    Stage 2 O1 (§7.3): the commit is ALSO conditional on the lease being
+    UNEXPIRED at the instant this statement evaluates the row. Before
+    this predicate, expiry only made a job CLAIMABLE — a worker whose
+    lease had silently lapsed kept its commit authority until some other
+    worker actually reclaimed the job, so an unclaimed expiry could still
+    publish an authoritative result. The five conditions below are now the
+    whole rule, checked in ONE UPDATE, so there is no read-then-write
+    window:
+
+      1. ``status = 'PROCESSING'``  — the job can still accept a result;
+      2. ``lease_owner = :owner``   — same worker;
+      3. ``lease_generation = :gen``— same fencing token (no reclaim);
+      4. ``lease_expires_at IS NOT NULL`` — a lease was actually granted;
+      5. ``lease_expires_at > clock_timestamp()`` — the SERVER's clock
+         says the lease is still alive when this statement runs.
+
+    ``clock_timestamp()`` (not ``now()``) is deliberate: ``now()`` is
+    transaction-start time, so a statement that waits on a row lock would
+    judge freshness against a timestamp taken BEFORE the wait. The
+    expiry decision must use the instant the predicate is evaluated.
+
+    PostgreSQL re-evaluates this predicate against the newly committed
+    row version when the UPDATE waits on a concurrent writer, so a
+    renewal, a reclaim, or an expiry that commits while this statement is
+    blocked is seen by this statement — the last committed state wins,
+    never a stale in-memory copy.
+
     ``lease_owner``/``lease_generation`` are REQUIRED. A commit with no
     ownership proof is refused rather than silently allowed: the
     pre-5K ``status='PROCESSING'``-only predicate is exactly the
@@ -1239,7 +1266,9 @@ def complete_job(
                         "lease_expires_at = NULL, lease_owner = NULL, "
                         "next_attempt_at = NULL, updated_at = now() "
                         "WHERE job_id = :j AND status = 'PROCESSING' "
-                        "  AND lease_owner = :owner AND lease_generation = :gen"
+                        "  AND lease_owner = :owner AND lease_generation = :gen "
+                        "  AND lease_expires_at IS NOT NULL "
+                        "  AND lease_expires_at > clock_timestamp()"
                     ),
                     {"res": json.dumps(envelope, ensure_ascii=False), "st": http_status,
                      "rid": (request_id or None), "j": job_id,
@@ -1248,7 +1277,7 @@ def complete_job(
                 accepted = (result.rowcount or 0) == 1
                 if not accepted:
                     logger.warning(
-                        "async job complete REJECTED (stale worker) job=%s",
+                        "async job complete REJECTED (fenced out or lease expired) job=%s",
                         job_id[:14],
                     )
                 return accepted
@@ -1257,6 +1286,51 @@ def complete_job(
     except Exception as exc:
         logger.warning("async job complete failed: %s", type(exc).__name__)
         raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+
+def lease_commit_refusal_reason(
+    job_id: str,
+    *,
+    lease_owner: str,
+    lease_generation: int,
+) -> Optional[str]:
+    """DIAGNOSTIC ONLY: why a fenced commit was refused (``'STALE'`` /``'EXPIRED'``).
+
+    :func:`complete_job` is the authority and answers only yes/no; this
+    read-only helper names the reason so the API can return a distinct error
+    code instead of collapsing every refusal into ``LEASE_LOST``. It is never
+    used to decide whether a commit happened — by the time it runs, the fenced
+    UPDATE has already refused — so a concurrent change between the two calls
+    can only make the label less precise, never the outcome less safe.
+
+    The expiry comparison uses the DATABASE clock, same as the commit predicate,
+    so the label cannot disagree with the predicate because of API-host skew.
+    Returns None when the row no longer exists.
+    """
+    from sqlalchemy import text
+
+    if not lease_owner or lease_generation is None:
+        return "STALE"
+    try:
+        SessionLocal = _session_factory()
+        with SessionLocal() as session:
+            row = session.execute(
+                text(
+                    "SELECT CASE "
+                    "  WHEN lease_owner = :owner AND lease_generation = :gen "
+                    "       AND lease_expires_at IS NOT NULL "
+                    "       AND lease_expires_at <= clock_timestamp() THEN 'EXPIRED' "
+                    "  ELSE 'STALE' END AS reason "
+                    "FROM platrixa_async_jobs WHERE job_id = :j"
+                ),
+                {"owner": lease_owner, "gen": int(lease_generation), "j": job_id},
+            ).first()
+            return str(row[0]) if row else None
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("lease refusal diagnostic failed: %s", type(exc).__name__)
+        return None
 
 
 def fail_job(
@@ -1281,6 +1355,26 @@ def fail_job(
 
     Like :func:`complete_job`, the write requires valid lease ownership;
     a fenced-out worker cannot fail a job another worker now owns.
+
+    Stage 2 O6 — why this is fenced on OWNERSHIP but deliberately NOT on
+    expiry, unlike :func:`complete_job` and :func:`renew_lease`:
+
+    * It cannot make a result authoritative. It writes an error envelope and
+      clears the lease; ``result_json`` is never set here, and a COMPLETED job
+      is not ``PROCESSING``, so this statement cannot touch one.
+    * It cannot affect a newer generation: ``lease_generation = :gen`` is in the
+      predicate, so an expired-or-superseded caller affects zero rows.
+    * It cannot reduce the job's recovery options. The two branches are
+      exhaustive: ``retryable AND attempt_count < max_attempts`` → RETRY_WAIT
+      (still claimable, exactly what a reclaim would produce), otherwise
+      FAILED — and in that second branch a reclaim is impossible anyway
+      (``claim_next_job`` requires ``attempt_count < max_attempts``), or the
+      failure was deterministic (``classify_failure``), in which case any other
+      worker reaches the same terminal state from the same input.
+
+    So an expiry predicate here would change no outcome and would only add a
+    path where a genuinely failed job stays PROCESSING until someone reclaims
+    it. Expiry is required where authority is asserted; this call asserts none.
     """
     from sqlalchemy import text
 
@@ -1324,6 +1418,65 @@ def fail_job(
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
+def release_job(
+    job_id: str,
+    *,
+    lease_owner: Optional[str] = None,
+    lease_generation: Optional[int] = None,
+) -> bool:
+    """Hand a leased job back to the queue — FENCED (Stage 2 O6).
+
+    This is the document worker's "I could not even read the payload, so do not
+    count this against the job" path. Before O6 it was a plain
+    ``UPDATE ... WHERE job_id = :j``: any caller holding a stale record could
+    re-queue a job that a NEWER worker currently owns, destroying that worker's
+    lease and forcing a third attempt (an integrity-safe but real waste, and the
+    kind of unfenced write that makes lease reasoning unreliable).
+
+    The predicate is ownership only — ``status='PROCESSING'`` plus
+    ``lease_owner`` and ``lease_generation``. Expiry is deliberately NOT
+    required: releasing asserts no authority over the result, and an
+    owning-but-expired worker re-queueing its own job is exactly what a reclaim
+    would do moments later. The generation fence is what stops a stale record
+    from touching a newer lease.
+
+    Returns False when nothing was released (fenced out, or the job is no
+    longer PROCESSING). The row is left completely untouched in that case.
+    """
+    from sqlalchemy import text
+
+    if not lease_owner or lease_generation is None:
+        logger.warning(
+            "async job release refused: no lease ownership proof (job=%s)", job_id[:14]
+        )
+        return False
+    try:
+        SessionLocal = _session_factory()
+        with SessionLocal() as session:
+            with session.begin():
+                result = session.execute(
+                    text(
+                        "UPDATE platrixa_async_jobs SET status = 'QUEUED', "
+                        "lease_expires_at = NULL, updated_at = now() "
+                        "WHERE job_id = :j AND status = 'PROCESSING' "
+                        "  AND lease_owner = :owner AND lease_generation = :gen"
+                    ),
+                    {"j": job_id, "owner": lease_owner, "gen": int(lease_generation)},
+                )
+                released = (result.rowcount or 0) == 1
+                if not released:
+                    logger.warning(
+                        "async job release REJECTED (fenced out or not PROCESSING) job=%s",
+                        job_id[:14],
+                    )
+                return released
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("async job release failed: %s", type(exc).__name__)
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+
 def renew_lease(
     job_id: str,
     *,
@@ -1338,6 +1491,15 @@ def renew_lease(
     a lease it no longer holds (renewal failure must never silently
     restore stale ownership). Returns False when renewal is refused —
     the caller must then treat its work as no longer authoritative.
+
+    Stage 2 O1: renewal is ALSO conditional on the lease still being alive
+    (``lease_expires_at > clock_timestamp()``). Without that, an expired
+    lease could be RESURRECTED by its own lapsed worker — one extra
+    statement would restore commit authority that expiry had already
+    revoked, which would make :func:`complete_job`'s expiry predicate
+    trivially circumventable (renew, then commit). Expiry is therefore a
+    real revocation: after it, the only way forward is a fresh claim at a
+    new generation.
     """
     from sqlalchemy import text
 
@@ -1355,7 +1517,9 @@ def renew_lease(
                         "lease_expires_at = now() + make_interval(secs => :lease), "
                         "updated_at = now() "
                         "WHERE job_id = :j AND status = 'PROCESSING' "
-                        "  AND lease_owner = :owner AND lease_generation = :gen"
+                        "  AND lease_owner = :owner AND lease_generation = :gen "
+                        "  AND lease_expires_at IS NOT NULL "
+                        "  AND lease_expires_at > clock_timestamp()"
                     ),
                     {"lease": int(lease_seconds), "j": job_id,
                      "owner": lease_owner, "gen": int(lease_generation)},
