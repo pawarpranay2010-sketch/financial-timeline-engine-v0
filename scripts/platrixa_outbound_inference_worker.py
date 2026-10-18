@@ -59,6 +59,18 @@ CONFIGURATION (all values overridable by flag or environment)
     PLATRIXA_WORKER_ID          bounded lease-owner label (^[A-Za-z0-9._-]{1,128}$)
     PLATRIXA_LOCAL_BRIDGE_URL   default http://127.0.0.1:8081 (loopback only)
     PLATRIXA_LOCAL_BRIDGE_KEY   optional device bridge key (separate credential)
+    PLATRIXA_WORKER_MODEL_URL   optional DIRECT model endpoint on this device's
+                                loopback (e.g. http://127.0.0.1:11434, the phone's
+                                llama-server app). When set, the worker calls the
+                                model itself instead of the device-bridge process;
+                                the submitted result contract is IDENTICAL. When
+                                unset (the default), the bridge path is unchanged.
+    PLATRIXA_WORKER_MODEL_ID    model id sent to that endpoint (default "default")
+    PLATRIXA_WORKER_MODEL_KEY   optional bearer key for the model endpoint only
+    PLATRIXA_WORKER_MODEL_TIMEOUT_S  seconds to wait for the model (default 120)
+    PLATRIXA_WORKER_MODEL_DIALECT    "chat" (default: POST /v1/chat/completions) or
+                                "completion" (POST /v1/completions, the exact SFT
+                                framing the Phase-H adapter was trained on)
 
 Run:
     python scripts/platrixa_outbound_inference_worker.py --once
@@ -78,7 +90,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import requests
@@ -127,6 +139,23 @@ API_KEY_ENV = "PLATRIXA_API_KEY"
 WORKER_ID_ENV = "PLATRIXA_WORKER_ID"
 BRIDGE_URL_ENV = "PLATRIXA_LOCAL_BRIDGE_URL"
 BRIDGE_KEY_ENV = "PLATRIXA_LOCAL_BRIDGE_KEY"
+
+# Direct model endpoint (the phone's llama-server app on this device's own
+# loopback). Optional: when unset the worker keeps using the device bridge.
+MODEL_URL_ENV = "PLATRIXA_WORKER_MODEL_URL"
+MODEL_ID_ENV = "PLATRIXA_WORKER_MODEL_ID"
+MODEL_KEY_ENV = "PLATRIXA_WORKER_MODEL_KEY"
+MODEL_TIMEOUT_ENV = "PLATRIXA_WORKER_MODEL_TIMEOUT_S"
+MODEL_DIALECT_ENV = "PLATRIXA_WORKER_MODEL_DIALECT"
+
+DEFAULT_MODEL_ID = "default"
+DEFAULT_MODEL_TIMEOUT_S = 120.0
+MODEL_DIALECT_CHAT = "chat"
+MODEL_DIALECT_COMPLETION = "completion"
+MODEL_DIALECTS = (MODEL_DIALECT_CHAT, MODEL_DIALECT_COMPLETION)
+
+CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+COMPLETIONS_PATH = "/v1/completions"
 
 # The server sanitizes worker ids with this exact shape and ignores anything
 # else (falling back to a server-generated owner). Rejecting a bad id locally is
@@ -283,6 +312,96 @@ def normalize_bridge_url(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{path.rstrip('/')}"
 
 
+def normalize_model_url(url: Optional[str]) -> Optional[str]:
+    """Validate the DIRECT model endpoint URL: HTTP on a loopback host ONLY.
+
+    Same rules as the bridge URL, for the same reasons: the model server runs
+    on the operator's own device, so a non-loopback host would publish the
+    model endpoint or send raw financial input to a third party. Empty means
+    "no direct model configured" (the bridge path stays in effect).
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https"):
+        raise UnsafeEndpointError(f"model URL must be http(s), got scheme {parts.scheme!r}")
+    if not parts.hostname:
+        raise UnsafeEndpointError(f"model URL has no host: {raw!r}")
+    if parts.username or parts.password:
+        raise UnsafeEndpointError("model URL must not embed credentials")
+    if parts.query or parts.fragment:
+        raise UnsafeEndpointError("model URL must not carry a query or fragment")
+    if not _host_is_loopback(parts.hostname):
+        raise UnsafeEndpointError(
+            f"refusing a non-loopback model host: {parts.hostname!r} (the model server is local-only; "
+            "no public model endpoint, tunnel, or relay is ever used)"
+        )
+    path = _reject_unsafe_path(parts.path or "", what="model URL path")
+    return f"{parts.scheme}://{parts.netloc}{path.rstrip('/')}"
+
+
+# ---------------------------------------------------------------------------
+# Phase-H prompt mirror (byte-exact)
+# ---------------------------------------------------------------------------
+# The worker is deliberately standalone (stdlib + requests, no repo imports),
+# so the canonical prompt from backend/model_provider/platrixa_prompt.py is
+# mirrored here. scripts/platrixa_outbound_inference_worker_test.py asserts
+# byte-equality against that module (loaded by path, dependency-free), so the
+# two copies cannot silently drift. Do NOT reformat: the Phase-H adapter was
+# fine-tuned on this exact SFT framing.
+
+MODEL_MAX_NEW_TOKENS = 512
+MODEL_TEMPERATURE = 0.0
+MODEL_TOP_P = 1.0
+MODEL_STOP_SEQUENCES: Tuple[str, ...] = (
+    "\n### " + "Instruction:",
+    "\n### " + "Input:",
+    "\n### " + "Response:",
+    "\nBelow is an " + "instruction",
+    "\n" + "---",
+)
+
+ALPACA_PREFIX = (
+    "Below is an instruction that describes a task, paired with an input "
+    "that provides further context. Write a response that appropriately "
+    "completes the request."
+)
+
+ALPACA_INSTRUCTION = (
+    "You are the FYJC accounting language-understanding specialist. Parse "
+    "the student's accounting language into a grounded structured "
+    "interpretation with exactly these 18 fields: transaction_type, parties, "
+    "amounts, payment_method, references, ambiguities, grounding, "
+    "transaction_type_enum, payment_method_enum, ambiguity_flags, "
+    "referenced_transaction_index, referenced_party, referenced_amount, "
+    "field_confidences, overall_confidence, suggested_status, "
+    "safety_flags, scope_flags. Do not invent missing information. Never "
+    "produce journal entries, debit/credit decisions, or accounting "
+    "conclusions. Output only machine-readable JSON with exactly these "
+    "fields."
+)
+
+
+def build_model_prompt(text: str) -> str:
+    """The byte-exact Phase-H SFT prompt (mirrored build_prompt)."""
+    return (
+        f"{ALPACA_PREFIX}\n\n"
+        f"### Instruction:\n{ALPACA_INSTRUCTION}\n\n"
+        f"### Input:\n{text}\n\n"
+        f"### Response:\n"
+    )
+
+
+def is_alpaca_prompt(prompt: str) -> bool:
+    """Guard used before generation to prevent prompt substitution."""
+    return (
+        prompt.startswith(ALPACA_PREFIX)
+        and "### Instruction:" in prompt
+        and "### Input:" in prompt
+    )
+
+
 def resolve_lease_endpoint(base_url: str, candidate: str, job_id: str, suffix: str) -> str:
     """Resolve a server-provided ``renew_url``/``result_url`` safely.
 
@@ -400,6 +519,11 @@ class WorkerConfig:
     bridge_paths: Tuple[str, ...] = DEFAULT_BRIDGE_PATHS
     bridge_timeout_s: float = 120.0
     bridge_max_response_bytes: int = MAX_BRIDGE_RESPONSE_BYTES
+    model_url: Optional[str] = None
+    model_id: str = DEFAULT_MODEL_ID
+    model_key: Optional[str] = None
+    model_timeout_s: float = DEFAULT_MODEL_TIMEOUT_S
+    model_dialect: str = MODEL_DIALECT_CHAT
     max_result_bytes: int = MAX_RESULT_BYTES
     request_timeout_s: float = 30.0
     poll_interval_s: float = 5.0
@@ -691,6 +815,7 @@ class OutboundInferenceWorker:
         *,
         session: Optional[Any] = None,
         bridge_session: Optional[Any] = None,
+        model_session: Optional[Any] = None,
         now: Callable[[], float] = time.monotonic,
         sleep: Optional[Callable[[float], None]] = None,
     ) -> None:
@@ -708,9 +833,30 @@ class OutboundInferenceWorker:
             )
         self._bridge_key = (config.bridge_key or "").strip() or None
         self._bridge_paths = tuple(config.bridge_paths) or DEFAULT_BRIDGE_PATHS
+        # Direct model endpoint (optional): validated exactly like the bridge.
+        self._model_base_url = normalize_model_url(config.model_url)
+        self._model_id = (config.model_id or "").strip() or DEFAULT_MODEL_ID
+        if not BOUNDED_IDENTIFIER_RE.match(self._model_id):
+            raise WorkerConfigError(
+                "model id must match ^[A-Za-z0-9._-]{1,128}$ "
+                f"(got {self._model_id!r})"
+            )
+        self._model_key = (config.model_key or "").strip() or None
+        self._model_timeout_s = float(config.model_timeout_s)
+        if self._model_timeout_s <= 0:
+            raise WorkerConfigError(
+                f"model timeout must be positive (got {config.model_timeout_s!r})"
+            )
+        dialect = (config.model_dialect or "").strip().lower()
+        if dialect not in MODEL_DIALECTS:
+            raise WorkerConfigError(
+                f"model dialect must be one of {MODEL_DIALECTS} (got {config.model_dialect!r})"
+            )
+        self._model_dialect = dialect
         self._now = now
         self._session = session if session is not None else requests.Session()
         self._bridge_session = bridge_session if bridge_session is not None else requests.Session()
+        self._model_session = model_session if model_session is not None else requests.Session()
         # ONE shutdown signal, shared with the heartbeat, so stopping the worker
         # also stops renewals without waiting on a network call.
         self._stop_event = threading.Event()
@@ -743,7 +889,7 @@ class OutboundInferenceWorker:
 
     def _redact(self, text: str) -> str:
         out = str(text)
-        for secret in (self._api_key, self._bridge_key):
+        for secret in (self._api_key, self._bridge_key, self._model_key):
             if secret:
                 out = out.replace(secret, "***")
         return out
@@ -761,6 +907,13 @@ class OutboundInferenceWorker:
         headers = {"Content-Type": "application/json"}
         if self._bridge_key:
             headers[BRIDGE_KEY_HEADER] = self._bridge_key
+        return headers
+
+    def _model_headers(self) -> Dict[str, str]:
+        """Model endpoint credentials ONLY. The tenant API key never reaches the model."""
+        headers = {"Content-Type": "application/json"}
+        if self._model_key:
+            headers["Authorization"] = f"Bearer {self._model_key}"
         return headers
 
     # -- transport --------------------------------------------------------
@@ -971,6 +1124,11 @@ class OutboundInferenceWorker:
         if not isinstance(raw_input, str) or not raw_input.strip():
             raise BridgeResponseError("refusing to bridge an empty input")
 
+        # Direct model mode: when a loopback model endpoint is configured the
+        # worker calls the model itself; otherwise the device bridge.
+        if self._model_base_url is not None:
+            return self.call_model(raw_input)
+
         connection_error: Optional[str] = None
         for path in self._bridge_paths:
             url = f"{self._bridge_base_url}{path}"
@@ -1008,6 +1166,178 @@ class OutboundInferenceWorker:
         raise BridgeUnavailableError(
             connection_error or f"no bridge route matched; tried {list(self._bridge_paths)}"
         )
+
+    # -- direct model endpoint (the phone adapter) ------------------------
+
+    def call_model(self, raw_input: str) -> Dict[str, Any]:
+        """POST the raw input to the phone's OpenAI-compatible llama-server.
+
+        The model server runs on the same device as this worker, so the
+        endpoint is loopback-only (validated by normalize_model_url); there is
+        no inbound port, public endpoint, tunnel, or relay. The prompt is the
+        byte-exact Phase-H Alpaca SFT prompt (build_model_prompt mirrors the
+        shared contract; the test suite enforces byte-equality).
+
+        Dialects:
+          * "chat"       → POST /v1/chat/completions with the prompt as ONE user
+                           message (the phone app's native endpoint, OpenAI-style);
+          * "completion" → POST /v1/completions with the raw prompt, the exact
+                           SFT framing the Phase-H adapter was trained on
+                           (platrixa_prompt.py's prompt-fidelity contract).
+
+        STREAMING: the request always asks for a non-streamed answer, but a
+        model that streams anyway is handled by collecting EVERY ``data:``
+        chunk until ``[DONE]`` and only then parsing — an incomplete stream
+        (no ``[DONE]``) fails closed and is never submitted.
+
+        Returns the device-bridge response BODY SHAPE so the submission path,
+        the server's shared parser, and the deterministic kernel are unchanged:
+        {"interpretation_text", "completion_status", "finish_reason", "model"}.
+        No field is added, defaulted, or repaired here; a truncated or
+        malformed candidate surfaces as BridgeResponseError and is discarded.
+        """
+        prompt = build_model_prompt(raw_input)
+        if not is_alpaca_prompt(prompt):
+            # Cannot happen with the mirrored constants; fail closed anyway so
+            # a future edit cannot silently substitute a different prompt.
+            raise BridgeResponseError("the canonical Alpaca prompt guard failed")
+
+        if self._model_dialect == MODEL_DIALECT_CHAT:
+            url = f"{self._model_base_url}{CHAT_COMPLETIONS_PATH}"
+            payload: Dict[str, Any] = {
+                "model": self._model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "temperature": MODEL_TEMPERATURE,
+                "top_p": MODEL_TOP_P,
+                "max_tokens": MODEL_MAX_NEW_TOKENS,
+            }
+        else:
+            url = f"{self._model_base_url}{COMPLETIONS_PATH}"
+            payload = {
+                "model": self._model_id,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": MODEL_TEMPERATURE,
+                "top_p": MODEL_TOP_P,
+                "max_tokens": MODEL_MAX_NEW_TOKENS,
+                "stop": list(MODEL_STOP_SEQUENCES),
+            }
+
+        try:
+            response = self._post(
+                url,
+                payload,
+                headers=self._model_headers(),
+                timeout=self._model_timeout_s,
+                session=self._model_session,
+            )
+        except TransportError as exc:
+            raise BridgeUnavailableError(
+                f"model endpoint unreachable: {self._redact(str(exc))}"
+            ) from exc
+        status = int(response.status_code)
+        if status != 200:
+            raise BridgeUnavailableError(
+                f"model endpoint returned HTTP {status}: "
+                f"{self._redact(_response_text(response))[:200]}"
+            )
+
+        text = _response_text(response)
+        size = len(text.encode("utf-8", errors="replace"))
+        if size > int(self._config.bridge_max_response_bytes):
+            raise BridgeResponseError(
+                f"model response is {size} bytes; the limit is "
+                f"{self._config.bridge_max_response_bytes}"
+            )
+
+        content, finish_reason = self._parse_model_response(text)
+        return {
+            "interpretation_text": content,
+            "completion_status": "TRUNCATED" if finish_reason == "length" else "COMPLETE",
+            "finish_reason": finish_reason,
+            "model": {
+                "provider": "android-llama-server",
+                "model": self._model_id,
+                "dialect": self._model_dialect,
+                "artifact_identity": "PROVENANCE_UNKNOWN",
+            },
+        }
+
+    def _parse_model_response(self, text: str) -> Tuple[str, Optional[str]]:
+        """Extract (content, finish_reason) from a 200; fail closed on anything partial."""
+        if text.lstrip().startswith("data:"):
+            return self._collect_model_stream(text)
+        try:
+            body = json.loads(text)
+        except ValueError as exc:
+            raise BridgeResponseError(f"model response is not valid JSON: {exc}") from exc
+        if not isinstance(body, dict):
+            raise BridgeResponseError("model response is not a JSON object")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise BridgeResponseError(
+                f"model response has no choices; keys={sorted(body.keys())}"
+            )
+        first = choices[0]
+        if not isinstance(first, dict):
+            raise BridgeResponseError("model response choice is not an object")
+        content: Optional[str] = None
+        message = first.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            content = message["content"]
+        elif isinstance(first.get("text"), str):
+            content = first["text"]
+        if content is None or not content.strip():
+            raise BridgeResponseError("model returned empty or missing completion text")
+        finish = first.get("finish_reason")
+        finish_reason = finish if isinstance(finish, str) and finish else None
+        return content, finish_reason
+
+    def _collect_model_stream(self, text: str) -> Tuple[str, Optional[str]]:
+        """Collect streamed chunks; parse ONLY after [DONE]. Incomplete → fail closed."""
+        pieces: List[str] = []
+        finish_reason: Optional[str] = None
+        saw_done = False
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data:
+                continue
+            if data == "[DONE]":
+                saw_done = True
+                continue
+            try:
+                chunk = json.loads(data)
+            except ValueError as exc:
+                raise BridgeResponseError(f"stream chunk is not valid JSON: {exc}") from exc
+            if not isinstance(chunk, dict):
+                raise BridgeResponseError("stream chunk is not a JSON object")
+            choices = chunk.get("choices")
+            if not isinstance(choices, list):
+                continue  # e.g. a usage-only chunk contributes nothing
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    raise BridgeResponseError("stream choice is not an object")
+                delta = choice.get("delta")
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    pieces.append(delta["content"])
+                if isinstance(choice.get("text"), str):
+                    pieces.append(choice["text"])
+                reason = choice.get("finish_reason")
+                if isinstance(reason, str) and reason:
+                    finish_reason = reason
+        if not saw_done:
+            raise BridgeResponseError(
+                "model stream ended without [DONE]; the output is incomplete and "
+                "will not be submitted"
+            )
+        content = "".join(pieces)
+        if not content.strip():
+            raise BridgeResponseError("streamed model output was empty")
+        return content, finish_reason
 
     def _decode_bridge_body(self, response: Any) -> Dict[str, Any]:
         """Fail closed on anything that is not a bounded JSON object."""
@@ -1283,6 +1613,23 @@ def build_config(args: argparse.Namespace) -> WorkerConfig:
         api_key = _read_key_file(args.api_key_file)
     if not api_key:
         api_key = (os.environ.get(API_KEY_ENV, "") or "").strip()
+    model_key = (args.model_key or "").strip()
+    if not model_key and args.model_key_file:
+        model_key = _read_key_file(args.model_key_file)
+    if not model_key:
+        model_key = (os.environ.get(MODEL_KEY_ENV, "") or "").strip()
+    raw_model_timeout = (os.environ.get(MODEL_TIMEOUT_ENV, "") or "").strip()
+    if args.model_timeout is not None:
+        model_timeout_s = float(args.model_timeout)
+    elif raw_model_timeout:
+        try:
+            model_timeout_s = float(raw_model_timeout)
+        except ValueError as exc:
+            raise WorkerConfigError(
+                f"{MODEL_TIMEOUT_ENV} must be a number, got {raw_model_timeout!r}"
+            ) from exc
+    else:
+        model_timeout_s = DEFAULT_MODEL_TIMEOUT_S
     return WorkerConfig(
         api_base_url=args.api_base_url or os.environ.get(API_BASE_URL_ENV, ""),
         api_key=api_key,
@@ -1290,6 +1637,11 @@ def build_config(args: argparse.Namespace) -> WorkerConfig:
         bridge_url=args.bridge_url or os.environ.get(BRIDGE_URL_ENV, "") or DEFAULT_BRIDGE_URL,
         bridge_key=args.bridge_key or os.environ.get(BRIDGE_KEY_ENV, "") or None,
         bridge_timeout_s=args.bridge_timeout,
+        model_url=args.model_url or os.environ.get(MODEL_URL_ENV, "") or None,
+        model_id=args.model_id or os.environ.get(MODEL_ID_ENV, "") or DEFAULT_MODEL_ID,
+        model_key=model_key or None,
+        model_timeout_s=model_timeout_s,
+        model_dialect=args.model_dialect or os.environ.get(MODEL_DIALECT_ENV, "") or MODEL_DIALECT_CHAT,
     )
 
 
@@ -1311,6 +1663,21 @@ def main(argv: Optional[list] = None) -> int:
                         help=f"optional device bridge key; env {BRIDGE_KEY_ENV}")
     parser.add_argument("--bridge-timeout", type=float, default=120.0,
                         help="seconds to wait for the device model (default 120)")
+    parser.add_argument("--model-url", default=None,
+                        help=f"direct loopback llama-server root, e.g. http://127.0.0.1:11434; "
+                             f"env {MODEL_URL_ENV} (unset = use the device bridge)")
+    parser.add_argument("--model-id", default=None,
+                        help=f"model id sent to the endpoint; env {MODEL_ID_ENV} "
+                             f"(default {DEFAULT_MODEL_ID})")
+    parser.add_argument("--model-key", default=None,
+                        help=f"optional bearer key for the model endpoint; env {MODEL_KEY_ENV}")
+    parser.add_argument("--model-key-file", default=None, help="file containing the model key")
+    parser.add_argument("--model-timeout", type=float, default=None,
+                        help=f"seconds to wait for the model; env {MODEL_TIMEOUT_ENV} "
+                             f"(default {DEFAULT_MODEL_TIMEOUT_S})")
+    parser.add_argument("--model-dialect", default=None, choices=list(MODEL_DIALECTS),
+                        help=f"chat = /v1/chat/completions (default), completion = /v1/completions "
+                             f"(exact SFT framing); env {MODEL_DIALECT_ENV}")
     parser.add_argument("--once", action="store_true", help="claim and process at most one job, then exit")
     parser.add_argument("--max-polls", type=int, default=None, help="stop after this many claim attempts")
     parser.add_argument("--verbose", action="store_true", help="log at INFO")

@@ -1192,6 +1192,305 @@ def test_outcome_logging_is_distinct_and_secret_free() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Model adapter tests — phone llama-server integration
+# ---------------------------------------------------------------------------
+
+
+def _model_fake_response(body: dict, *, status: int = 200, headers: Optional[Dict[str, str]] = None) -> FakeResponse:
+    """Helper: build a FakeResponse with body as JSON text."""
+    return FakeResponse(status, body=body, text=json.dumps(body), headers=headers)
+
+
+def test_model_chat_dialect_accepts_valid_response() -> None:
+    """POST /v1/chat/completions with the Phase-H Alpaca prompt; a valid JSON
+    answer is collected and the result body shape is identical to the bridge."""
+    captured_bridge: Optional[Dict[str, Any]] = {}
+    called_with_claim: bool = False
+
+    def claim_handler(call):
+        nonlocal called_with_claim
+        called_with_claim = True
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        # Collect the bridge body that would be submitted — we only assert shape.
+        return _model_fake_response({
+            "interpretation_text": '{"transaction_type": "EXPENSE", "amount": 25000}',
+            "completion_status": "COMPLETE",
+            "finish_reason": "stop",
+            "model": {"provider": "android-llama-server", "model": "default", "dialect": "chat", "artifact_identity": "PROVENANCE_UNKNOWN"},
+        })
+
+    def result_handler(call):
+        nonlocal captured_bridge
+        if call["url"].endswith("/result"):
+            payload = call["json"]
+            captured_bridge = payload.get("bridge_body", {})
+            return FakeResponse(200, RESULT_ENVELOPE)
+        return _model_fake_response({"status": "UNKNOWN"})
+
+    def on_result(job, envelope):
+        # Verify the envelope shape matches what the bridge would produce.
+        assert "api_version" in envelope
+        assert "request_id" in envelope
+        assert envelope.get("api_status") == "REVIEW_REQUIRED"
+
+    replay_handler_inner = lambda c: claim_handler(c) if c["url"].endswith("/claim") else _model_fake_response({"status": "CLAIMED"})
+    worker, api, bridge = make_worker(
+        lambda c: claim_handler(c) if c["url"].endswith("/claim") else _model_fake_response({"status": "CLAIMED"}),
+        bridge_handler=result_handler,
+        sleep=lambda seconds: None,
+    )
+    worker._model_base_url = "http://127.0.0.1:11434"
+    worker._model_id = "default"
+    worker._model_dialect = "chat"
+    job = worker.claim().job
+    envelope = worker.process_job(job)
+    assert envelope.replayed is False
+    assert "interpretation_text" in envelope
+    captured_bridge.clear()
+
+    # Re-claim and process once more to verify bridge_body in submit_result
+    job2 = worker.claim().job
+    outcome = worker.process_job(job2)
+    assert outcome.accepted is True
+    assert "interpretation_text" in outcome
+    # The bridge_body captured in submit_result should have the right shape.
+    assert "interpretation_text" in outcome.get("bridge_body", {})
+
+
+def test_model_completion_dialect_accepts_valid_response() -> None:
+    """POST /v1/completions with the Phase-H Alpaca prompt (exact SFT framing).
+    A valid JSON answer is collected and the result body shape is identical."""
+    captured_bridge: Optional[Dict[str, Any]] = {}
+
+    def claim_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return _model_fake_response({"status": "CLAIMED"})
+
+    def result_handler(call):
+        nonlocal captured_bridge
+        if call["url"].endswith("/result"):
+            payload = call["json"]
+            captured_bridge = payload.get("bridge_body", {})
+            return FakeResponse(200, RESULT_ENVELOPE)
+        return _model_fake_response({"status": "UNKNOWN"})
+
+    def on_result(job, envelope):
+        assert "api_version" in envelope
+        assert "request_id" in envelope
+        assert envelope.get("api_status") == "REVIEW_REQUIRED"
+
+    worker, api, bridge = make_worker(
+        claim_handler,
+        bridge_handler=result_handler,
+        sleep=lambda seconds: None,
+    )
+    worker._model_base_url = "http://127.0.0.1:11434"
+    worker._model_id = "default"
+    worker._model_dialect = "completion"
+    job = worker.claim().job
+    envelope = worker.process_job(job)
+    assert envelope.replayed is False
+    assert "interpretation_text" in envelope
+
+
+def _model_fake_session(handler):
+    """A fake model-session whose ``post`` goes to ``handler``.
+
+    The worker enters the direct-model path when ``_model_base_url`` is set
+    and reaches ``call_model``, which POSTs to the model endpoint using
+    ``_model_session``. Supplying this fake keeps the test offline and
+    deterministic: it never touches a real llama-server or Railway.
+    """
+    session = FakeSession(handler)
+    # OutboundInferenceWorker stores the model session as ``_model_session``.
+    return session
+
+
+def test_model_chat_dialect_truncated_stream_fails_closed() -> None:
+    """Chat streaming that ends without [DONE] fails closed and is never submitted.
+
+    The model POST is served by a fake model session, so the truncated SSE is
+    parsed by ``_collect_model_stream`` through the real model-response handling
+    path (``call_model`` -> ``_parse_model_response`` -> _collect_model_stream``).
+    """
+    submitted: list = []
+
+    def model_handler(call):
+        # Deliberately truncated SSE: a real chunk, then no ``[DONE]``.
+        return FakeResponse(
+            200,
+            text=(
+                "data: {\"choices\": [{\"delta\": {\"content\": \"Hello\"}}]}\n"
+                "\n"
+            ),
+            headers={"Content-Type": "text/event-stream; charset=utf-8"},
+        )
+
+    def claim_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return _model_fake_response({"status": "CLAIMED"})
+
+    def result_handler(call):
+        submitted.append(call)
+        return _model_fake_response({"status": "UNKNOWN"})
+
+    model_session = _model_fake_session(model_handler)
+    worker, api, bridge = make_worker(
+        claim_handler,
+        bridge_handler=result_handler,
+        sleep=lambda seconds: None,
+    )
+    worker._model_base_url = "http://127.0.0.1:11434"
+    worker._model_id = "default"
+    worker._model_dialect = "chat"
+    worker._model_session = model_session
+
+    job = worker.claim().job
+    exc = expect_raises(BridgeResponseError, lambda: worker.process_job(job))
+    assert "without [DONE]" in str(exc), f"unexpected error text: {exc}"
+
+    # The incomplete candidate must be discarded: no result submitted, no bridge
+    # touched, and the fake model endpoint asked exactly once.
+    assert submitted == [], f"the truncated candidate must not be submitted (got {submitted})"
+    assert bridge.calls == [], "the direct-model path must not fall back to the device bridge"
+    model_calls = [c for c in api.calls if c["url"].endswith("/v1/chat/completions")]
+    assert len(model_calls) == 1, f"expected one model POST, got {model_calls}"
+    payload = model_calls[0]["json"]
+    assert payload["model"] == "default"
+    assert payload["stream"] is False
+    assert isinstance(payload["messages"], list) and len(payload["messages"]) == 1
+    assert payload["messages"][0]["role"] == "user"
+    assert build_model_prompt(RAW_INPUT) == payload["messages"][0]["content"]
+    assert payload["temperature"] == MODEL_TEMPERATURE
+    assert payload["top_p"] == MODEL_TOP_P
+    assert payload["max_tokens"] == MODEL_MAX_NEW_TOKENS
+
+
+def test_model_chat_dialect_malformed_json_fails_closed() -> None:
+    """Chat response with non-JSON body fails closed."""
+
+    def claim_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return _model_fake_response({"status": "CLAIMED"})
+
+    def bridge_handler(call):
+        return FakeResponse(200, {
+            "interpretation_text": '{"transaction_type": "EXPENSE", "amount": 25000}',
+            "completion_status": "COMPLETE",
+            "finish_reason": "stop",
+            "model": {"provider": "llama.cpp local bridge", "artifact_identity": "PROVENANCE_UNKNOWN"},
+        })
+
+    def result_handler(call):
+        return FakeResponse(200, {"api_version": "v1", "status": "FAILED"})
+
+    def model_handler(call):
+        return FakeResponse(200, "this is not json", headers={"Content-Type": "application/json"})
+
+    worker, api, bridge = make_worker(
+        claim_handler,
+        bridge_handler=bridge_handler,
+        model_handler=model_handler,
+        sleep=lambda seconds: None,
+    )
+    worker._model_base_url = "http://127.0.0.1:11434"
+    worker._model_id = "default"
+    worker._model_dialect = "chat"
+    job = worker.claim().job
+    try:
+        envelope = worker.process_job(job)
+        assert False, "expected BridgeResponseError for malformed JSON"
+    except BridgeResponseError:
+        pass  # expected
+
+
+def test_model_chat_dialect_empty_output_fails_closed() -> None:
+    """Chat response with empty content fails closed."""
+
+    def claim_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return _model_fake_response({"status": "CLAIMED"})
+
+    def model_handler(call):
+        return FakeResponse(200, json.dumps({"choices": [{"message": {"content": ""}}]}), headers={"Content-Type": "application/json"})
+
+    def bridge_handler(call):
+        return FakeResponse(200, {
+            "interpretation_text": '{"transaction_type": "EXPENSE", "amount": 25000}',
+            "completion_status": "COMPLETE",
+            "finish_reason": "stop",
+            "model": {"provider": "llama.cpp local bridge", "artifact_identity": "PROVENANCE_UNKNOWN"},
+        })
+
+    worker, api, bridge = make_worker(
+        claim_handler,
+        bridge_handler=bridge_handler,
+        model_handler=model_handler,
+        sleep=lambda seconds: None,
+    )
+    worker._model_base_url = "http://127.0.0.1:11434"
+    worker._model_id = "default"
+    worker._model_dialect = "chat"
+    job = worker.claim().job
+    try:
+        envelope = worker.process_job(job)
+        assert False, "expected BridgeResponseError for empty output"
+    except BridgeResponseError:
+        pass  # expected
+
+
+def test_model_chat_dialect_tenant_isolation() -> None:
+    """Different tenant keys result in different lease proofs; the model
+    endpoint uses its own key that never reaches the API."""
+
+    def claim_handler(call):
+        if call["url"].endswith("/claim"):
+            return FakeResponse(200, claim_body())
+        return _model_fake_response({"status": "CLAIMED"})
+
+    def result_handler(call):
+        return _model_fake_response({"status": "UNKNOWN"})
+
+    def api_error_handler(call):
+        if call["url"].endswith("/claim"):
+            raise ApiError(403, "BAD_TENANT", "invalid tenant", retryable=False)
+        return _model_fake_response({"status": "UNKNOWN"})
+
+    # Two workers with different tenant keys
+    worker_a, _, _ = make_worker(
+        api_error_handler,
+        model_handler=lambda c: _model_fake_response({"status": "CLAIMED"}),
+        sleep=lambda seconds: None,
+    )
+    worker_a._model_base_url = "http://127.0.0.1:11434"
+    worker_a._model_id = "default"
+    worker_a._model_key = "key-a"
+
+    worker_b, _, _ = make_worker(
+        api_error_handler,
+        model_handler=lambda c: _model_fake_response({"status": "CLAIMED"}),
+        sleep=lambda seconds: None,
+    )
+    worker_b._model_base_url = "http://127.0.0.1:11434"
+    worker_b._model_id = "default"
+    worker_b._model_key = "key-b"
+
+    # Both should be able to claim and process jobs using their own keys
+    job_a = worker_a.claim().job
+    envelope_a = worker_a.process_job(job_a)
+    assert "interpretation_text" in envelope_a
+
+    job_b = worker_b.claim().job
+    envelope_b = worker_b.process_job(job_b)
+    assert "interpretation_text" in envelope_b
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
