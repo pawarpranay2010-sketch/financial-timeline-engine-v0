@@ -802,6 +802,74 @@ class SubmitOutcome(dict):
 
 
 # ---------------------------------------------------------------------------
+# Run report
+# ---------------------------------------------------------------------------
+# Why a run ended with the count it did. The legacy summary line
+# ("worker stopped; N job(s) submitted and accepted") is printed by an idle
+# server, by a run whose every claim was refused, and by a run that claimed a
+# job it could not commit — so the counters below record which of those
+# actually happened. They are observations only: nothing here is inferred from
+# silence, and no counter changes what the server decides.
+
+RUN_REPORT_KEYS: Tuple[str, ...] = (
+    "claims",           # claim requests actually sent
+    "claim_failures",   # claim attempts that produced no claim outcome
+    "no_work",          # explicit NO_WORK answers
+    "claimed",          # jobs handed to this worker
+    "accepted",         # fresh fenced commits (== run_forever's return value)
+    "replayed",         # candidates the server reported as already committed
+    "rejected",         # submission refused by the server (candidate discarded)
+    "lease_lost",       # fenced out / lapsed before committing
+    "bridge_failures",  # bridge unreachable or response refused (never submitted)
+    "unknown",          # submission response unusable or transport-ambiguous
+)
+
+
+def format_run_report(report: Dict[str, int]) -> str:
+    """One operator-facing line: counts plus the outcome they add up to.
+
+    Pure formatting over what :meth:`OutboundInferenceWorker.run_forever`
+    observed. The ``outcome:`` clause is a description of the counters, not a
+    guess about the server: "NO_WORK only" is emitted only when the server
+    actually answered NO_WORK and no job was claimed.
+    """
+    claims = int(report.get("claims", 0))
+    failures = int(report.get("claim_failures", 0))
+    no_work = int(report.get("no_work", 0))
+    claimed = int(report.get("claimed", 0))
+    accepted = int(report.get("accepted", 0))
+    replayed = int(report.get("replayed", 0))
+    rejected = int(report.get("rejected", 0))
+    lease_lost = int(report.get("lease_lost", 0))
+    bridge = int(report.get("bridge_failures", 0))
+    unknown = int(report.get("unknown", 0))
+
+    if claims == 0:
+        outcome = "no claim was attempted (poll budget 0, or a stop was already requested)"
+    elif claimed == 0 and failures == claims:
+        outcome = (
+            f"every claim attempt failed ({failures}); "
+            "the server returned no claim outcome"
+        )
+    elif claimed == 0:
+        also = f"; {failures} claim attempt(s) also failed" if failures else ""
+        outcome = f"NO_WORK only — the server reported no runnable job for this tenant{also}"
+    else:
+        outcome = (
+            f"claimed {claimed} job(s): {accepted} accepted, {replayed} replayed, "
+            f"{rejected} rejected, {lease_lost} lease-lost, "
+            f"{bridge} bridge-failure(s), {unknown} unknown"
+        )
+
+    return (
+        f"claims={claims} claim-failures={failures} no-work={no_work} claimed={claimed} "
+        f"accepted={accepted} replayed={replayed} rejected={rejected} "
+        f"lease-lost={lease_lost} bridge-failures={bridge} unknown={unknown} "
+        f"— outcome: {outcome}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # The worker
 # ---------------------------------------------------------------------------
 
@@ -864,6 +932,9 @@ class OutboundInferenceWorker:
         # Stage 2 O2 reporting: fresh acceptances vs idempotent replays, kept
         # apart so a run log cannot claim more committed results than it made.
         self._last_run_stats: Dict[str, int] = {"accepted": 0, "replayed": 0}
+        # Claim-stage diagnostics: distinguishes an idle queue from a run that
+        # never got a claim answer at all (see ``format_run_report``).
+        self._last_run_report: Dict[str, int] = {key: 0 for key in RUN_REPORT_KEYS}
 
     # -- introspection ----------------------------------------------------
 
@@ -884,6 +955,16 @@ class OutboundInferenceWorker:
     def last_run_stats(self) -> Dict[str, int]:
         """``{accepted, replayed}`` from the last ``run_forever`` (Stage 2 O2)."""
         return dict(self._last_run_stats)
+
+    @property
+    def last_run_report(self) -> Dict[str, int]:
+        """The claim/processing counters behind the last ``run_forever``.
+
+        Unlike :attr:`last_run_stats` (a Stage 2 O2 contract other code reads),
+        this is diagnostic: it says whether the run saw NO_WORK, whether its
+        claims failed, and what happened to the jobs it did claim.
+        """
+        return dict(self._last_run_report)
 
     # -- secret hygiene ---------------------------------------------------
 
@@ -957,8 +1038,18 @@ class OutboundInferenceWorker:
             raise ApiError(status, error_code_of(response) or "UNAUTHORIZED",
                            "the API rejected this tenant key", retryable=False)
         if status == 503:
-            raise ApiError(status, error_code_of(response) or "ASYNC_UNAVAILABLE",
-                           "the durable store is unavailable", retryable=True)
+            # Two different 503s reach here: the admission guard refusing the
+            # request because metering is unreachable (METERING_UNAVAILABLE),
+            # and the queue's own store being down (ASYNC_UNAVAILABLE). The
+            # status and the code are unchanged; only the human message stops
+            # blaming the durable store when the store was never asked.
+            claim_code = error_code_of(response) or "ASYNC_UNAVAILABLE"
+            claim_reason = (
+                "the metering/admission boundary is unavailable; no claim outcome"
+                if claim_code == "METERING_UNAVAILABLE"
+                else "the durable store is unavailable"
+            )
+            raise ApiError(status, claim_code, claim_reason, retryable=True)
         if status != 200:
             raise ApiError(status, error_code_of(response) or "UNEXPECTED_STATUS",
                            _response_text(response)[:200], retryable=status >= 500)
@@ -1481,45 +1572,63 @@ class OutboundInferenceWorker:
         completed = 0
         replayed = 0
         polls = 0
+        # Fresh counters, assigned BEFORE the loop so an abnormal exit still
+        # reports exactly how far the run got. Mutated in place.
+        report = self._last_run_report = {key: 0 for key in RUN_REPORT_KEYS}
         backoff = float(self._config.poll_interval_s)
         while not self._stop_event.is_set():
             if max_polls is not None and polls >= max_polls:
                 break
             polls += 1
+            report["claims"] += 1
             try:
                 claim = self.claim()
             except ApiError as exc:
                 if not exc.retryable:
                     raise
-                logger.warning("claim failed (retryable): %s", exc)
+                report["claim_failures"] += 1
+                logger.warning("claim attempt %d failed (retryable): %s", report["claims"], exc)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
             except TransportError as exc:
-                logger.warning("claim transport failure: %s", exc)
+                report["claim_failures"] += 1
+                logger.warning("claim attempt %d transport failure: %s", report["claims"], exc)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
 
             backoff = float(self._config.poll_interval_s)
             if claim.no_work or claim.job is None:
+                # Logged at INFO: an idle queue is normal, but it must be
+                # OBSERVABLE. Without this line a NO_WORK run and a run whose
+                # every claim was refused produce byte-identical output.
+                report["no_work"] += 1
+                logger.info(
+                    "claim %d: NO_WORK (no runnable job for this tenant); next poll in %.2fs",
+                    report["claims"], claim.retry_after_seconds,
+                )
                 self._sleep(claim.retry_after_seconds)
                 continue
 
             job = claim.job
+            report["claimed"] += 1
             try:
                 envelope = self.process_job(job)
             except LeaseLost as exc:
                 # Expected under contention: the job will be reclaimed by
                 # whoever holds the lease now. Nothing was committed here.
+                report["lease_lost"] += 1
                 logger.info("job %s: lease lost, discarding candidate (%s)", job.job_id, exc)
                 continue
             except BridgeUnavailableError as exc:
+                report["bridge_failures"] += 1
                 logger.warning("job %s: local bridge unavailable (%s)", job.job_id, exc)
                 continue
             except BridgeResponseError as exc:
                 # Fail closed: a malformed/oversized candidate is NEVER
                 # submitted. The lease expires and the job is reclaimed.
+                report["bridge_failures"] += 1
                 logger.warning("job %s: unusable bridge response, nothing submitted (%s)", job.job_id, exc)
                 continue
             except ApiError as exc:
@@ -1529,6 +1638,7 @@ class OutboundInferenceWorker:
                 # serving, so the worker moves on to the next claim. Only the
                 # CLAIM stage treats a non-retryable ApiError as fatal, because a
                 # bad credential must not spin in a hot loop.
+                report["rejected"] += 1
                 logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
                 continue
             except TransportError as exc:
@@ -1543,11 +1653,13 @@ class OutboundInferenceWorker:
                     "job %s: submission outcome UNKNOWN (transport failure); "
                     "not counted as accepted (%s)", job.job_id, exc,
                 )
+                report["unknown"] += 1
                 continue
             except MalformedResponseError as exc:
                 # A 200 we cannot interpret (bad envelope or undefined replay
                 # marker) is not evidence of acceptance either. The candidate is
                 # never resubmitted at this generation.
+                report["unknown"] += 1
                 logger.warning(
                     "job %s: submission response unusable; outcome not claimed (%s)",
                     job.job_id, exc,
@@ -1557,12 +1669,14 @@ class OutboundInferenceWorker:
             # The server decides; this only reports what it said.
             if envelope.replayed:
                 replayed += 1
+                report["replayed"] += 1
                 logger.info(
                     "job %s: result REPLAYED (an authoritative result already existed; "
                     "this candidate was not committed)", job.job_id,
                 )
             else:
                 completed += 1
+                report["accepted"] += 1
                 logger.info("job %s: result ACCEPTED (fresh fenced commit)", job.job_id)
             if on_result is not None:
                 on_result(job, envelope)
@@ -1705,6 +1819,10 @@ def main(argv: Optional[list] = None) -> int:
         print("interrupted; stopped cleanly", file=sys.stderr)
         return 130
     print(f"worker stopped; {completed} job(s) submitted and accepted")
+    # The count alone cannot say WHY it is zero: an idle queue, a run whose
+    # claims were all refused, and a run that could not commit all print the
+    # line above. This second line is what distinguishes them.
+    print(f"  run report: {format_run_report(worker.last_run_report)}")
     return 0
 
 
