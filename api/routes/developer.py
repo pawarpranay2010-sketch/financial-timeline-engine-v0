@@ -75,7 +75,7 @@ import secrets
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -584,18 +584,38 @@ def health_v1() -> DeveloperHealthResponse:
     )
 
 
-@router.get("/v1/ready", response_model=DeveloperReadyResponse)
-def ready_v1(request: Request) -> DeveloperReadyResponse:
+@router.get(
+    "/v1/ready",
+    response_model=DeveloperReadyResponse,
+    responses={
+        503: {
+            "model": DeveloperReadyResponse,
+            "description": (
+                "A required dependency is unavailable, failed its bounded "
+                "availability check, or exceeded its readiness deadline. The "
+                "body is the usual readiness envelope with status=not_ready "
+                "and a reason."
+            ),
+        }
+    },
+)
+def ready_v1(request: Request, response: Response) -> DeveloperReadyResponse:
     """
     Readiness: required runtime dependencies are available enough to
     process a request.
 
-    Reports provider readiness through the public interface's status view
-    (which by contract never loads the model) plus the configured rule
-    pack summary. A cold provider that is loadable counts as ready (the
-    first request may pay the load cost); a hard provider failure or an
-    invalid server configuration reports not_ready with a reason — never
-    hidden.
+    HTTP CONTRACT (readiness deadline follow-up, 2026-10-20): the status code
+    IS the readiness verdict. ``200`` only when a required dependency passed a
+    real bounded availability check; ``503`` when the metering store is
+    unreachable, failed its probe, or exceeded its deadline. Previously this
+    route answered ``200`` with ``status: "not_ready"`` in the body, which a
+    status-code-driven orchestrator cannot gate on — the deployment would have
+    looked healthy while refusing every metered request.
+
+    The body shape is unchanged in both cases, so existing consumers that read
+    ``status``/``reason``/``admission`` keep working.
+
+    ``/v1/health`` remains pure liveness and never touches PostgreSQL.
     """
     started = time.perf_counter()
     try:
@@ -604,6 +624,7 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
         logger.error(
             "developer client construction failed: %s", type(exc).__name__
         )
+        response.status_code = 503
         return DeveloperReadyResponse(
             status="not_ready",
             api_version=API_VERSION,
@@ -617,21 +638,33 @@ def ready_v1(request: Request) -> DeveloperReadyResponse:
 
     # Phase 5I: readiness covers the ADMISSION stack, not just the model.
     # A deployment is admission-ready when a real credential boundary is
-    # configured (Phase 15 shared key OR Phase 16 metering) and the
-    # metering store behind it is reachable. Zero-config open mode is a
-    # valid local-development state but is reported honestly as not
-    # production-ready. The block contains configuration booleans only —
-    # never key material, tokens, or connection strings.
+    # configured (Phase 15 shared key OR Phase 16 metering) and, WHEN a
+    # metering store backs that boundary, the store is reachable. A
+    # Phase-15-only deployment has no store behind it, so it is ready
+    # without one (readiness correctness fix, 2026-10-25). Zero-config
+    # open mode is a valid local-development state but is reported honestly
+    # as not production-ready. The block contains configuration booleans
+    # only — never key material, tokens, or connection strings.
     admission = admission_boundary.readiness_block()["admission"]
     ready = provider_ready and admission["production_ready"]
     reason = None
     if not ready:
         if not provider_ready:
             reason = str(provider_status.get("reason") or "provider not available")
-        elif not admission_boundary.phase15_key_configured() and not admission_boundary.metering_configured():
-            reason = "admission not configured: no PLATRIXA_DEV_API_KEY and no metering store (zero-config open mode)"
-        else:
+        elif admission_boundary.metering_configured():
+            # Only this branch may name the store: it is configured AND its
+            # probe did not pass. P3 — a store this deployment never
+            # configured is never described as unreachable.
             reason = "metering store unreachable"
+        else:
+            # No store exists to blame: zero-config open mode has no
+            # credential boundary at all. (Phase-15-only is admission-ready
+            # by construction, so it cannot reach this branch.)
+            reason = "admission not configured: no PLATRIXA_DEV_API_KEY and no metering store (zero-config open mode)"
+
+    # The status code must agree with the body: a not_ready body on a 200 would
+    # let an orchestrator route traffic to a deployment that cannot serve it.
+    response.status_code = 200 if ready else 503
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     _log(
