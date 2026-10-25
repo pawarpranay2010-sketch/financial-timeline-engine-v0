@@ -51,6 +51,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -184,7 +186,17 @@ def admit(
             return ADMIT_MISSING_KEY, None
         try:
             reason, ctx = metered_gate.authorize_units(provided, units)
-        except Exception:  # defensive: authorize_units already maps, belt+braces
+        except Exception as exc:  # defensive: authorize_units already maps, belt+braces
+            # authorize_units logs every failure IT maps and does not raise
+            # for those, so an exception arriving here is one no layer has
+            # logged yet: recording it once keeps "one line per refused
+            # request" true for this branch too. Same redaction rules —
+            # fixed reason code + allow-listed cause class name only.
+            logger.warning(
+                "admission reserve refused: reason=%s cause=%s",
+                ADMIT_METERING_UNAVAILABLE,
+                metered_gate._safe_cause_name(exc),
+            )
             return ADMIT_METERING_UNAVAILABLE, None
         if reason != metered_gate.REASON_OK or ctx is None:
             return reason, None
@@ -245,7 +257,19 @@ def authenticate_only(
             return ADMIT_MISSING_KEY, None
         try:
             reason, ctx = metered_gate.resolve_tenant(provided)
-        except metered_gate.MeteredGateError:
+        except metered_gate.MeteredGateError as exc:
+            # The AUTHENTICATION half of admission used to refuse
+            # SILENTLY: the route answered 503 and no layer named the
+            # reason. Exactly one line per refused request is written HERE
+            # — resolve_tenant does not log, and the route layer only maps
+            # this reason to HTTP — so the request is never logged twice.
+            # Fixed reason code + allow-listed cause class name only;
+            # never the exception message — P1, 2026-10-25.
+            logger.warning(
+                "admission authentication refused: reason=%s cause=%s",
+                ADMIT_METERING_UNAVAILABLE,
+                metered_gate._safe_cause_name(exc),
+            )
             return ADMIT_METERING_UNAVAILABLE, None
         if reason != metered_gate.REASON_OK or ctx is None:
             return reason, None
@@ -268,25 +292,125 @@ def authenticate_only(
 # Production admission readiness (/v1/ready consumption; no secrets here)
 # ---------------------------------------------------------------------------
 
+# Readiness probe caching (NEGATIVE ONLY — failures, never successes).
+#
+# Rationale (readiness deadline follow-up, 2026-10-20): a cached success is a
+# readiness false-positive by construction — it reports a dependency as usable
+# when the probe that proved it has already expired. No TTL makes that
+# acceptable, so the cache stores FAILURES ONLY. Consequences, both intended:
+#   * every ``ready`` verdict is backed by a probe that ran for THIS call;
+#   * during an outage the (slow, bounded) probe runs at most once per TTL,
+#     so a polling orchestrator cannot turn a dead store into a stampede;
+#   * a recovered store is reported ready on the next call (no stale failure
+#     beyond the TTL, and no waiting for a success entry to expire at all).
+# The failure-cache TTL is 2s by default, capped at 30s, 0 disables it.
+READINESS_CACHE_TTL_ENV_VAR = "PLATRIXA_READINESS_CACHE_TTL_SECONDS"
+DEFAULT_READINESS_CACHE_TTL_SECONDS = 2.0
+MAX_READINESS_CACHE_TTL_SECONDS = 30.0
+
+_readiness_cache: dict = {}
+_readiness_cache_lock = threading.Lock()
+
+
+def _readiness_ttl_seconds() -> float:
+    """Effective readiness cache TTL in seconds (0 disables caching)."""
+    raw = (os.getenv(READINESS_CACHE_TTL_ENV_VAR, "") or "").strip()
+    if not raw:
+        return DEFAULT_READINESS_CACHE_TTL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "invalid %s=%r; using default %.1fs",
+            READINESS_CACHE_TTL_ENV_VAR,
+            raw[:20],
+            DEFAULT_READINESS_CACHE_TTL_SECONDS,
+        )
+        return DEFAULT_READINESS_CACHE_TTL_SECONDS
+    if value <= 0:
+        return 0.0
+    return min(value, MAX_READINESS_CACHE_TTL_SECONDS)
+
+
+def reset_readiness_cache() -> None:
+    """Discard cached readiness verdicts (tests; operator reassessment)."""
+    with _readiness_cache_lock:
+        _readiness_cache.clear()
+
+
+def store_reachable() -> bool:
+    """Whether the metering store answers RIGHT NOW (bounded, negative-cached).
+
+    A real, bounded probe: configuration alone is never treated as
+    availability, and a cached FAILURE can never become a success. Metering not
+    configured → False (there is nothing to reach). Never raises — an
+    unreachable store is a fact to report, not an error.
+    """
+    # Keyed by URL (empty when unset) so a changed configuration can never
+    # reuse the previous store's verdict.
+    key = metered_gate._metering_database_url() or ""
+    ttl = _readiness_ttl_seconds()
+    now = time.monotonic()
+
+    if ttl > 0:
+        with _readiness_cache_lock:
+            cached = _readiness_cache.get(key)
+            if cached is not None and cached[0] > now:
+                # Only failures are ever stored, so this is at worst a bounded
+                # false negative (fail closed) — never a false "ready".
+                return cached[1]
+
+    try:
+        metered_gate.probe_store()
+        ok = True
+    except Exception:
+        # MeteredGateError or anything else the driver raised: unavailable.
+        ok = False
+
+    # A success is deliberately NOT cached: serving it to a later caller would
+    # report a dependency as ready on evidence that has already expired.
+    if ttl > 0 and not ok:
+        with _readiness_cache_lock:
+            _readiness_cache[key] = (now + ttl, False)
+    return ok
+
 
 def readiness_block() -> dict:
     """Admission-stack readiness facts. Contains NO secret material.
 
-    Reports configuration booleans and coarse store availability. The
-    database URL itself, key values, and tokens are NEVER included.
-    ``production_ready`` is the single boolean an orchestrator can gate
-    on: a deployment is admission-ready when a real credential boundary
-    exists (Phase 15 OR Phase 16) and the metering store behind it is
-    reachable.
+    Reports configuration booleans and REAL store availability. The database
+    URL itself, key values, and tokens are NEVER included.
+    ``production_ready`` is the single boolean an orchestrator can gate on: a
+    deployment is admission-ready when a real credential boundary exists —
+
+      * Phase 15 shared key ONLY → ready: the boundary is the key itself and
+        there is no store behind it to probe (readiness correctness fix,
+        2026-10-25 — this state used to answer 503 while blaming a metering
+        store the deployment never configured);
+      * Phase 16 metering (with or without a Phase 15 key) → ready only when
+        the configured store answers a bounded ``SELECT 1``
+        (see :func:`store_reachable`);
+      * neither → never production-ready: zero-config open mode has no
+        credential boundary at all (documented Phase 13 contract, unchanged).
+
+    Availability is measured, not inferred: constructing an Engine was the old
+    check, and it is satisfied by an unreachable database (readiness fix,
+    2026-10-20).
     """
     mode = admission_mode()
     store_ok: Optional[bool] = None
     if metering_configured():
-        try:
-            metered_gate._session_factory()
-            store_ok = True
-        except Exception:
-            store_ok = False
+        store_ok = store_reachable()
+
+    # Readiness REPORTING only — admit() still enforces exactly the boundary
+    # that is configured, so no authentication or quota policy changes here.
+    if phase15_key_configured() and not metering_configured():
+        production_ready = True
+    elif metering_configured():
+        production_ready = store_ok is True
+    else:
+        production_ready = False
+
     return {
         "admission": {
             "mode": mode,
@@ -296,9 +420,6 @@ def readiness_block() -> dict:
             "idempotency_supported": metering_configured(),
             "async_documents_supported": metering_configured(),
             "quota_enforced": mode in {"phase15-shared-key", "metered-tenants"},
-            "production_ready": (
-                metering_configured()
-                and store_ok is True
-            ),
+            "production_ready": production_ready,
         }
     }
