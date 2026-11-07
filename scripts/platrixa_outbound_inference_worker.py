@@ -1434,8 +1434,17 @@ class OutboundInferenceWorker:
         if content is None or not content.strip():
             raise BridgeResponseError("model returned empty or missing completion text")
         finish = first.get("finish_reason")
-        finish_reason = finish if isinstance(finish, str) and finish else None
-        return content, finish_reason
+        if not isinstance(finish, str) or not finish:
+            raise BridgeResponseError(
+                "model response has a missing, null, or empty finish_reason; "
+                "completion cannot be established (fail closed)"
+            )
+        if finish not in ("stop", "length"):
+            raise BridgeResponseError(
+                f"model response has an unrecognized finish_reason {finish!r}; "
+                "completion cannot be established (fail closed)"
+            )
+        return content, finish
 
     def _collect_model_stream(self, text: str) -> Tuple[str, Optional[str]]:
         """Collect streamed chunks; parse ONLY after [DONE]. Incomplete → fail closed."""
@@ -1480,6 +1489,16 @@ class OutboundInferenceWorker:
         content = "".join(pieces)
         if not content.strip():
             raise BridgeResponseError("streamed model output was empty")
+        if finish_reason is None:
+            raise BridgeResponseError(
+                "model stream completed without a finish_reason; "
+                "completion cannot be established (fail closed)"
+            )
+        if finish_reason not in ("stop", "length"):
+            raise BridgeResponseError(
+                f"model stream has an unrecognized finish_reason {finish_reason!r}; "
+                "completion cannot be established (fail closed)"
+            )
         return content, finish_reason
 
     def _decode_bridge_body(self, response: Any) -> Dict[str, Any]:
@@ -1691,13 +1710,22 @@ class OutboundInferenceWorker:
                 continue
             except ApiError as exc:
                 # A SUBMISSION-stage rejection is the server's decision about this
-                # one job: 4xx means the candidate was processed and refused (the
-                # job is terminal), 5xx is retryable. Neither is a reason to stop
-                # serving, so the worker moves on to the next claim. Only the
-                # CLAIM stage treats a non-retryable ApiError as fatal, because a
-                # bad credential must not spin in a hot loop.
-                report["rejected"] += 1
-                logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
+                # one job. A terminal (non-retryable) 4xx refusal means the
+                # candidate was processed and refused — the job is finished, so it
+                # is counted as rejected. A retryable 5xx (e.g. 503) means the
+                # server could not validate the submission and the commit outcome
+                # is not established: that is ambiguous (unknown), never a
+                # terminal rejection. Neither is a reason to stop serving; only the
+                # CLAIM stage treats a non-retryable ApiError as fatal.
+                if exc.retryable:
+                    report["unknown"] += 1
+                    logger.warning(
+                        "job %s: submission outcome UNKNOWN (retryable server error); "
+                        "not counted as rejected (%s)", job.job_id, exc,
+                    )
+                else:
+                    report["rejected"] += 1
+                    logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
                 continue
             except TransportError as exc:
                 # Stage 2 O2: the submission may or may not have reached the
@@ -1728,6 +1756,7 @@ class OutboundInferenceWorker:
             if envelope.replayed:
                 replayed += 1
                 report["replayed"] += 1
+                self._last_run_stats = {"accepted": completed, "replayed": replayed}
                 logger.info(
                     "job %s: result REPLAYED (an authoritative result already existed; "
                     "this candidate was not committed)", job.job_id,
@@ -1735,7 +1764,12 @@ class OutboundInferenceWorker:
             else:
                 completed += 1
                 report["accepted"] += 1
+                self._last_run_stats = {"accepted": completed, "replayed": replayed}
                 logger.info("job %s: result ACCEPTED (fresh fenced commit)", job.job_id)
+            # Record the confirmed submission outcome BEFORE invoking the callback:
+            # if the callback raises after the server accepted the result, the
+            # committed-result statistics must already reflect the server's
+            # decision (P-C). The callback's exception still propagates.
             if on_result is not None:
                 on_result(job, envelope)
         self._last_run_stats = {"accepted": completed, "replayed": replayed}
