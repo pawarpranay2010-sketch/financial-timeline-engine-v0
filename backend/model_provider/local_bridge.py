@@ -420,18 +420,30 @@ def device_reported_model_identity(body: Any) -> Tuple[str, str]:
     in the evidence chain. Only string fields the device actually reported are
     used; anything absent or empty becomes ``PROVENANCE_UNKNOWN`` — no pinned
     production revision is ever borrowed for an unverified artifact.
+
+    ``model_id`` is ``model.model`` when the device reported one (the id its
+    endpoint actually served), falling back to ``model.provider`` for older
+    bodies that only carried a provider label.
     """
     if not isinstance(body, dict):
         return DEFAULT_BRIDGE_MODEL_ID, PROVENANCE_UNKNOWN
     info = body.get("model")
     if not isinstance(info, dict):
         return DEFAULT_BRIDGE_MODEL_ID, PROVENANCE_UNKNOWN
+    # ``model`` is the identifier the endpoint actually served; ``provider`` is
+    # the software that served it (e.g. android-llama-server). Recording the
+    # provider AS the model id — the previous behaviour — both lost the real
+    # model and mislabelled it in the evidence chain, so the model id is now
+    # preferred and the provider is only a legacy fallback for bodies that
+    # never carried one.
     provider = info.get("provider")
-    model_id = (
-        provider.strip()
-        if isinstance(provider, str) and provider.strip()
-        else DEFAULT_BRIDGE_MODEL_ID
-    )
+    served = info.get("model")
+    if isinstance(served, str) and served.strip():
+        model_id = served.strip()
+    elif isinstance(provider, str) and provider.strip():
+        model_id = provider.strip()
+    else:
+        model_id = DEFAULT_BRIDGE_MODEL_ID
     for key in ("artifact_identity", "adapter_revision", "adapter_loaded"):
         value = info.get(key)
         if isinstance(value, str) and value.strip():

@@ -836,12 +836,54 @@ quota unit is reserved at submission. Rejections: `400 ASYNC_NOT_CONFIGURED`
 ```
 
 `status` is `PROCESSING` while queued/running, then the REAL engine
-outcome (`VERIFIED` / `REVIEW_REQUIRED` / `UNSUPPORTED_TRANSACTION`) or
-`FAILED`. **Completion is not VERIFIED** — completion only means the
-pipeline finished. For FAILED jobs `retryable` is `true` only for
-infrastructure conditions (provider down, worker restart), with the
-deterministic `code` in `reason_codes` (`PROVIDER_UNAVAILABLE`,
-`INPUT_INVALID`, `JOB_FAILED`).
+outcome (`VERIFIED` / `REVIEW_REQUIRED` / `UNSUPPORTED_TRANSACTION`),
+`RETRY_WAIT` while a retry is pending, or terminal `FAILED`.
+**Completion is not VERIFIED** — completion only means the pipeline
+finished. For FAILED jobs `retryable` is `true` only for infrastructure
+conditions (provider down, worker restart), with the deterministic `code`
+in `reason_codes` (`PROVIDER_UNAVAILABLE`, `INPUT_INVALID`, `JOB_FAILED`).
+
+#### `RETRY_WAIT` — a retry is scheduled
+
+A retryable failure does not end the job (see *Durability & restarts*
+below). While the queue waits for the backoff gate before the next
+attempt, the poll reports:
+
+```json
+{
+  "status": "RETRY_WAIT",
+  "status_label": "Processing",
+  "retryable": true,
+  "reason_codes": ["MODEL_UNAVAILABLE"]
+}
+```
+
+- **`RETRY_WAIT` is non-terminal.** The job is still in flight and will be
+  handed to a worker again; it is not a verdict about the request.
+- **`retryable: true`** means another attempt is already scheduled. There is
+  nothing for the caller to do: resubmitting creates a separate job (unless
+  the original `Idempotency-Key` is reused), which does not advance this one.
+- **`reason_codes`** carries the stored failure classification, so the cause
+  is visible while the retry is pending (`MODEL_UNAVAILABLE`,
+  `PROVIDER_UNAVAILABLE`, `METERING_UNAVAILABLE`, `ASYNC_UNAVAILABLE`,
+  `INTERNAL_ERROR`, `RESULT_PENDING`). A code outside that infrastructure set
+  is not retried: the job goes straight to `FAILED`.
+- **The six-state public mapping is unchanged.** A retrying job is still
+  `PROCESSING` there, which is why `status_label` stays `Processing` rather
+  than naming a failure.
+- **`FAILED` remains reserved for terminal failure** — the request was
+  rejected, or the attempt budget was exhausted (an abandoned lease is
+  terminalised with `LEASE_EXHAUSTED`). `FAILED` never means "will try
+  again", and `retryable: true` on a `FAILED` job describes the failure's
+  nature, not a scheduled attempt.
+- The job becomes eligible for another attempt once its backoff gate elapses,
+  and `updated_at` moves when the failure is recorded.
+
+Clients must not treat `RETRY_WAIT` as a completed job — there is no result
+(`GET /v1/results/{result_id}` answers `404 RESULT_NOT_READY`) — and must
+not treat it as a permanently failed one: do not page on it, do not submit
+the same input again to force progress, do not mark the document failed.
+Keep polling, or wait for the terminal event when webhooks are configured.
 
 Each job is executed under a **worker lease** carrying an owner and a
 fencing token. Only the worker currently holding the lease can publish a

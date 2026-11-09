@@ -368,8 +368,12 @@ def section_d(engine) -> None:
     c = _client(stub)
     b = c.post("/v1/documents", json={"raw_input": "provider down Rs. 10", "source_name": "p.txt"}, headers=K).json()
     job = wait_for_job(c, "k-81d", b["job_id"])
-    check("D3 provider failure → FAILED job, retryable=true, PROVIDER_UNAVAILABLE code",
-          job["status"] == "FAILED" and job["retryable"] is True and job["reason_codes"] == ["PROVIDER_UNAVAILABLE"],
+    # A retryable provider failure is NOT terminal: the row is RETRY_WAIT with a
+    # backoff gate, so the poll must not report FAILED (which told an operator a
+    # self-healing job was dead). Terminal failures still report FAILED.
+    check("D3 provider failure → RETRY_WAIT, retryable=true, PROVIDER_UNAVAILABLE code",
+          job["status"] == "RETRY_WAIT" and job["retryable"] is True
+          and job["reason_codes"] == ["PROVIDER_UNAVAILABLE"],
           str(job)[:150])
 
     # Invalid document type is rejected at SUBMISSION (415), not at process time

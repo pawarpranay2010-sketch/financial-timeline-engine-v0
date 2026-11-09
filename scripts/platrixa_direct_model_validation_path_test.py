@@ -381,9 +381,11 @@ def test_model_cannot_declare_itself_verified() -> None:
     assert evidence.model_identity["provider_revision"] == "PROVENANCE_UNKNOWN", (
         "the device GGUF provenance must stay unknown; it may not be borrowed"
     )
-    # The route reads identity from the body's own ``model`` block, so the id is
-    # the provider string android-llama-server reported — never a pinned name.
-    assert evidence.model_identity["model_id"] == "android-llama-server"
+    # The route reads identity from the body's own ``model`` block. ``model`` is
+    # the id the endpoint served (the worker's configured id, "default" here) and
+    # ``provider`` is the software that served it; recording the provider AS the
+    # model id — the previous behaviour — lost the real model and mislabelled it.
+    assert evidence.model_identity["model_id"] == "default", evidence.model_identity
 
 
 # ---------------------------------------------------------------------------
