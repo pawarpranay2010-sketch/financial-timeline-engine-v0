@@ -1418,6 +1418,82 @@ def fail_job(
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
+LEASE_EXHAUSTED_CODE = "LEASE_EXHAUSTED"
+
+
+def fail_exhausted_leases(*, tenant_id: str, kind: str) -> int:
+    """Terminalise jobs that no worker can ever claim again — bounded sweep.
+
+    THE DEFECT THIS CLOSES: ``claim_next_job`` requires
+    ``attempt_count < max_attempts``, so a job that has been claimed
+    ``max_attempts`` times and then loses its lease (crashed worker, killed
+    device, an un-reported model failure) satisfies NEITHER "claimable" NOR
+    "COMPLETED". Nothing else ever writes to it, so it stays in ``PROCESSING``
+    forever — the job is silently lost and the queue looks stalled.
+
+    This sweep makes the terminal state reachable: any PROCESSING job whose lease
+    has expired AND whose retry budget is spent becomes terminal ``FAILED`` with
+    an explanatory envelope. It is:
+
+      * TENANT- and KIND-scoped, so a claim never writes another tenant's rows;
+      * expiry-gated, so a live worker's job is never touched;
+      * budget-gated, so a job that can still be reclaimed is left alone;
+      * idempotent — a job already terminal is not matched again by ``status``.
+
+    Deliberately NOT a global reaper process: it runs opportunistically on the
+    claim path, which is the only place a stuck job matters, and needs no new
+    scheduler or background thread.
+
+    Returns the number of jobs terminalised.
+    """
+    import json as _json
+
+    from api.status import STATUS_FAILED
+
+    envelope = {
+        "api_version": "v1",
+        "error": {
+            "code": LEASE_EXHAUSTED_CODE,
+            "message": (
+                "the job was claimed the maximum number of times and every attempt "
+                "ended without a result or a failure report"
+            ),
+            "api_status": STATUS_FAILED,
+            "retryable": False,
+        },
+    }
+    try:
+        from sqlalchemy import text
+
+        SessionLocal = _session_factory()
+        with SessionLocal() as session:
+            with session.begin():
+                result = session.execute(
+                    text(
+                        "UPDATE platrixa_async_jobs SET "
+                        "status = 'FAILED', error_json = :res, http_status = 400, "
+                        "retryable = false, next_attempt_at = NULL, "
+                        "lease_expires_at = NULL, lease_owner = NULL, updated_at = now() "
+                        "WHERE tenant_id = :t AND kind = :k AND status = 'PROCESSING' "
+                        "  AND attempt_count >= max_attempts "
+                        "  AND (lease_expires_at IS NULL OR lease_expires_at < now())"
+                    ),
+                    {"res": _json.dumps(envelope, ensure_ascii=False), "t": tenant_id, "k": kind},
+                )
+                count = int(result.rowcount or 0)
+                if count:
+                    logger.warning(
+                        "async job sweep: %d exhausted job(s) terminalised for tenant %s",
+                        count, str(tenant_id)[:14],
+                    )
+                return count
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("async job sweep failed: %s", type(exc).__name__)
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+
 def release_job(
     job_id: str,
     *,

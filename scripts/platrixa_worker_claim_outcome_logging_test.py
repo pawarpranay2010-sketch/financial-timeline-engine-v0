@@ -262,6 +262,11 @@ def _job_handler(result_response):
             return FakeResponse(200, renewal_body())
         if url.endswith("/result"):
             return result_response()
+        if url.endswith("/failure"):
+            # The reliability repair adds a fenced failure-report route: a
+            # candidate that was never produced is reported, so the server can
+            # move the job out of PROCESSING instead of stranding it.
+            return FakeResponse(200, {"api_version": "v1", "status": "RETRY_WAIT", "retryable": True})
         raise AssertionError(f"unexpected API call: {url}")
 
     return handler
@@ -315,8 +320,13 @@ def test_unavailable_bridge_is_counted_as_a_bridge_failure() -> None:
     assert report["claimed"] == 1, report
     assert report["bridge_failures"] == 1, report
     assert report["accepted"] == 0 and report["rejected"] == 0, report
+    # The failure is reported (not merely logged): the server can now move the
+    # job to RETRY_WAIT/FAILED instead of leaving it in PROCESSING.
+    assert report["failures_reported"] == 1, report
+    assert report["failure_report_failures"] == 0, report
     text = format_run_report(report)
     assert "1 bridge-failure(s)" in text, text
+    assert "1 failure(s) reported" in text, text
     assert "NO_WORK only" not in text, text
 
 

@@ -475,6 +475,16 @@ async def claim_inference_job(request: Request) -> JSONResponse:
         return _async_not_ready("ASYNC_UNAVAILABLE", None, "async store unavailable")
 
     owner = _claim_owner(request)
+    # Opportunistic sweep: a job whose retry budget is spent and whose lease has
+    # lapsed can never be claimed again, so without this it would sit in
+    # PROCESSING forever. Tenant-scoped, expiry-gated and budget-gated; a store
+    # failure here is not fatal because the claim below reports it honestly.
+    try:
+        async_jobs.fail_exhausted_leases(
+            tenant_id=tenant, kind=async_jobs.JOB_KIND_INFERENCE
+        )
+    except async_jobs.AsyncStoreUnavailableError:
+        logger.warning("inference claim: exhausted-lease sweep skipped (store unavailable)")
     # Inference lease: configurable, provisional engineering default (see
     # async_jobs.inference_lease_seconds). The worker heartbeats while its
     # device model runs, and a lost lease can never commit.
@@ -976,6 +986,235 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
         error=None,
     )
     return JSONResponse(status_code=transport_status, content=content)
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/worker/jobs/{job_id}/failure — worker reports an unusable generation
+# ---------------------------------------------------------------------------
+
+
+# The ONLY failure codes a worker may report. Every one already exists in the
+# server's vocabulary (backend/auth/async_jobs.py PERMANENT/RETRYABLE sets), so
+# `classify_failure` — not the caller — decides retryability. An unknown code is
+# a malformed request, never an invented failure class.
+WORKER_REPORTABLE_FAILURE_CODES = frozenset({
+    "MODEL_UNAVAILABLE",
+    "PROVIDER_UNAVAILABLE",
+    "INTERNAL_ERROR",
+    "VALIDATION_FAILED",
+    "UNAUTHORIZED",
+    "REQUEST_MALFORMED",
+})
+
+MAX_FAILURE_MESSAGE_CHARS = 200
+
+
+@router.post(
+    "/v1/worker/jobs/{job_id}/failure",
+    dependencies=[Depends(_tenant_api_key_guard)],
+    responses={
+        200: {"description": "The failure was recorded; the job is RETRY_WAIT (budget left) or FAILED (terminal)."},
+        400: {"description": "Malformed report (missing lease proof, or an unsupported failure code)."},
+        404: {"description": "JOB_NOT_FOUND — no such inference job for this tenant (non-disclosing)."},
+        409: {"description": "LEASE_LOST (stale/unproven worker, or the job already has an authoritative result) — nothing was written."},
+        503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
+    },
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "X-Platrixa-API-Key",
+                "in": "header",
+                "required": True,
+                "schema": {"type": "string"},
+                "description": "Tenant API key. Determines the tenant scope (never client-supplied).",
+            },
+        ],
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["lease", "error"],
+                        "properties": {
+                            "lease": {
+                                "type": "object",
+                                "required": ["owner", "generation"],
+                                "properties": {
+                                    "owner": {"type": "string", "maxLength": 128},
+                                    "generation": {"type": "integer", "minimum": 0},
+                                },
+                            },
+                            "error": {
+                                "type": "object",
+                                "required": ["code"],
+                                "properties": {
+                                    "code": {"type": "string", "maxLength": 64},
+                                    "message": {"type": "string", "maxLength": 200},
+                                },
+                            },
+                        },
+                    },
+                }
+            },
+        },
+    },
+)
+async def report_inference_failure(job_id: str, request: Request) -> JSONResponse:
+    """Record that THIS generation produced no submittable candidate.
+
+    Why this route exists: without it a failed model call leaves the job in
+    ``PROCESSING`` until its lease lapses, and once the attempt budget is spent
+    nothing can ever claim it again — the job is stranded permanently. This lets
+    the worker say so, and the server then applies its OWN existing policy:
+    ``classify_failure`` decides retryable vs permanent, and ``fail_job`` moves
+    the job to ``RETRY_WAIT`` (budget remaining, exponential backoff) or
+    terminal ``FAILED``.
+
+    What it can never do:
+
+      * write a result — ``result_json`` is untouched, no kernel runs, no
+        ``bridge_body`` is accepted, so a failed generation can never become an
+        authoritative outcome;
+      * touch a completed job — an existing authoritative result is a 409;
+      * act on a newer generation — the write is fenced on owner + generation;
+      * consume quota or metering;
+      * be steered by the caller on retryability — the client cannot send it.
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+
+    if not async_jobs.async_configured():
+        return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "this deployment has no durable async store configured")
+
+    ctype = (request.headers.get("content-type", "") or "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        return _error_response(
+            415, "CONTENT_TYPE_UNSUPPORTED", "failure reports must be application/json", request_id=rid
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response(400, "REQUEST_MALFORMED", "request body could not be parsed as JSON", request_id=rid)
+    if not isinstance(body, dict):
+        return _error_response(400, "REQUEST_MALFORMED", "request body must be a JSON object", request_id=rid)
+
+    proof = _lease_proof(body)
+    if proof is None:
+        return _error_response(400, "REQUEST_MALFORMED", "lease proof requires owner and generation", request_id=rid)
+    owner, generation = proof
+
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return _error_response(400, "REQUEST_MALFORMED", "error must be a JSON object", request_id=rid)
+    code = error.get("code")
+    if not isinstance(code, str) or code not in WORKER_REPORTABLE_FAILURE_CODES:
+        # An unsupported code is a contract error, not something to coerce.
+        return _error_response(
+            400,
+            "REQUEST_MALFORMED",
+            "error.code must be one of the supported worker failure codes",
+            request_id=rid,
+        )
+    raw_message = error.get("message")
+    # The worker's message is a DIAGNOSTIC, never authority: bounded, single-line,
+    # and stored only inside the error envelope (never in a result).
+    message = " ".join(str(raw_message or "").split())[:MAX_FAILURE_MESSAGE_CHARS]
+
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    try:
+        record = async_jobs.get_job(tenant, job_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    # Tenant- AND kind-scoped: foreign, nonexistent and document jobs are all the
+    # same non-disclosing 404.
+    if record is None or record.kind != async_jobs.JOB_KIND_INFERENCE:
+        return _error_response(404, "JOB_NOT_FOUND", "no such job for this tenant", request_id=rid)
+
+    # An authoritative result already exists: a failure report must never be able
+    # to sit beside it (or worse, replace its status).
+    if record.status == async_jobs.STATUS_COMPLETED:
+        return _error_response(
+            409, "LEASE_LOST", "the job already has an authoritative result", request_id=rid
+        )
+    if record.status != async_jobs.STATUS_PROCESSING:
+        # Already RETRY_WAIT / FAILED (e.g. a retried report): report the stored
+        # state instead of failing it a second time. Idempotent, not an error.
+        return JSONResponse(
+            status_code=200,
+            content={
+                "api_version": API_VERSION,
+                "job_id": job_id,
+                "status": record.status,
+                "retryable": bool(record.retryable),
+                "attempts": int(record.attempt_count or 0),
+                "max_attempts": int(record.max_attempts or 0),
+            },
+        )
+
+    if (record.lease_owner or "") != owner or int(record.lease_generation or 0) != generation:
+        return _error_response(
+            409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=rid
+        )
+
+    from api.status import public_status_for_error_code
+
+    api_status = public_status_for_error_code(code)
+    retryable = async_jobs.classify_failure(error_code=code, api_status=api_status)
+    envelope = {
+        "api_version": API_VERSION,
+        "error": {
+            "code": code,
+            "message": message or "the worker could not produce a submittable candidate",
+            "request_id": record.request_id,
+            "api_status": api_status,
+            "retryable": retryable,
+        },
+    }
+
+    try:
+        accepted = async_jobs.fail_job(
+            job_id,
+            envelope=envelope,
+            http_status=503 if retryable else 400,
+            retryable=retryable,
+            lease_owner=owner,
+            lease_generation=generation,
+        )
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; failure not recorded")
+    if not accepted:
+        # Fenced out (superseded generation, or the job left PROCESSING first).
+        return _error_response(
+            409, "LEASE_LOST", "the lease was lost before the failure was recorded", request_id=rid
+        )
+
+    # Mirrors fail_job's own branch so the answer names the state it just wrote.
+    status = (
+        async_jobs.STATUS_RETRY_WAIT
+        if retryable and int(record.attempt_count or 0) < int(record.max_attempts or 0)
+        else async_jobs.STATUS_FAILED
+    )
+    _log(
+        "/v1/inference-jobs(worker-failure)",
+        request_id=rid,
+        status=status,
+        duration_ms=0,
+        error=None,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "job_id": job_id,
+            "status": status,
+            "retryable": retryable,
+            "attempts": int(record.attempt_count or 0),
+            "max_attempts": int(record.max_attempts or 0),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
