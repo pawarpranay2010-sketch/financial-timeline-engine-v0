@@ -75,11 +75,37 @@ CONFIGURATION (all values overridable by flag or environment)
 Run:
     python scripts/platrixa_outbound_inference_worker.py --once
     python scripts/platrixa_outbound_inference_worker.py            # poll loop
+
+EXIT CODES (stable; automation may branch on them)
+==================================================
+    0    Run finished: no work, retryable failures exhausted, or results
+         accepted. Prints ``worker stopped; N job(s) submitted and accepted``
+         followed by the ``run report:`` line.
+    1    Unexpected crash: an uncaught error that is NOT a claim ``ApiError``.
+         Python prints the traceback and no run report is emitted. There is
+         deliberately no catch-all handler, so a real bug is never disguised
+         as an ordinary exit.
+    2    Configuration error (bad flag, URL, worker id, or missing key).
+         Prints ``worker configuration error: …`` on stderr and exits before
+         any network I/O.
+    3    FATAL claim rejection (``EXIT_FATAL_CLAIM``): a non-retryable
+         ``ApiError`` from the claim endpoint, e.g. HTTP 401/403. Prints ONE
+         bounded line — ``fatal claim error: HTTP <status> <code> (not
+         retryable; run stopped)`` — plus the ``run report:``, and never the
+         response body, request headers, API key, DSN or traceback.
+    130  Interrupted (Ctrl-C / SIGINT). Prints ``interrupted; stopped
+         cleanly`` after stopping the heartbeat and any in-flight work.
+
+Everything printed goes to stdout except the error/interrupt lines above,
+which go to stderr. The ``run report:`` line is the only reliable way to tell
+NO_WORK from a run whose every claim was refused.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
+import email.utils
 import ipaddress
 import json
 import logging
@@ -110,11 +136,40 @@ BRIDGE_KEY_HEADER = "X-Platrixa-Android-Bridge-Key"
 CLAIM_PATH = "/v1/worker/jobs/claim"
 RENEW_SUFFIX = "/lease"
 RESULT_SUFFIX = "/result"
+# Failure reporting: the worker tells the server that THIS generation could not
+# produce a submittable candidate. The route is fenced exactly like the result
+# route and reuses the server's existing failure vocabulary; see
+# PLATRIXA_WORKER_RELIABILITY_REPAIR_REPORT.md §9.
+FAILURE_SUFFIX = "/failure"
 
 STATUS_NO_WORK = "NO_WORK"
 STATUS_CLAIMED = "CLAIMED"
 CODE_LEASE_LOST = "LEASE_LOST"
 CODE_JOB_NOT_FOUND = "JOB_NOT_FOUND"
+
+# The server's failure-report outcome vocabulary (async_jobs statuses).
+STATUS_RETRY_WAIT = "RETRY_WAIT"
+STATUS_FAILED = "FAILED"
+FAILURE_OUTCOMES = (STATUS_RETRY_WAIT, STATUS_FAILED)
+
+# Reportable failure codes. Every one of these already exists in the server's
+# ``PERMANENT_ERROR_CODES`` / ``RETRYABLE_ERROR_CODES`` vocabulary, so the
+# server's own ``classify_failure`` decides retryability — the worker never
+# dictates whether a failure is worth retrying.
+FAILURE_CODE_MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"   # retryable: outcome unknown
+FAILURE_CODE_VALIDATION_FAILED = "VALIDATION_FAILED"   # permanent: candidate unusable
+FAILURE_CODE_INTERNAL_ERROR = "INTERNAL_ERROR"         # retryable: unexpected worker fault
+FAILURE_CODE_UNAUTHORIZED = "UNAUTHORIZED"             # permanent: model credential refused
+FAILURE_CODE_REQUEST_MALFORMED = "REQUEST_MALFORMED"   # permanent: endpoint refused the shape
+
+# HTTP statuses the model path distinguishes (RFC 9110).
+HTTP_429_RATE_LIMITED = 429
+HTTP_AUTH_REJECTED = (401, 403)
+HTTP_REQUEST_REFUSED = (400, 404, 422)
+
+# Bounded default when the provider sends no usable Retry-After.
+DEFAULT_RATE_LIMIT_FALLBACK_S = 5.0
+RETRY_AFTER_MAX_HEADER_S = 86_400.0  # a header beyond a day is not credible
 
 # The server's idempotent-replay marker on the RESULT route. It is the only
 # signal that distinguishes "your candidate became authoritative just now"
@@ -147,6 +202,18 @@ MODEL_ID_ENV = "PLATRIXA_WORKER_MODEL_ID"
 MODEL_KEY_ENV = "PLATRIXA_WORKER_MODEL_KEY"
 MODEL_TIMEOUT_ENV = "PLATRIXA_WORKER_MODEL_TIMEOUT_S"
 MODEL_DIALECT_ENV = "PLATRIXA_WORKER_MODEL_DIALECT"
+MODEL_PROVIDER_ENV = "PLATRIXA_WORKER_MODEL_PROVIDER"
+RATE_LIMIT_MAX_RETRIES_ENV = "PLATRIXA_WORKER_RATE_LIMIT_MAX_RETRIES"
+RATE_LIMIT_MAX_WAIT_ENV = "PLATRIXA_WORKER_RATE_LIMIT_MAX_WAIT_S"
+
+# Provenance labels. ``android-llama-server`` is the REAL backend for the
+# supported loopback configuration (the phone's llama.cpp server), so defaulting
+# to it keeps existing device behaviour and its recorded identity unchanged.
+# Anything the worker cannot establish stays explicitly unknown: no hash, no
+# adapter revision, and no model-reported claim is ever invented here.
+DEFAULT_MODEL_PROVIDER = "android-llama-server"
+PROVENANCE_UNKNOWN = "PROVENANCE_UNKNOWN"
+UNKNOWN_PROVIDER_ALIASES = ("unknown", "provenance_unknown", "unset")
 
 DEFAULT_MODEL_ID = "default"
 DEFAULT_MODEL_TIMEOUT_S = 120.0
@@ -156,15 +223,88 @@ MODEL_DIALECTS = (MODEL_DIALECT_CHAT, MODEL_DIALECT_COMPLETION)
 
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 COMPLETIONS_PATH = "/v1/completions"
+# Model discovery (OpenAI-compatible). The Android llama.cpp server answers
+# GET /v1/models with the id(s) of the model it actually has loaded.
+MODEL_LIST_PATH = "/v1/models"
+# Sentinel: resolve the model id from the endpoint at startup instead of
+# assuming one. "default" stays the default so existing deployments and
+# servers that ignore the model field are unchanged.
+MODEL_ID_AUTO = "auto"
 
 # The server sanitizes worker ids with this exact shape and ignores anything
 # else (falling back to a server-generated owner). Rejecting a bad id locally is
 # fail-closed: a silently substituted owner would make every renewal proof
 # mismatch.
 BOUNDED_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-_LEASE_PROOF_PATH_RE = re.compile(r"^/v1/worker/jobs/([A-Za-z0-9._-]{1,128})(?:/(lease|result))$")
+BOUNDED_PROVIDER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_LEASE_PROOF_PATH_RE = re.compile(
+    r"^/v1/worker/jobs/([A-Za-z0-9._-]{1,128})(?:/(lease|result|failure))$"
+)
 
 _LOOPBACK_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+
+# ---------------------------------------------------------------------------
+# Retry-After (RFC 9110 §10.2.3)
+# ---------------------------------------------------------------------------
+
+
+def parse_retry_after(value: Any, *, now: Optional[float] = None) -> Optional[float]:
+    """Seconds to wait from a ``Retry-After`` header value, or ``None``.
+
+    Both legal forms are accepted:
+
+      * ``delay-seconds`` — a non-negative integer (a float is tolerated, since
+        proxies in the wild emit ``1.5``);
+      * ``HTTP-date``     — IMF-fixdate and the two obsolete forms
+        ``parsedate_to_datetime`` understands, interpreted against ``now``
+        (wall clock, default ``time.time()``).
+
+    Returns ``None`` for anything that cannot be a valid wait: absent, empty,
+    negative, NaN/inf, a date in the past, or a header beyond the credibility
+    ceiling. ``None`` means "no usable hint", never "wait zero" — the caller
+    then applies its own bounded fallback.
+
+    A date in the past is a real, usable answer (0 seconds), but it is
+    indistinguishable in meaning from "retry now", so 0.0 is returned for it
+    rather than a negative number.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # delta-seconds form
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = None
+    if seconds is not None:
+        if seconds != seconds or seconds in (float("inf"), float("-inf")):
+            return None
+        if seconds < 0:
+            return None
+        return min(seconds, RETRY_AFTER_MAX_HEADER_S)
+
+    # HTTP-date form
+    try:
+        when = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        # A date without a zone is GMT by definition for an HTTP-date.
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    reference = time.time() if now is None else float(now)
+    try:
+        delta = when.timestamp() - reference
+    except (OverflowError, OSError, ValueError):
+        return None
+    if delta < 0:
+        return 0.0
+    return min(delta, RETRY_AFTER_MAX_HEADER_S)
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +333,40 @@ class TransportError(WorkerError):
 
 
 class BridgeUnavailableError(WorkerError):
-    """The local model bridge is unreachable or reports itself unavailable."""
+    """The local model bridge is unreachable or reports itself unavailable.
+
+    Retryable by definition: the job's outcome is unknown because an
+    infrastructure dependency was unavailable, never because the input is bad.
+    """
+
+
+class ModelRateLimitError(BridgeUnavailableError):
+    """The model endpoint answered HTTP 429 and the retry budget is spent.
+
+    A subclass of :class:`BridgeUnavailableError` on purpose: every existing
+    caller (and every existing test) that treats "model unavailable" as a
+    retryable transport failure keeps working, while the reporting path can
+    name the rate limit specifically.
+    """
+
+    def __init__(self, message: str, *, retry_after_s: float, attempts: int):
+        super().__init__(message)
+        self.retry_after_s = float(retry_after_s)
+        self.attempts = int(attempts)
+
+
+class ModelRequestRejected(BridgeUnavailableError):
+    """The model endpoint refused the request itself (auth or shape).
+
+    Also a :class:`BridgeUnavailableError` subclass for caller compatibility,
+    but NOT retryable: the same request would be refused again, so the
+    reporting path maps it to a permanent failure code.
+    """
+
+    def __init__(self, message: str, *, code: str, status_code: int):
+        super().__init__(message)
+        self.code = code
+        self.status_code = int(status_code)
 
 
 class BridgeResponseError(WorkerError):
@@ -251,6 +424,22 @@ def _reject_unsafe_path(path: str, *, what: str) -> str:
         if segment and not re.fullmatch(r"[A-Za-z0-9._~-]+", segment):
             raise UnsafeEndpointError(f"{what} segment is not a bounded identifier: {segment!r}")
     return path
+
+
+def _looks_like_sse(text: str) -> bool:
+    """Is this body a Server-Sent Events stream?
+
+    The worker always asks for ``stream: false``, but a server may stream
+    anyway, and real streams commonly open with comment/keep-alive lines
+    (``: ping``) or ``event:`` frames before the first ``data:``. Checking only
+    the FIRST character of the body would misclassify those as broken JSON and
+    fail a perfectly good answer closed. Any ``data:`` line therefore makes the
+    body a stream; an ordinary JSON object never contains one at line start.
+    """
+    for line in text.splitlines():
+        if line.strip().startswith("data:"):
+            return True
+    return False
 
 
 def normalize_api_base_url(url: str) -> str:
@@ -531,6 +720,16 @@ class WorkerConfig:
     max_backoff_s: float = 60.0
     heartbeat_tick_s: float = 0.25
     shutdown_timeout_s: float = 10.0
+    # Provenance override for the direct model path. ``None`` means "resolve
+    # from the configured backend" (see ``OutboundInferenceWorker``), never
+    # "invent a provider".
+    model_provider: Optional[str] = None
+    # Rate-limit policy (HTTP 429). ``rate_limit_max_retries`` is the number of
+    # EXTRA attempts after the first 429, so 2 means at most 3 requests for one
+    # job — enough to ride out a short window, never an aggressive loop.
+    rate_limit_max_retries: int = 2
+    rate_limit_max_wait_s: float = 60.0
+    rate_limit_fallback_s: float = DEFAULT_RATE_LIMIT_FALLBACK_S
 
 
 @dataclass(frozen=True)
@@ -802,6 +1001,153 @@ class SubmitOutcome(dict):
 
 
 # ---------------------------------------------------------------------------
+# Run report
+# ---------------------------------------------------------------------------
+# Why a run ended with the count it did. The legacy summary line
+# ("worker stopped; N job(s) submitted and accepted") is printed by an idle
+# server, by a run whose every claim was refused, and by a run that claimed a
+# job it could not commit — so the counters below record which of those
+# actually happened. They are observations only: nothing here is inferred from
+# silence, and no counter changes what the server decides.
+
+RUN_REPORT_KEYS: Tuple[str, ...] = (
+    "claims",           # claim requests actually sent
+    "claim_failures",   # claim attempts that produced no claim outcome
+    "no_work",          # explicit NO_WORK answers
+    "claimed",          # jobs handed to this worker
+    "accepted",         # fresh fenced commits (== run_forever's return value)
+    "replayed",         # candidates the server reported as already committed
+    "rejected",         # submission refused by the server (candidate discarded)
+    "lease_lost",       # fenced out / lapsed before committing
+    "bridge_failures",  # bridge unreachable or response refused (never submitted)
+    "unknown",          # submission response unusable or transport-ambiguous
+    "failures_reported",       # failures the server acknowledged (RETRY_WAIT/FAILED)
+    "failure_report_failures", # failure reports the server/store did not accept
+)
+
+
+def format_run_report(report: Dict[str, int]) -> str:
+    """One operator-facing line: counts plus the outcome they add up to.
+
+    Pure formatting over what :meth:`OutboundInferenceWorker.run_forever`
+    observed. The ``outcome:`` clause is a description of the counters, not a
+    guess about the server: "NO_WORK only" is emitted only when the server
+    actually answered NO_WORK and no job was claimed.
+    """
+    claims = int(report.get("claims", 0))
+    failures = int(report.get("claim_failures", 0))
+    no_work = int(report.get("no_work", 0))
+    claimed = int(report.get("claimed", 0))
+    accepted = int(report.get("accepted", 0))
+    replayed = int(report.get("replayed", 0))
+    rejected = int(report.get("rejected", 0))
+    lease_lost = int(report.get("lease_lost", 0))
+    bridge = int(report.get("bridge_failures", 0))
+    unknown = int(report.get("unknown", 0))
+    reported = int(report.get("failures_reported", 0))
+    report_failed = int(report.get("failure_report_failures", 0))
+
+    if claims == 0:
+        outcome = "no claim was attempted (poll budget 0, or a stop was already requested)"
+    elif claimed == 0 and failures == claims:
+        outcome = (
+            f"every claim attempt failed ({failures}); "
+            "the server returned no claim outcome"
+        )
+    elif claimed == 0:
+        also = f"; {failures} claim attempt(s) also failed" if failures else ""
+        outcome = f"NO_WORK only — the server reported no runnable job for this tenant{also}"
+    else:
+        outcome = (
+            f"claimed {claimed} job(s): {accepted} accepted, {replayed} replayed, "
+            f"{rejected} rejected, {lease_lost} lease-lost, "
+            f"{bridge} bridge-failure(s), {unknown} unknown, "
+            f"{reported} failure(s) reported"
+        )
+
+    return (
+        f"claims={claims} claim-failures={failures} no-work={no_work} claimed={claimed} "
+        f"accepted={accepted} replayed={replayed} rejected={rejected} "
+        f"lease-lost={lease_lost} bridge-failures={bridge} unknown={unknown} "
+        f"failures-reported={reported} failure-report-failures={report_failed} "
+        f"— outcome: {outcome}"
+    )
+
+
+def bounded_failure_message(reason: str) -> str:
+    """One line, bounded, secret-free, and payload-free.
+
+    The message is a FIXED TAXONOMY description produced by
+    :func:`classify_processing_failure`, never exception text and never model
+    output, so it cannot carry a credential or a financial payload. It is still
+    normalised here (newlines collapsed, length bounded) because it crosses the
+    wire into the job's stored error envelope.
+    """
+    text = " ".join(str(reason or "").split())
+    return text[:200]
+
+
+def classify_processing_failure(exc: BaseException) -> Tuple[str, str]:
+    """``(error_code, bounded_reason)`` for a candidate that was never produced.
+
+    The codes are the SERVER's existing vocabulary. Retryability is not decided
+    here: the server's ``classify_failure`` owns that, so this function only has
+    to name the condition honestly.
+
+      * rate limit / unreachable / 5xx   → MODEL_UNAVAILABLE   (retryable)
+      * model credential refused         → UNAUTHORIZED        (permanent)
+      * model endpoint refused the shape → REQUEST_MALFORMED   (permanent)
+      * unusable model output            → VALIDATION_FAILED   (permanent)
+      * anything else                    → INTERNAL_ERROR      (retryable)
+    """
+    if isinstance(exc, ModelRequestRejected):
+        if exc.code == FAILURE_CODE_UNAUTHORIZED:
+            return FAILURE_CODE_UNAUTHORIZED, "the model endpoint rejected the credential"
+        return FAILURE_CODE_REQUEST_MALFORMED, "the model endpoint refused the request shape"
+    if isinstance(exc, ModelRateLimitError):
+        return (
+            FAILURE_CODE_MODEL_UNAVAILABLE,
+            "the model endpoint rate-limited the request (429) and no safe retry remained",
+        )
+    if isinstance(exc, BridgeUnavailableError):
+        return FAILURE_CODE_MODEL_UNAVAILABLE, "the model endpoint or device bridge was unavailable"
+    if isinstance(exc, BridgeResponseError):
+        return (
+            FAILURE_CODE_VALIDATION_FAILED,
+            "the model output was unusable (empty, malformed, or an incomplete stream)",
+        )
+    return FAILURE_CODE_INTERNAL_ERROR, "an unexpected worker error prevented a candidate"
+
+
+# Exit code for a FATAL claim rejection (a non-retryable ApiError, e.g. HTTP
+# 401). Deliberately distinct from 0 (run finished), 2 (configuration error)
+# and 130 (interrupt), so an operator can tell a refused credential from a bad
+# flag or a clean stop without reading the text.
+EXIT_FATAL_CLAIM = 3
+
+
+def fatal_claim_message(exc: Any) -> str:
+    """One bounded, secret-free line naming a fatal claim rejection.
+
+    Deliberately NOT ``str(exc)``: an ``ApiError`` built from an unexpected
+    status carries the server's RAW RESPONSE BODY as its message (see the
+    ``status != 200`` branch of :meth:`claim`), and this line is printed to
+    the operator's terminal. Only the HTTP status and a shape-checked error
+    code appear — never a request header, API key, DSN, response body or
+    traceback. An error code that is not a bounded identifier degrades to a
+    fixed token instead of being echoed.
+    """
+    code = str(getattr(exc, "code", "") or "")
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code) is None:
+        code = "UNSPECIFIED"
+    try:
+        status = int(getattr(exc, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status = 0
+    return f"fatal claim error: HTTP {status} {code} (not retryable; run stopped)"
+
+
+# ---------------------------------------------------------------------------
 # The worker
 # ---------------------------------------------------------------------------
 
@@ -853,6 +1199,31 @@ class OutboundInferenceWorker:
                 f"model dialect must be one of {MODEL_DIALECTS} (got {config.model_dialect!r})"
             )
         self._model_dialect = dialect
+        # Provider provenance is CONFIGURATION, never model output: the value is
+        # fixed here, before any request, and is never read back from a response.
+        self._model_provider = self._resolve_model_provider(config)
+        retries = int(config.rate_limit_max_retries)
+        if retries < 0 or retries > 10:
+            raise WorkerConfigError(
+                f"rate limit retries must be between 0 and 10 (got {config.rate_limit_max_retries!r})"
+            )
+        self._rate_limit_max_retries = retries
+        max_wait = float(config.rate_limit_max_wait_s)
+        if max_wait <= 0:
+            raise WorkerConfigError(
+                f"rate limit max wait must be positive (got {config.rate_limit_max_wait_s!r})"
+            )
+        self._rate_limit_max_wait_s = max_wait
+        fallback_wait = float(config.rate_limit_fallback_s)
+        if fallback_wait < 0:
+            raise WorkerConfigError(
+                f"rate limit fallback must not be negative (got {config.rate_limit_fallback_s!r})"
+            )
+        self._rate_limit_fallback_s = fallback_wait
+        # The lease currently being served, if any. Used ONLY to refuse a wait
+        # that would outlive the confirmed lease; the server fence stays the
+        # authority on ownership.
+        self._active_lease: Optional[LeaseState] = None
         self._now = now
         self._session = session if session is not None else requests.Session()
         self._bridge_session = bridge_session if bridge_session is not None else requests.Session()
@@ -864,6 +1235,9 @@ class OutboundInferenceWorker:
         # Stage 2 O2 reporting: fresh acceptances vs idempotent replays, kept
         # apart so a run log cannot claim more committed results than it made.
         self._last_run_stats: Dict[str, int] = {"accepted": 0, "replayed": 0}
+        # Claim-stage diagnostics: distinguishes an idle queue from a run that
+        # never got a claim answer at all (see ``format_run_report``).
+        self._last_run_report: Dict[str, int] = {key: 0 for key in RUN_REPORT_KEYS}
 
     # -- introspection ----------------------------------------------------
 
@@ -884,6 +1258,16 @@ class OutboundInferenceWorker:
     def last_run_stats(self) -> Dict[str, int]:
         """``{accepted, replayed}`` from the last ``run_forever`` (Stage 2 O2)."""
         return dict(self._last_run_stats)
+
+    @property
+    def last_run_report(self) -> Dict[str, int]:
+        """The claim/processing counters behind the last ``run_forever``.
+
+        Unlike :attr:`last_run_stats` (a Stage 2 O2 contract other code reads),
+        this is diagnostic: it says whether the run saw NO_WORK, whether its
+        claims failed, and what happened to the jobs it did claim.
+        """
+        return dict(self._last_run_report)
 
     # -- secret hygiene ---------------------------------------------------
 
@@ -915,6 +1299,181 @@ class OutboundInferenceWorker:
         if self._model_key:
             headers["Authorization"] = f"Bearer {self._model_key}"
         return headers
+
+    # -- provenance -------------------------------------------------------
+
+    def _resolve_model_provider(self, config: WorkerConfig) -> Optional[str]:
+        """The provider label to RECORD, resolved from configuration alone.
+
+        Rules, in order:
+
+          1. An explicit ``--model-provider`` / ``PLATRIXA_WORKER_MODEL_PROVIDER``
+             wins. ``unknown`` (and its aliases) resolves to the explicit
+             ``PROVENANCE_UNKNOWN`` sentinel rather than inventing a name.
+          2. Otherwise, when this worker calls a model endpoint itself, the
+             backend IS the phone's llama.cpp server, so ``android-llama-server``
+             is accurate — and it is exactly what the previous hardcoded value
+             said, which is why existing device records do not change.
+          3. In device-bridge mode the worker never constructs a model block (the
+             bridge app reports its own identity), so it records nothing: ``None``.
+
+        A provider label that is not a bounded identifier is a configuration
+        error, not something to silently sanitise into a false claim.
+        """
+        raw = (config.model_provider or "").strip()
+        if raw:
+            if raw.lower() in UNKNOWN_PROVIDER_ALIASES:
+                return PROVENANCE_UNKNOWN
+            if BOUNDED_PROVIDER_RE.match(raw) is None:
+                raise WorkerConfigError(
+                    "model provider must match ^[A-Za-z0-9._-]{1,64}$ "
+                    f"(got {raw[:40]!r})"
+                )
+            return raw
+        return DEFAULT_MODEL_PROVIDER if self._model_base_url is not None else None
+
+    # -- model discovery ---------------------------------------------------
+
+    def needs_model_discovery(self) -> bool:
+        """True when the id must be resolved from the endpoint at STARTUP.
+
+        Only ``--model-id auto`` (or ``PLATRIXA_WORKER_MODEL_ID=auto``) and a
+        configured model endpoint qualify. Any explicit id, and device-bridge
+        mode, are left exactly as they were.
+        """
+        return self._model_base_url is not None and self._model_id == MODEL_ID_AUTO
+
+    def preflight_model_endpoint(self) -> Optional[str]:
+        """Resolve ``auto`` from ``GET /v1/models`` — loopback only, once.
+
+        llama.cpp servers answer ``/v1/models`` with the id of the model they
+        actually loaded, which is the only authoritative answer to "what model
+        is this?". Resolving it BEFORE the first claim means an unusable or
+        ambiguous endpoint is a configuration error (exit 2), never a job that
+        fails one at a time.
+
+        Only a single, unambiguous id is accepted: guessing between several
+        would put a possibly wrong model in the recorded provenance. On success
+        the resolved id is used for the request payload AND the provenance
+        block, so the two can never disagree.
+        """
+        if not self.needs_model_discovery():
+            return self._model_id
+
+        url = f"{self._model_base_url}{MODEL_LIST_PATH}"
+        try:
+            response = self._post(
+                url,
+                None,
+                headers=self._model_headers(),
+                timeout=min(30.0, float(self._model_timeout_s)),
+                session=self._model_session,
+            )
+        except TransportError as exc:
+            raise WorkerConfigError(
+                "model discovery failed: the model endpoint is unreachable "
+                f"at {self._model_base_url}"
+            ) from exc
+
+        status = int(response.status_code)
+        if status != 200:
+            raise WorkerConfigError(
+                f"model discovery failed: GET {MODEL_LIST_PATH} returned HTTP {status}"
+            )
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise WorkerConfigError("model discovery failed: /v1/models is not valid JSON") from exc
+
+        ids: List[str] = []
+        if isinstance(body, dict) and isinstance(body.get("data"), list):
+            for item in body["data"]:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    candidate = item["id"].strip()
+                    if candidate:
+                        ids.append(candidate)
+        unique = sorted(set(ids))
+        if not unique:
+            raise WorkerConfigError(
+                "model discovery failed: /v1/models advertised no model id"
+            )
+        if len(unique) > 1:
+            raise WorkerConfigError(
+                f"model discovery is ambiguous: /v1/models advertised {len(unique)} ids; "
+                f"set {MODEL_ID_ENV} explicitly instead of 'auto'"
+            )
+        resolved = unique[0]
+        if BOUNDED_IDENTIFIER_RE.match(resolved) is None:
+            raise WorkerConfigError(
+                "model discovery returned an unusable model id: "
+                f"{resolved[:40]!r}"
+            )
+        self._model_id = resolved
+        logger.info("model discovery: using the endpoint's only advertised id (%s)", resolved)
+        return resolved
+
+    # -- rate-limit waiting ------------------------------------------------
+
+    def _retry_after_header(self, response: Any) -> Optional[str]:
+        headers = getattr(response, "headers", None) or {}
+        raw = headers.get("Retry-After")
+        if raw is None:
+            # A test double's plain dict is case-sensitive; requests' mapping is not.
+            for key, value in dict(headers).items():
+                if str(key).lower() == "retry-after":
+                    raw = value
+                    break
+        return None if raw is None else str(raw)
+
+    def _rate_limit_wait_s(self, response: Any, attempt: int) -> float:
+        """How long to wait after a 429: the provider's hint, else backoff.
+
+        The provider's ``Retry-After`` is honoured when it is usable; when it is
+        absent or invalid a bounded exponential fallback is used. Either way the
+        result is clamped to ``[0, rate_limit_max_wait_s]``, so a header saying
+        "wait an hour" can never park a leased job for an hour.
+        """
+        hint = parse_retry_after(self._retry_after_header(response))
+        if hint is None:
+            wait = self._rate_limit_fallback_s * (2 ** max(0, int(attempt) - 1))
+        else:
+            wait = hint
+        return min(max(float(wait), 0.0), self._rate_limit_max_wait_s)
+
+    def _sleep_within_lease(self, seconds: float) -> bool:
+        """Sleep only while the CONFIRMED lease can still cover the wait.
+
+        Returns ``False`` when the wait would outlive the lease's safe window
+        (the caller must then stop waiting and report a retryable failure);
+        raises :class:`LeaseLost` when the lease is lost while waiting.
+
+        The wait is sliced into short sleeps so a stop request or a lost lease is
+        noticed promptly instead of after the whole delay. Slices are counted,
+        not measured against the clock, so an injected test clock cannot spin.
+        """
+        if seconds <= 0:
+            return True
+        state = self._active_lease
+        if state is not None:
+            if state.is_lost:
+                raise LeaseLost(state.lost_reason or "lease lost")
+            remaining = state.deadline - self._now()
+            # Keep a quarter-lease margin: the wait must fit even if no renewal
+            # lands while we sleep. Renewals extend the deadline; this check
+            # never assumes one that has not happened.
+            margin = max(1.0, state.lease_seconds * 0.25)
+            if float(seconds) > remaining - margin:
+                return False
+
+        slice_s = 0.25
+        slices = max(1, int((float(seconds) + slice_s - 1e-6) / slice_s))
+        for _ in range(slices):
+            if self._stop_event.is_set():
+                break
+            if state is not None and state.is_lost:
+                raise LeaseLost(state.lost_reason or "lease lost")
+            self._sleep(slice_s)
+        return True
 
     # -- transport --------------------------------------------------------
 
@@ -957,8 +1516,18 @@ class OutboundInferenceWorker:
             raise ApiError(status, error_code_of(response) or "UNAUTHORIZED",
                            "the API rejected this tenant key", retryable=False)
         if status == 503:
-            raise ApiError(status, error_code_of(response) or "ASYNC_UNAVAILABLE",
-                           "the durable store is unavailable", retryable=True)
+            # Two different 503s reach here: the admission guard refusing the
+            # request because metering is unreachable (METERING_UNAVAILABLE),
+            # and the queue's own store being down (ASYNC_UNAVAILABLE). The
+            # status and the code are unchanged; only the human message stops
+            # blaming the durable store when the store was never asked.
+            claim_code = error_code_of(response) or "ASYNC_UNAVAILABLE"
+            claim_reason = (
+                "the metering/admission boundary is unavailable; no claim outcome"
+                if claim_code == "METERING_UNAVAILABLE"
+                else "the durable store is unavailable"
+            )
+            raise ApiError(status, claim_code, claim_reason, retryable=True)
         if status != 200:
             raise ApiError(status, error_code_of(response) or "UNEXPECTED_STATUS",
                            _response_text(response)[:200], retryable=status >= 500)
@@ -1224,24 +1793,67 @@ class OutboundInferenceWorker:
                 "stop": list(MODEL_STOP_SEQUENCES),
             }
 
-        try:
-            response = self._post(
-                url,
-                payload,
-                headers=self._model_headers(),
-                timeout=self._model_timeout_s,
-                session=self._model_session,
-            )
-        except TransportError as exc:
-            raise BridgeUnavailableError(
-                f"model endpoint unreachable: {self._redact(str(exc))}"
-            ) from exc
-        status = int(response.status_code)
-        if status != 200:
-            raise BridgeUnavailableError(
-                f"model endpoint returned HTTP {status}: "
-                f"{self._redact(_response_text(response))[:200]}"
-            )
+        attempts = 0
+        while True:
+            try:
+                response = self._post(
+                    url,
+                    payload,
+                    headers=self._model_headers(),
+                    timeout=self._model_timeout_s,
+                    session=self._model_session,
+                )
+            except TransportError as exc:
+                raise BridgeUnavailableError(
+                    f"model endpoint unreachable: {self._redact(str(exc))}"
+                ) from exc
+            status = int(response.status_code)
+
+            if status == HTTP_429_RATE_LIMITED:
+                # A rate limit is NOT a bad candidate: the lease is still held
+                # and the same request may well succeed shortly. Wait (bounded,
+                # lease-safe) and re-issue instead of burning the job.
+                attempts += 1
+                wait_s = self._rate_limit_wait_s(response, attempts)
+                if attempts > self._rate_limit_max_retries:
+                    raise ModelRateLimitError(
+                        "model endpoint answered HTTP 429 and the retry budget is spent "
+                        f"({attempts} attempt(s))",
+                        retry_after_s=wait_s,
+                        attempts=attempts,
+                    )
+                if not self._sleep_within_lease(wait_s):
+                    raise ModelRateLimitError(
+                        "model endpoint answered HTTP 429 and the retry wait does not "
+                        "fit inside this lease's remaining safe window",
+                        retry_after_s=wait_s,
+                        attempts=attempts,
+                    )
+                logger.warning(
+                    "model endpoint rate-limited (429); waiting %.1fs before attempt %d/%d",
+                    wait_s, attempts + 1, self._rate_limit_max_retries + 1,
+                )
+                continue
+
+            if status in HTTP_AUTH_REJECTED:
+                raise ModelRequestRejected(
+                    f"the model endpoint rejected the credential (HTTP {status})",
+                    code=FAILURE_CODE_UNAUTHORIZED,
+                    status_code=status,
+                )
+            if status in HTTP_REQUEST_REFUSED:
+                raise ModelRequestRejected(
+                    f"the model endpoint refused the request (HTTP {status})",
+                    code=FAILURE_CODE_REQUEST_MALFORMED,
+                    status_code=status,
+                )
+            if status != 200:
+                # 5xx and anything else unexpected: infrastructure, retryable.
+                raise BridgeUnavailableError(
+                    f"model endpoint returned HTTP {status}: "
+                    f"{self._redact(_response_text(response))[:200]}"
+                )
+            break
 
         text = _response_text(response)
         size = len(text.encode("utf-8", errors="replace"))
@@ -1257,16 +1869,19 @@ class OutboundInferenceWorker:
             "completion_status": "TRUNCATED" if finish_reason == "length" else "COMPLETE",
             "finish_reason": finish_reason,
             "model": {
-                "provider": "android-llama-server",
+                # From CONFIGURATION only. The response body's own "model" field
+                # is never read: a model server cannot name the provider that
+                # served it, and it must never be able to edit this block.
+                "provider": self._model_provider or PROVENANCE_UNKNOWN,
                 "model": self._model_id,
                 "dialect": self._model_dialect,
-                "artifact_identity": "PROVENANCE_UNKNOWN",
+                "artifact_identity": PROVENANCE_UNKNOWN,
             },
         }
 
     def _parse_model_response(self, text: str) -> Tuple[str, Optional[str]]:
         """Extract (content, finish_reason) from a 200; fail closed on anything partial."""
-        if text.lstrip().startswith("data:"):
+        if _looks_like_sse(text):
             return self._collect_model_stream(text)
         try:
             body = json.loads(text)
@@ -1291,8 +1906,17 @@ class OutboundInferenceWorker:
         if content is None or not content.strip():
             raise BridgeResponseError("model returned empty or missing completion text")
         finish = first.get("finish_reason")
-        finish_reason = finish if isinstance(finish, str) and finish else None
-        return content, finish_reason
+        if not isinstance(finish, str) or not finish:
+            raise BridgeResponseError(
+                "model response has a missing, null, or empty finish_reason; "
+                "completion cannot be established (fail closed)"
+            )
+        if finish not in ("stop", "length"):
+            raise BridgeResponseError(
+                f"model response has an unrecognized finish_reason {finish!r}; "
+                "completion cannot be established (fail closed)"
+            )
+        return content, finish
 
     def _collect_model_stream(self, text: str) -> Tuple[str, Optional[str]]:
         """Collect streamed chunks; parse ONLY after [DONE]. Incomplete → fail closed."""
@@ -1337,6 +1961,16 @@ class OutboundInferenceWorker:
         content = "".join(pieces)
         if not content.strip():
             raise BridgeResponseError("streamed model output was empty")
+        if finish_reason is None:
+            raise BridgeResponseError(
+                "model stream completed without a finish_reason; "
+                "completion cannot be established (fail closed)"
+            )
+        if finish_reason not in ("stop", "length"):
+            raise BridgeResponseError(
+                f"model stream has an unrecognized finish_reason {finish_reason!r}; "
+                "completion cannot be established (fail closed)"
+            )
         return content, finish_reason
 
     def _decode_bridge_body(self, response: Any) -> Dict[str, Any]:
@@ -1415,6 +2049,105 @@ class OutboundInferenceWorker:
         envelope = self._decode_json_object(response, what="result response")
         return SubmitOutcome(envelope, self._replay_flag(response))
 
+    # -- failure reporting ------------------------------------------------
+
+    def failure_url(self, job: ClaimedJob) -> str:
+        """The fenced failure-report URL for THIS job (derived, not trusted)."""
+        return resolve_lease_endpoint(
+            self._api_base_url,
+            f"/v1/worker/jobs/{job.job_id}{FAILURE_SUFFIX}",
+            job.job_id,
+            FAILURE_SUFFIX,
+        )
+
+    def submit_failure(self, job: ClaimedJob, *, code: str, reason: str) -> Dict[str, Any]:
+        """Tell the server this generation could NOT produce a submittable candidate.
+
+        Why this exists: without it, a job whose model call failed stays in
+        ``PROCESSING`` until its lease expires, and — once its attempt budget is
+        spent — it can never be claimed again, so it stays there forever. The
+        report moves the job to ``RETRY_WAIT`` (budget remaining) or ``FAILED``
+        (terminal) using the server's OWN classification.
+
+        It cannot make anything authoritative: no ``bridge_body``, no result,
+        no kernel call, and the server write is fenced on owner + generation, so
+        a superseded worker changes nothing. A refused report is never retried as
+        this generation.
+
+        Deliberately does NOT send a retryability flag: the server decides.
+        """
+        state = job.state
+        state.ensure_held(self._now())
+
+        payload: Dict[str, Any] = {
+            "lease": state.proof.to_wire(),
+            "error": {"code": code, "message": bounded_failure_message(reason)},
+        }
+        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > int(self._config.max_result_bytes):
+            # Unreachable with a bounded message, but never send an oversized body.
+            raise BridgeResponseError("refusing to submit an oversized failure report")
+
+        response = self._api_post(self.failure_url(job), payload)
+        status = int(response.status_code)
+        if status == 409:
+            code_sent = error_code_of(response) or CODE_LEASE_LOST
+            state.mark_lost(f"the server refused the failure report at this owner/generation ({code_sent})")
+            raise LeaseLost(code_sent)
+        if status == 404:
+            raise ApiError(404, error_code_of(response) or CODE_JOB_NOT_FOUND,
+                           "no such job for this tenant", retryable=False)
+        if status in (400, 413, 415, 422):
+            raise ApiError(status, rejection_code_of(response),
+                           "the server refused the failure report", retryable=False)
+        if status == 503:
+            raise ApiError(503, error_code_of(response) or "ASYNC_UNAVAILABLE",
+                           "the durable store is unavailable", retryable=True)
+        if status != 200:
+            raise ApiError(status, error_code_of(response) or "UNEXPECTED_STATUS",
+                           _response_text(response)[:200], retryable=status >= 500)
+
+        body = self._decode_json_object(response, what="failure-report response")
+        outcome = body.get("status")
+        if outcome not in FAILURE_OUTCOMES:
+            raise MalformedResponseError(
+                f"failure-report response has an unknown status: {outcome!r}"
+            )
+        return body
+
+    def _report_processing_failure(
+        self, job: ClaimedJob, exc: BaseException, report: Dict[str, int]
+    ) -> None:
+        """Submit the failure report and account for it. Never raises.
+
+        A reporting problem is itself a diagnostic event, not a reason to stop
+        serving: the lease will expire and the job will be reclaimed, which is
+        exactly the pre-existing recovery path. Nothing here can commit a result.
+        """
+        code, reason = classify_processing_failure(exc)
+        logger.warning(
+            "job %s: no submittable candidate (%s: %s); nothing submitted",
+            job.job_id, code, reason,
+        )
+        try:
+            outcome = self.submit_failure(job, code=code, reason=reason)
+        except LeaseLost as lost:
+            report["lease_lost"] += 1
+            logger.info("job %s: lease lost before the failure report (%s)", job.job_id, lost)
+            return
+        except WorkerError as report_exc:
+            report["failure_report_failures"] += 1
+            logger.warning(
+                "job %s: failure report was not stored (%s); the lease will expire and the job will be reclaimed",
+                job.job_id, type(report_exc).__name__,
+            )
+            return
+        report["failures_reported"] += 1
+        logger.info(
+            "job %s: failure reported (%s → server status %s)",
+            job.job_id, code, outcome.get("status"),
+        )
+
     def _replay_flag(self, response: Any) -> bool:
         """Read the server's replay marker. Absent means "not replayed".
 
@@ -1457,10 +2190,14 @@ class OutboundInferenceWorker:
         # worth a bridge call. (The server fence, not this check, is authority.)
         job.state.ensure_held(self._now())
         heartbeat = self.start_heartbeat(job.state)
+        # Expose the live lease to the model path so a Retry-After wait can be
+        # refused when it would outlive this lease's confirmed deadline.
+        self._active_lease = job.state
         try:
             bridge_body = self.call_bridge(job.raw_input)
             return self.submit_result(job, bridge_body)
         finally:
+            self._active_lease = None
             self.stop_heartbeat(heartbeat)
 
     def run_forever(
@@ -1481,55 +2218,89 @@ class OutboundInferenceWorker:
         completed = 0
         replayed = 0
         polls = 0
+        # Fresh counters, assigned BEFORE the loop so an abnormal exit still
+        # reports exactly how far the run got. Mutated in place.
+        report = self._last_run_report = {key: 0 for key in RUN_REPORT_KEYS}
         backoff = float(self._config.poll_interval_s)
         while not self._stop_event.is_set():
             if max_polls is not None and polls >= max_polls:
                 break
             polls += 1
+            report["claims"] += 1
             try:
                 claim = self.claim()
             except ApiError as exc:
+                # Either way the attempt produced NO claim outcome, so it is
+                # counted exactly once — including a FATAL (non-retryable)
+                # rejection, whose final report must read "every claim attempt
+                # failed" instead of the false "NO_WORK only" a zero-claimed run
+                # would otherwise print (P4, 2026-10-25). Fail-fast is
+                # unchanged: a fatal error still leaves the loop immediately.
+                report["claim_failures"] += 1
                 if not exc.retryable:
                     raise
-                logger.warning("claim failed (retryable): %s", exc)
+                logger.warning("claim attempt %d failed (retryable): %s", report["claims"], exc)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
             except TransportError as exc:
-                logger.warning("claim transport failure: %s", exc)
+                report["claim_failures"] += 1
+                logger.warning("claim attempt %d transport failure: %s", report["claims"], exc)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
 
             backoff = float(self._config.poll_interval_s)
             if claim.no_work or claim.job is None:
+                # Logged at INFO: an idle queue is normal, but it must be
+                # OBSERVABLE. Without this line a NO_WORK run and a run whose
+                # every claim was refused produce byte-identical output.
+                report["no_work"] += 1
+                logger.info(
+                    "claim %d: NO_WORK (no runnable job for this tenant); next poll in %.2fs",
+                    report["claims"], claim.retry_after_seconds,
+                )
                 self._sleep(claim.retry_after_seconds)
                 continue
 
             job = claim.job
+            report["claimed"] += 1
             try:
                 envelope = self.process_job(job)
             except LeaseLost as exc:
                 # Expected under contention: the job will be reclaimed by
                 # whoever holds the lease now. Nothing was committed here.
+                report["lease_lost"] += 1
                 logger.info("job %s: lease lost, discarding candidate (%s)", job.job_id, exc)
                 continue
-            except BridgeUnavailableError as exc:
-                logger.warning("job %s: local bridge unavailable (%s)", job.job_id, exc)
-                continue
-            except BridgeResponseError as exc:
-                # Fail closed: a malformed/oversized candidate is NEVER
-                # submitted. The lease expires and the job is reclaimed.
-                logger.warning("job %s: unusable bridge response, nothing submitted (%s)", job.job_id, exc)
+            except (BridgeUnavailableError, BridgeResponseError) as exc:
+                # Fail closed: an unavailable model, a rate limit that outlived
+                # its budget, and a malformed/oversized/truncated candidate are
+                # ALL never submitted. The difference is what happens next: the
+                # failure is now REPORTED, so the server moves the job to
+                # RETRY_WAIT (budget left) or FAILED instead of leaving it in
+                # PROCESSING until the lease lapses.
+                report["bridge_failures"] += 1
+                self._report_processing_failure(job, exc, report)
                 continue
             except ApiError as exc:
                 # A SUBMISSION-stage rejection is the server's decision about this
-                # one job: 4xx means the candidate was processed and refused (the
-                # job is terminal), 5xx is retryable. Neither is a reason to stop
-                # serving, so the worker moves on to the next claim. Only the
-                # CLAIM stage treats a non-retryable ApiError as fatal, because a
-                # bad credential must not spin in a hot loop.
-                logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
+                # one job. A terminal (non-retryable) 4xx refusal means the
+                # candidate was processed and refused — the job is finished, so it
+                # is counted as rejected. A retryable 5xx (e.g. 503) means the
+                # server could not validate the submission and the commit outcome
+                # is not established: that is ambiguous (unknown), never a
+                # terminal rejection. Neither is a reason to stop serving; only the
+                # CLAIM stage treats a non-retryable ApiError as fatal.
+                if exc.retryable:
+                    report["unknown"] += 1
+                    logger.warning(
+                        "job %s: submission outcome UNKNOWN (retryable server error); "
+                        "not counted as rejected (%s)", job.job_id, exc,
+                    )
+                else:
+                    report["rejected"] += 1
+                    logger.warning("job %s: submission rejected by the server (%s)", job.job_id, exc)
                 continue
             except TransportError as exc:
                 # Stage 2 O2: the submission may or may not have reached the
@@ -1543,11 +2314,13 @@ class OutboundInferenceWorker:
                     "job %s: submission outcome UNKNOWN (transport failure); "
                     "not counted as accepted (%s)", job.job_id, exc,
                 )
+                report["unknown"] += 1
                 continue
             except MalformedResponseError as exc:
                 # A 200 we cannot interpret (bad envelope or undefined replay
                 # marker) is not evidence of acceptance either. The candidate is
                 # never resubmitted at this generation.
+                report["unknown"] += 1
                 logger.warning(
                     "job %s: submission response unusable; outcome not claimed (%s)",
                     job.job_id, exc,
@@ -1557,13 +2330,21 @@ class OutboundInferenceWorker:
             # The server decides; this only reports what it said.
             if envelope.replayed:
                 replayed += 1
+                report["replayed"] += 1
+                self._last_run_stats = {"accepted": completed, "replayed": replayed}
                 logger.info(
                     "job %s: result REPLAYED (an authoritative result already existed; "
                     "this candidate was not committed)", job.job_id,
                 )
             else:
                 completed += 1
+                report["accepted"] += 1
+                self._last_run_stats = {"accepted": completed, "replayed": replayed}
                 logger.info("job %s: result ACCEPTED (fresh fenced commit)", job.job_id)
+            # Record the confirmed submission outcome BEFORE invoking the callback:
+            # if the callback raises after the server accepted the result, the
+            # committed-result statistics must already reflect the server's
+            # decision (P-C). The callback's exception still propagates.
             if on_result is not None:
                 on_result(job, envelope)
         self._last_run_stats = {"accepted": completed, "replayed": replayed}
@@ -1630,6 +2411,12 @@ def build_config(args: argparse.Namespace) -> WorkerConfig:
             ) from exc
     else:
         model_timeout_s = DEFAULT_MODEL_TIMEOUT_S
+    rate_limit_max_retries = _int_option(
+        args.rate_limit_max_retries, RATE_LIMIT_MAX_RETRIES_ENV, 2
+    )
+    rate_limit_max_wait_s = _float_option(
+        args.rate_limit_max_wait, RATE_LIMIT_MAX_WAIT_ENV, 60.0
+    )
     return WorkerConfig(
         api_base_url=args.api_base_url or os.environ.get(API_BASE_URL_ENV, ""),
         api_key=api_key,
@@ -1642,7 +2429,35 @@ def build_config(args: argparse.Namespace) -> WorkerConfig:
         model_key=model_key or None,
         model_timeout_s=model_timeout_s,
         model_dialect=args.model_dialect or os.environ.get(MODEL_DIALECT_ENV, "") or MODEL_DIALECT_CHAT,
+        model_provider=args.model_provider or os.environ.get(MODEL_PROVIDER_ENV, "") or None,
+        rate_limit_max_retries=rate_limit_max_retries,
+        rate_limit_max_wait_s=rate_limit_max_wait_s,
     )
+
+
+def _int_option(explicit: Optional[int], env_name: str, default: int) -> int:
+    """CLI value, else env value, else default — with a fail-fast parse."""
+    if explicit is not None:
+        return int(explicit)
+    raw = (os.environ.get(env_name, "") or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise WorkerConfigError(f"{env_name} must be an integer, got {raw[:20]!r}") from exc
+
+
+def _float_option(explicit: Optional[float], env_name: str, default: float) -> float:
+    if explicit is not None:
+        return float(explicit)
+    raw = (os.environ.get(env_name, "") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise WorkerConfigError(f"{env_name} must be a number, got {raw[:20]!r}") from exc
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -1668,7 +2483,8 @@ def main(argv: Optional[list] = None) -> int:
                              f"env {MODEL_URL_ENV} (unset = use the device bridge)")
     parser.add_argument("--model-id", default=None,
                         help=f"model id sent to the endpoint; env {MODEL_ID_ENV} "
-                             f"(default {DEFAULT_MODEL_ID})")
+                             f"(default {DEFAULT_MODEL_ID}); 'auto' resolves it from "
+                             f"GET {MODEL_LIST_PATH} before claiming")
     parser.add_argument("--model-key", default=None,
                         help=f"optional bearer key for the model endpoint; env {MODEL_KEY_ENV}")
     parser.add_argument("--model-key-file", default=None, help="file containing the model key")
@@ -1678,6 +2494,16 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--model-dialect", default=None, choices=list(MODEL_DIALECTS),
                         help=f"chat = /v1/chat/completions (default), completion = /v1/completions "
                              f"(exact SFT framing); env {MODEL_DIALECT_ENV}")
+    parser.add_argument("--model-provider", default=None,
+                        help="provider identity recorded for THIS backend (e.g. android-llama-server); "
+                             "'unknown' keeps it PROVENANCE_UNKNOWN; "
+                             f"env {MODEL_PROVIDER_ENV}")
+    parser.add_argument("--rate-limit-max-retries", type=int, default=None,
+                        help="extra attempts after an HTTP 429 (0 disables waiting); "
+                             f"env {RATE_LIMIT_MAX_RETRIES_ENV} (default 2)")
+    parser.add_argument("--rate-limit-max-wait", type=float, default=None,
+                        help="ceiling in seconds for any 429 wait, including a Retry-After hint; "
+                             f"env {RATE_LIMIT_MAX_WAIT_ENV} (default 60)")
     parser.add_argument("--once", action="store_true", help="claim and process at most one job, then exit")
     parser.add_argument("--max-polls", type=int, default=None, help="stop after this many claim attempts")
     parser.add_argument("--verbose", action="store_true", help="log at INFO")
@@ -1691,6 +2517,10 @@ def main(argv: Optional[list] = None) -> int:
     try:
         config = build_config(args)
         worker = OutboundInferenceWorker(config)
+        # `--model-id auto`: ask the endpoint what it loaded, before claiming
+        # anything. Unreachable/ambiguous → configuration error (exit 2).
+        if worker.needs_model_discovery():
+            worker.preflight_model_endpoint()
     except (WorkerConfigError, UnsafeEndpointError) as exc:
         # Configuration failures are the operator's problem: say exactly what
         # is wrong and exit non-zero without touching the network.
@@ -1704,7 +2534,23 @@ def main(argv: Optional[list] = None) -> int:
         worker.stop()
         print("interrupted; stopped cleanly", file=sys.stderr)
         return 130
+    except ApiError as exc:
+        # P4 (2026-10-25): a FATAL claim rejection (non-retryable ApiError —
+        # HTTP 401/403, a 4xx body, ...) used to escape main() entirely: a raw
+        # traceback, no run report, and Python's generic exit 1. Fail-fast is
+        # unchanged — the run still stops immediately and exits non-zero — but
+        # the operator now gets the final run report plus ONE bounded,
+        # secret-free reason line (no traceback, no headers, no key, no body).
+        # Retryable failures never reach here: run_forever absorbs them and
+        # keeps backing off until the poll budget runs out.
+        print(fatal_claim_message(exc), file=sys.stderr)
+        print(f"  run report: {format_run_report(worker.last_run_report)}")
+        return EXIT_FATAL_CLAIM
     print(f"worker stopped; {completed} job(s) submitted and accepted")
+    # The count alone cannot say WHY it is zero: an idle queue, a run whose
+    # claims were all refused, and a run that could not commit all print the
+    # line above. This second line is what distinguishes them.
+    print(f"  run report: {format_run_report(worker.last_run_report)}")
     return 0
 
 

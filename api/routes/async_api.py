@@ -1305,7 +1305,14 @@ def job_status_v1(job_id: str, request: Request) -> JSONResponse:
     """Poll job status. Completion is NOT VERIFIED — a completed job
     surfaces the REAL engine outcome stored with its result (VERIFIED /
     REVIEW_REQUIRED / UNSUPPORTED); ``retryable`` is true only for
-    infrastructure failures."""
+    infrastructure failures.
+
+    ``status`` distinguishes the three non-terminal/failed shapes honestly:
+    ``PROCESSING`` (a worker holds or may claim it), ``RETRY_WAIT`` (a
+    retryable failure was recorded and the queue will try again after the
+    backoff gate), and terminal ``FAILED``. ``RETRY_WAIT`` is never reported as
+    ``FAILED``: nothing needs doing, the retry is already scheduled.
+    """
     rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
     if not async_jobs.async_configured():
         return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "async documents are not configured on this deployment")
@@ -1330,6 +1337,21 @@ def job_status_v1(job_id: str, request: Request) -> JSONResponse:
         api_status = public_status_for_engine(engine_status) if engine_status else "PROCESSING"
         status_out = engine_status or "PROCESSING"
         retryable = False
+        _status_url, result_url = _job_urls(record.job_id, record.result_id)
+    elif record.status == "RETRY_WAIT":
+        # A retryable failure is NOT a terminal verdict: the row is queued for
+        # another attempt once the backoff gate passes. Reporting it as FAILED
+        # made a self-healing job look dead, and invited an operator to
+        # intervene on a job the queue was about to reclaim by itself.
+        #
+        # ``api_status`` stays PROCESSING (the job is still in flight, and the
+        # six-state public mapping is unchanged); ``status`` names the internal
+        # state so the retry is visible, and ``reason_codes`` says why.
+        code = _error_code_from_record(record)
+        api_status = "PROCESSING"
+        status_out = "RETRY_WAIT"
+        reason_codes.append(code)
+        retryable = True
         _status_url, result_url = _job_urls(record.job_id, record.result_id)
     else:  # FAILED
         code = _error_code_from_record(record)

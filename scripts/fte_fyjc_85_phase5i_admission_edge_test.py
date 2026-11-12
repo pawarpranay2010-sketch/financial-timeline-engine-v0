@@ -855,8 +855,11 @@ def section_i() -> None:
     rb = r.json()
     check("I1 /health is green (process alive)", h.status_code == 200 and h.json().get("status") == "ok",
           str(h.status_code))
-    check("I2 /ready is honestly NOT ready in zero-config open mode",
-          r.status_code == 200 and rb.get("status") == "not_ready", str(rb.get("status")))
+    # HTTP contract (readiness deadline follow-up, 2026-10-20): not_ready is a
+    # NON-2xx response. A status-code-driven healthcheck can now gate on it.
+    check("I2 /ready is honestly NOT ready in zero-config open mode (503)",
+          r.status_code == 503 and rb.get("status") == "not_ready",
+          f"code={r.status_code} status={rb.get('status')}")
     check("I3 the not_ready reason names the missing admission config",
           "admission" in str(rb.get("reason", "")), str(rb.get("reason")))
 
@@ -865,19 +868,38 @@ def section_i() -> None:
           adm.get("mode") == "open-anonymous", str(adm.get("mode")))
     check("I5 production_ready=false in zero-config mode", adm.get("production_ready") is False, str(adm))
 
-    # Metered + reachable store → ready (stubbed factory success).
+    # Metered + reachable store → ready. Readiness now performs a real
+    # SELECT 1 through the gate (readiness fix, 2026-10-20), so the double must
+    # ANSWER THE PROBE — a bare no-op factory is now correctly reported as an
+    # unreachable store. That is precisely the defect this section could not
+    # previously see: it asserted "reachable" with a stub that never connected.
     _install_metered_mode()
-    metered_gate._session_factory = lambda: (lambda: None)  # type: ignore[assignment]
+    admission_boundary.reset_readiness_cache()
+    probe_calls: list[int] = []
+
+    class _ProbeSession:
+        def execute(self, *_args, **_kwargs):
+            probe_calls.append(1)
+            return None
+
+        def close(self):
+            return None
+
+    metered_gate._session_factory = lambda: (lambda: _ProbeSession())  # type: ignore[assignment]
     r2 = c.get("/v1/ready")
     adm2 = (r2.json().get("admission") or {})
     check("I6 metered mode + reachable store → admission production_ready=true",
           r2.json().get("status") == "ready" and adm2.get("production_ready") is True, str(adm2))
+    check("I6a readiness actually probed the store (one SELECT executed)",
+          probe_calls == [1], f"probe calls={len(probe_calls)}")
 
     # Metered + unreachable store → not ready, WITHOUT leaking the URL.
     def _boom_factory():
         raise RuntimeError("postgres://secret-user:secret-pw@host/db (leak attempt)")
 
     metered_gate._session_factory = _boom_factory  # type: ignore[assignment]
+    # A cached "ready" verdict must never mask a store that has since died.
+    admission_boundary.reset_readiness_cache()
     r3 = c.get("/v1/ready")
     body3 = r3.text
     adm3 = (r3.json().get("admission") or {})
@@ -890,6 +912,7 @@ def section_i() -> None:
           "")
     _install_zero_config_mode()
     metered_gate._session_factory_cache.clear()
+    admission_boundary.reset_readiness_cache()
 
 
 # ===========================================================================

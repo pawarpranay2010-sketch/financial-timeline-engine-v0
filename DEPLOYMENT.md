@@ -54,6 +54,10 @@ async documents, key management and webhooks switched off.
 | `PLATRIXA_TRUSTED_PROXY_COUNT` | **when behind a proxy** | Number of trusted proxy hops before the client address in `X-Forwarded-For`. Default `0` keys the rate limiter on the transport peer address — behind a CDN/load balancer that means ONE shared bucket for every visitor. Set it to your actual hop count. |
 | `PLATRIXA_V1_RATE_LIMIT`, `PLATRIXA_V1_RATE_WINDOW` | optional | `/v1/*` per-key rate limit (default 600 requests / 60 s). |
 | `PLATRIXA_API_V1_RATE_LIMIT`, `PLATRIXA_API_V1_RATE_WINDOW` | optional | `/api/v1/*` per-key rate limit (default 30 requests / 60 s) — the browser-facing surface. |
+| `PLATRIXA_DB_CONNECT_TIMEOUT_SECONDS` | optional | Bounded connect/reconnect to the **metering** store, in seconds (clamped 2–30, default 3). Applies to every metered operation. |
+| `PLATRIXA_DB_POOL_TIMEOUT_SECONDS` | optional | How long a metered operation may wait for a free pooled connection (clamped 0.1–30, default 1.0; SQLAlchemy's default was 30). Exhaustion fails closed (`503 METERING_UNAVAILABLE`), it never admits. |
+| `PLATRIXA_DB_STATEMENT_TIMEOUT_MS` | optional | Server-side statement bound for the **readiness probe transaction only** (clamped 100–30000, default 1500). It is applied with `set_config(..., is_local => true)`, so tenant lookups and the quota reservation UPDATE keep the server default and a row-lock wait is not aborted. |
+| `PLATRIXA_READINESS_CACHE_TTL_SECONDS` | optional | How long a **failed** readiness probe verdict is reused (0–30, default 2; 0 disables). Successful verdicts are never cached. |
 
 #### Identity precedence (deterministic — Phase 5I)
 
@@ -81,8 +85,33 @@ Consequences worth knowing before you configure a host:
 
 | Probe | Meaning |
 |---|---|
-| `GET /v1/health` | Liveness. Touches nothing — no DB, no provider, no model load. |
-| `GET /v1/ready` | **Production admission readiness**: the provider is loadable AND a credential boundary is configured AND the metering store is reachable. `status: "not_ready"` with a reason otherwise. A service can be alive and still not ready; point load balancers at `/v1/health` for liveness and gate deployments on `/v1/ready`. |
+| `GET /v1/health` | Liveness. Touches nothing — no DB, no provider, no model load. Always `200` while the process is alive. |
+| `GET /v1/ready` | **Production admission readiness**. The HTTP status IS the verdict: `200` only when the provider is loadable AND `admission.production_ready` is true; `503` otherwise, with the same body (`status: "not_ready"`, `reason`, `admission`). Gate deployments on this; use `/v1/health` for liveness. |
+
+Readiness by admission mode (the Phase-15 contract):
+
+| Mode | `/v1/ready` | `production_ready` | What is probed |
+|---|---|---|---|
+| `phase15-shared-key` | `200` when the provider is loadable (`503` only for a provider failure) | `true` | **nothing** — a Phase-15 key is the boundary and there is no store behind it (`metering_store_available` is `null`, `reason` is `null`) |
+| `metered-tenants` | `200` only when the store answers a bounded `SELECT 1`; `503` with `reason: "metering store unreachable"` otherwise | `true` / `false` | one `SELECT 1` per call, failures cached for the TTL below |
+| `open-anonymous` | `503` with the unchanged zero-config reason | `false` | nothing (no credential boundary exists) |
+
+Probe budget and timeout scope:
+
+- The default readiness budget is **6.0 s** — pool wait 1.0 s + connect 3 s +
+  statement 1.5 s + 0.5 s cleanup slack (`readiness_deadline_seconds()`).
+- It is a **probe-phase budget, not a hard wall-clock response deadline**. The
+  verdict is taken as soon as the probe query returns, so cleanup (session close
+  / a rollback round trip) can extend the response past it, and a network path
+  that goes mute after the statement is sent is not bounded at all (measured
+  >20 s). Size an orchestrator timeout at the budget plus a cleanup allowance.
+- Connect and pool bounds apply to **every** metered operation. The statement
+  bound applies to the **readiness probe transaction only**, so a reservation
+  waiting on a row lock is not aborted into a spurious `503`.
+- Pool exhaustion (default 5 + 10 overflow connections) fails closed at the pool
+  timeout with `503 METERING_UNAVAILABLE`; it never admits un-metered traffic.
+- Only **failed** readiness verdicts are cached (`PLATRIXA_READINESS_CACHE_TTL_SECONDS`,
+  default 2 s); a success is always backed by a probe that ran for that call.
 
 Set these in the hosting platform's dashboard (e.g. Render → Environment, or
 Railway → Variables). They must NOT live in the repository. `.env` / `.env.local`
@@ -238,6 +267,25 @@ The backend consumes it through the Phase 7S transport adapter:
 2. Railway auto-detects the `Procfile`; add env vars in the dashboard.
 3. Provision a **PostgreSQL** plugin and point `DATABASE_URL` at it.
 4. Public domain: Railway provides `https://<project>.up.railway.app`.
+
+## Device inference worker (outbound, optional)
+
+`scripts/platrixa_outbound_inference_worker.py` runs on the device, claims jobs
+over outbound HTTPS, calls its own loopback bridge, and submits the result. It
+prints one `run report:` line (`claims=… claimed=… accepted=… — outcome: …`) so
+an idle queue, a refused run, and a failed submission are distinguishable.
+
+| Exit code | Meaning | Output |
+|---|---|---|
+| `0` | Run finished (no work, retryable failures exhausted, or results accepted) | `worker stopped; N job(s) submitted and accepted` + `run report:` |
+| `1` | Unexpected crash (an uncaught error that is not a claim `ApiError`) | Python traceback, **no** run report |
+| `2` | Configuration error (bad flag/URL/key/worker id) | `worker configuration error: …` on stderr, no network I/O |
+| `3` | **Fatal claim rejection** — non-retryable, e.g. HTTP 401/403 | `fatal claim error: HTTP <status> <code> (not retryable; run stopped)` + `run report:` |
+| `130` | Interrupted (Ctrl-C / SIGINT) | `interrupted; stopped cleanly` |
+
+The fatal line is deliberately bounded: it carries the HTTP status and a
+shape-checked error code only — never the response body, request headers, the
+API key, a DSN, or a traceback.
 
 ## Verification after deploy
 

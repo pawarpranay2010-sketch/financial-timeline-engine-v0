@@ -48,6 +48,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Tuple
@@ -66,6 +67,59 @@ logger = logging.getLogger("platrixa.api")
 # gate simply does not activate — documented behavior).
 METERING_ENV_VAR = "PLATRIXA_METERING_DATABASE_URL"
 
+# Bounded connection attempt (readiness fix, 2026-10-20). Readiness previously
+# inferred "store available" from the mere construction of an Engine — which
+# opens no socket — so a configured-but-unreachable store was reported ready.
+# Every metering connection now carries a connect timeout, and readiness does a
+# real `SELECT 1`.
+CONNECT_TIMEOUT_ENV_VAR = "PLATRIXA_DB_CONNECT_TIMEOUT_SECONDS"
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 3
+# libpq itself coerces values below 2 to 2, so the floor matches that rather
+# than accepting a number the server would silently ignore.
+MIN_CONNECT_TIMEOUT_SECONDS = 2
+MAX_CONNECT_TIMEOUT_SECONDS = 30
+
+# Readiness deadline (follow-up, 2026-10-20). A connect timeout alone does NOT
+# bound the probe, because a connection is not the only phase that can block:
+#   * a saturated pool blocks BEFORE any socket exists;
+#   * a server that accepts the connection and then stalls the QUERY blocks
+#     inside execution, where connect_timeout no longer applies.
+# Each of those has a supported bound owned by the layer that enforces it
+# (SQLAlchemy pool, libpq connect, PostgreSQL statement timer), and
+# ``readiness_deadline_seconds()`` is their sum plus cleanup slack.
+#
+# Deliberately NOT a wall-clock timer that "expires" a probe: interrupting a
+# synchronous libpq call from another thread is neither safe nor portable, and
+# abandoning the worker would leak a checked-out connection.
+#
+# KNOWN RESIDUAL (documented, not fixed here): if the network path goes mute
+# AFTER the statement has been sent — the server executes it, but the reply
+# never arrives — no bound below applies. connect_timeout has expired, the
+# statement is already complete server-side, and psycopg exposes no portable
+# client-side read deadline. Measured: still no return after 25s. This is a
+# response-path failure, distinct from a stalled query (bounded) and from a
+# dropped SYN at connect (bounded by connect_timeout).
+STATEMENT_TIMEOUT_MS_ENV_VAR = "PLATRIXA_DB_STATEMENT_TIMEOUT_MS"
+DEFAULT_STATEMENT_TIMEOUT_MS = 1500
+MIN_STATEMENT_TIMEOUT_MS = 100
+MAX_STATEMENT_TIMEOUT_MS = 30_000
+
+POOL_TIMEOUT_ENV_VAR = "PLATRIXA_DB_POOL_TIMEOUT_SECONDS"
+DEFAULT_POOL_TIMEOUT_SECONDS = 1.0
+MIN_POOL_TIMEOUT_SECONDS = 0.1
+MAX_POOL_TIMEOUT_SECONDS = 30.0
+
+# Session close + verdict bookkeeping. Closing a psycopg connection sends
+# Terminate and closes the socket — no round trip — so this is headroom, not a
+# hidden wait.
+CLEANUP_SLACK_SECONDS = 0.5
+
+# Both supported PostgreSQL URL schemes. psycopg3 accepts the same libpq
+# keywords as psycopg2 (connect_timeout, options), so one code path bounds
+# both; leaving a scheme out is how a timeout silently stops protecting a
+# deployment after a driver swap.
+BOUNDED_POSTGRES_SCHEMES = ("postgresql+psycopg2://", "postgresql+psycopg://")
+
 # HTTP semantics are the route's concern; the gate reports outcomes as
 # reason codes so this module stays HTTP-agnostic and directly testable.
 REASON_OK = "OK"
@@ -78,6 +132,52 @@ REASON_METERING_UNAVAILABLE = "METERING_UNAVAILABLE"  # → 503 (fail closed)
 
 class MeteredGateError(Exception):
     """Metering store unavailable while enforcing admission (fail closed)."""
+
+
+# Cause class names that may be written to the log when a request is
+# refused (P1 metering-failure logging, 2026-10-25). The log carries an
+# allow-listed CLASS NAME plus a fixed reason code — and nothing else. An
+# exception MESSAGE is the one place a DSN, password, host, credential or
+# SQL parameter naturally appears, so messages, args and tracebacks are
+# never logged on these paths, whatever the class happens to say.
+SAFE_CAUSE_NAMES = frozenset({
+    # DBAPI / SQLAlchemy driver layer
+    "OperationalError", "InterfaceError", "InternalError", "ProgrammingError",
+    "IntegrityError", "DataError", "NotSupportedError", "DBAPIError",
+    "StatementError", "DisconnectionError", "SQLAlchemyError",
+    # connection pool
+    "PoolTimeout", "PoolClosed", "ResourceClosedError",
+    # sockets / TLS
+    "TimeoutError", "ConnectionError", "ConnectionResetError",
+    "ConnectionRefusedError", "ConnectionAbortedError", "BrokenPipeError",
+    "OSError", "SSLError", "CertificateError", "URLError", "gaierror",
+    # driver missing / not importable
+    "ImportError", "ModuleNotFoundError",
+})
+_UNCLASSIFIED_CAUSE = "unclassified"
+
+
+def _safe_cause_name(exc: BaseException) -> str:
+    """Allow-listed class name of the exception that CAUSED ``exc``.
+
+    Walks the ``__cause__`` / ``__context__`` chain and returns the first
+    class name on ``SAFE_CAUSE_NAMES``; everything else degrades to the
+    fixed token ``unclassified``. Only static class identifiers are read:
+    ``str(exc)``, ``args`` and the traceback are deliberately ignored, so
+    a driver message carrying a DSN or a credential cannot reach the log.
+    """
+    current: Optional[BaseException] = exc
+    for _ in range(8):
+        if current is None:
+            break
+        name = type(current).__name__
+        if name in SAFE_CAUSE_NAMES:
+            return name
+        following = current.__cause__ or current.__context__
+        if following is current:
+            break
+        current = following
+    return _UNCLASSIFIED_CAUSE
 
 
 @dataclass(frozen=True)
@@ -133,6 +233,158 @@ def _metering_database_url() -> Optional[str]:
     return (os.getenv(METERING_ENV_VAR, "") or "").strip() or None
 
 
+def connect_timeout_seconds() -> int:
+    """Effective bounded connect timeout for the metering store (seconds).
+
+    Operator-tunable via PLATRIXA_DB_CONNECT_TIMEOUT_SECONDS, clamped to
+    [2, 30]. An unparseable value falls back to the default instead of
+    failing the deployment: a bad timeout must not remove the store.
+    """
+    raw = (os.getenv(CONNECT_TIMEOUT_ENV_VAR, "") or "").strip()
+    if not raw:
+        return DEFAULT_CONNECT_TIMEOUT_SECONDS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid %s=%r; using default %ds",
+            CONNECT_TIMEOUT_ENV_VAR,
+            raw[:20],
+            DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_CONNECT_TIMEOUT_SECONDS
+    return max(MIN_CONNECT_TIMEOUT_SECONDS, min(MAX_CONNECT_TIMEOUT_SECONDS, value))
+
+
+def statement_timeout_ms() -> int:
+    """Server-side bound on the readiness query, in milliseconds.
+
+    Applied as the libpq ``options`` keyword (``-c statement_timeout=…``), so
+    PostgreSQL itself interrupts a stalled query. ``connect_timeout`` cannot do
+    this: it stops applying once the connection is established.
+    """
+    raw = (os.getenv(STATEMENT_TIMEOUT_MS_ENV_VAR, "") or "").strip()
+    if not raw:
+        return DEFAULT_STATEMENT_TIMEOUT_MS
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid %s=%r; using default %dms",
+            STATEMENT_TIMEOUT_MS_ENV_VAR,
+            raw[:20],
+            DEFAULT_STATEMENT_TIMEOUT_MS,
+        )
+        return DEFAULT_STATEMENT_TIMEOUT_MS
+    return max(MIN_STATEMENT_TIMEOUT_MS, min(MAX_STATEMENT_TIMEOUT_MS, value))
+
+
+def pool_timeout_seconds() -> float:
+    """How long the engine pool may block waiting for a free connection.
+
+    SQLAlchemy's default is 30s — ten times the connect bound — which is why a
+    readiness probe could wait far longer than its documented ceiling while a
+    dead connection was still checked out.
+    """
+    raw = (os.getenv(POOL_TIMEOUT_ENV_VAR, "") or "").strip()
+    if not raw:
+        return DEFAULT_POOL_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid %s=%r; using default %.1fs",
+            POOL_TIMEOUT_ENV_VAR,
+            raw[:20],
+            DEFAULT_POOL_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_POOL_TIMEOUT_SECONDS
+    return max(MIN_POOL_TIMEOUT_SECONDS, min(MAX_POOL_TIMEOUT_SECONDS, value))
+
+
+def readiness_deadline_seconds() -> float:
+    """PROBE-PHASE budget for one readiness check (pool + connect + query).
+
+    This is the ceiling the probe measures itself against: the sum of the
+    bounds each layer enforces (SQLAlchemy pool wait, libpq connect,
+    PostgreSQL statement), plus cleanup slack. The verdict is taken as soon as
+    the probe query returns, so the budget covers the probe phases only.
+
+    It is explicitly NOT a wall-clock response deadline:
+
+      * cleanup (session close / a rollback round trip) runs after the verdict
+        and can therefore extend the HTTP response past this number —
+        ``CLEANUP_SLACK_SECONDS`` is an allowance, not an enforced bound;
+      * a network path that goes mute AFTER a statement is sent is not bounded
+        at all (see the KNOWN RESIDUAL note above);
+      * ``pool_pre_ping`` executes its liveness check on checkout, before the
+        probe can apply its transaction-local statement timeout, so a server
+        that accepts and then stalls is bounded only by the residual above.
+
+    An orchestrator timeout should therefore be at least this value plus a
+    cleanup allowance, and callers must treat an overrun as not-ready (which
+    :func:`probe_store` enforces) rather than as success.
+    """
+    return (
+        pool_timeout_seconds()
+        + connect_timeout_seconds()
+        + statement_timeout_ms() / 1000.0
+        + CLEANUP_SLACK_SECONDS
+    )
+
+
+def _engine_connect_args(url: str) -> dict:
+    """Driver ``connect_args`` bounding CONNECTION ESTABLISHMENT only.
+
+    ``connect_timeout`` bounds connection establishment (and any reconnect),
+    and is a libpq keyword understood by psycopg2 and psycopg3 alike, so both
+    supported PostgreSQL schemes are bounded by the same path.
+
+    The statement bound is deliberately NOT applied here (scope fix,
+    2026-10-25). This engine is shared by the admission path, so a
+    connect-level ``options=-c statement_timeout=…`` also aborted tenant
+    lookups and the quota reservation UPDATE: a row-lock wait on a healthy but
+    busy store surfaced as a fail-closed 503 instead of the documented 429/200
+    outcomes. The readiness probe applies its own bound transaction-locally in
+    :func:`_apply_probe_statement_timeout`, so only the probe is shortened.
+
+    Applied to PostgreSQL dialects only: other dialects (the suites use sqlite)
+    reject ``connect_timeout`` outright, so passing it blindly would break every
+    non-PostgreSQL store rather than bound it.
+    """
+    if url.startswith(BOUNDED_POSTGRES_SCHEMES):
+        return {"connect_args": {"connect_timeout": connect_timeout_seconds()}}
+    return {}
+
+
+def _apply_probe_statement_timeout(session) -> None:
+    """Bound THIS probe transaction's statements to ``statement_timeout_ms()``.
+
+    ``set_config('statement_timeout', …, is_local => true)`` is the
+    parameterized form of ``SET LOCAL``: the bound lives exactly as long as the
+    surrounding transaction, which the Session opens implicitly on the first
+    execute. Closing the session ends that transaction, so the pooled
+    connection is returned with the server's own default — the bound never
+    leaks into a later admission statement or into another request's checkout.
+
+    PostgreSQL-only by nature. On other dialects (the suites use sqlite) this
+    is a no-op, matching :func:`_engine_connect_args`.
+    """
+    from sqlalchemy import text
+
+    # Duck-typed deliberately: suites substitute lightweight session doubles
+    # (execute/close only). Anything that cannot name its dialect is treated as
+    # non-PostgreSQL and skipped, exactly like the sqlite store.
+    get_bind = getattr(session, "get_bind", None)
+    bind = get_bind() if callable(get_bind) else None
+    if getattr(getattr(bind, "dialect", None), "name", None) != "postgresql":
+        return
+    session.execute(
+        text("SELECT set_config('statement_timeout', :bound, true)"),
+        {"bound": f"{int(statement_timeout_ms())}ms"},
+    )
+
+
 def _session_factory():
     """A sessionmaker bound to the METERING store (not the app store).
 
@@ -183,7 +435,13 @@ def _session_factory():
         cached = _session_factory_cache.get(url)
         if cached is not None:
             return cached
-        engine = create_engine(url, pool_pre_ping=True, future=True)
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            future=True,
+            pool_timeout=pool_timeout_seconds(),
+            **_engine_connect_args(url),
+        )
         factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         _session_factory_cache[url] = factory
         return factory
@@ -195,6 +453,85 @@ _session_factory_lock = threading.Lock()
 
 def _metering_configured() -> bool:
     return _metering_database_url() is not None
+
+
+def probe_store() -> None:
+    """One REAL, bounded connectivity check against the metering store.
+
+    Readiness must never be inferred from the fact that an Engine object could
+    be constructed: ``create_engine`` is lazy and opens no socket, so a
+    configured-but-unreachable store is indistinguishable from a healthy one
+    until a connection is actually attempted. This executes ``SELECT 1`` on the
+    SAME cached engine the admission path uses — no second pool, one round trip
+    — so success means the store behind the credential boundary is genuinely
+    usable right now.
+
+    Raises :class:`MeteredGateError` on any failure. The message is fixed text:
+    driver messages can carry the DSN (host, user, sometimes the password) and
+    this outcome is surfaced by ``/v1/ready``.
+
+    Bounds applied here (2026-10-25): pool wait and connect come from the
+    shared engine; the statement bound is set for THIS transaction only by
+    :func:`_apply_probe_statement_timeout`, so the reservation path is never
+    shortened. The deadline verdict is taken immediately after the probe query
+    returns, before cleanup, so an overrun always fails closed; a slow close
+    can extend the response but cannot change the verdict.
+    """
+    from sqlalchemy import text
+
+    if not _metering_configured():
+        raise MeteredGateError("metering store not configured")
+    started = time.monotonic()
+    session = None
+    try:
+        session = _session_factory()()
+        # Probe-only statement bound (scope fix, 2026-10-25): the shared engine
+        # carries no connect-level statement_timeout, so apply it for THIS
+        # transaction and let the pool hand the connection back at the server
+        # default. Readiness is the path that must also be short; a metered
+        # reservation must not be aborted mid-lock-wait.
+        _apply_probe_statement_timeout(session)
+        session.execute(text("SELECT 1"))
+        # Deadline verdict BEFORE cleanup (2026-10-25). Measured over the probe
+        # phases — pool wait, connect, statement — so a slow session close can
+        # delay the HTTP response but can never turn an overrunning probe into
+        # a late "ready". Overrun fails closed, exactly like a probe error.
+        elapsed = time.monotonic() - started
+        deadline = readiness_deadline_seconds()
+        if elapsed > deadline:
+            logger.warning(
+                "readiness probe exceeded its %.1fs budget (%.2fs); reporting unavailable",
+                deadline,
+                elapsed,
+            )
+            raise MeteredGateError("metering store unavailable")
+    except MeteredGateError:
+        # The overrun verdict above is already logged and fully formed: never
+        # re-wrap it (that would log a second, less specific line) and never
+        # change the exception type the caller sees.
+        raise
+    except Exception as exc:
+        # P2 (2026-10-25): a failed probe used to be SILENT — the caller only
+        # ever saw the fixed text "metering store unavailable". This is the
+        # ONE log site for a probe failure: admission.store_reachable() and
+        # the route layer stay silent, and the negative cache bounds repeats
+        # to at most one probe (hence one line) per TTL window. Only the
+        # allow-listed CAUSE class name is logged — driver messages routinely
+        # embed the DSN, user name and password, so str(exc), args and the
+        # traceback are never used.
+        logger.warning(
+            "readiness probe failed: cause=%s",
+            _safe_cause_name(exc),
+        )
+        raise MeteredGateError("metering store unavailable") from exc
+    finally:
+        # A close failure must not mask the verdict or change the exception
+        # type the caller sees.
+        if session is not None:
+            try:
+                session.close()
+            except Exception:  # pragma: no cover — defensive
+                logger.debug("metering probe session close failed")
 
 
 # ---------------------------------------------------------------------------
@@ -403,5 +740,17 @@ def authorize_units(
     try:
         return reserve_units(provided_key, units)
     except MeteredGateError as exc:
-        logger.warning("metering gate unavailable: %s", type(exc).__name__)
+        # ONE line per refused request, written at the layer that maps the
+        # failure to a reason code: the route layer only maps that reason
+        # to HTTP, and admission.admit does not log on this path, so a
+        # refused request is never logged twice. Logged: the fixed reason
+        # code and the allow-listed CAUSE class name. The previous
+        # ``type(exc).__name__`` was always the wrapper
+        # ("MeteredGateError"), which named nothing about the real
+        # failure. Never the message, traceback, DSN or SQL — P1, 2026-10-25.
+        logger.warning(
+            "metering gate unavailable: reason=%s cause=%s",
+            REASON_METERING_UNAVAILABLE,
+            _safe_cause_name(exc),
+        )
         return REASON_METERING_UNAVAILABLE, None

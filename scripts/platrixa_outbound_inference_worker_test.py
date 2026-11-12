@@ -1427,6 +1427,175 @@ def test_model_chat_dialect_tenant_isolation() -> None:
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Fix A — submission outcome classification (retryable 503 is UNKNOWN, not rejected)
+# ---------------------------------------------------------------------------
+
+
+def test_submission_503_is_unknown_not_rejected() -> None:
+    """A retryable 503 at submission is ambiguous (UNKNOWN), never a terminal rejection.
+
+    The server said it could not validate the submission; the commit outcome is
+    not established. The worker must not misreport that as 'rejected' (a
+    definitive refusal). The poll loop continues serving other jobs.
+    """
+    bridge = lambda call: FakeResponse(200, BRIDGE_BODY)  # noqa: E731
+
+    def api(call):
+        if call["url"].endswith("/claim"):
+            if not api.claimed:
+                api.claimed = True
+                return FakeResponse(200, claim_body(job_id="job-503"))
+            return FakeResponse(200, no_work_body(0.01))
+        if call["url"].endswith("/result"):
+            return FakeResponse(503, error_body("SERVICE_UNAVAILABLE", "temporarily unavailable"))
+        if call["url"].endswith("/lease"):
+            return FakeResponse(200, renewal_body())
+        raise AssertionError(f"unexpected API call: {call['url']}")
+
+    api.claimed = False
+    worker, api_sess, _ = make_worker(api, bridge_handler=bridge, tick=0.01)
+
+    # --once equivalent: bound the poll loop so it stops after the NO_WORK
+    completed = worker.run_forever(max_polls=3)
+
+    report = worker.last_run_report
+    assert completed == 0, f"a 503 must not count as accepted (got {completed})"
+    assert report["accepted"] == 0
+    assert report["replayed"] == 0
+    assert report["rejected"] == 0, (
+        f"a retryable 503 must NOT be classified as a terminal rejection; "
+        f"report={report}"
+    )
+    assert report["unknown"] >= 1, (
+        f"a retryable 503 submission failure must be classified as UNKNOWN; "
+        f"report={report}"
+    )
+    assert report["claimed"] == 1, f"expected exactly one claim; report={report}"
+    assert report["bridge_failures"] == 0
+
+    # The operator-facing report must agree with the counters.
+    line = worker._format_run_report() if hasattr(worker, "_format_run_report") else None
+    # format_run_report is a module-level function; verify via the module import
+    from platrixa_outbound_inference_worker import format_run_report
+    formatted = format_run_report(report)
+    assert "rejected=0" in formatted, f"report line must show rejected=0: {formatted}"
+    assert "unknown=" in formatted and "unknown=0" not in formatted, (
+        f"report line must reflect the unknown outcome: {formatted}"
+    )
+
+
+def test_submission_terminal_rejection_still_counted_as_rejected() -> None:
+    """A definitive 4xx (e.g. 422) submission refusal remains a terminal rejection."""
+    bridge = lambda call: FakeResponse(200, BRIDGE_BODY)  # noqa: E731
+
+    def api(call):
+        if call["url"].endswith("/claim"):
+            if not api.claimed:
+                api.claimed = True
+                return FakeResponse(200, claim_body(job_id="job-422"))
+            return FakeResponse(200, no_work_body(0.01))
+        if call["url"].endswith("/result"):
+            return FakeResponse(422, error_body("VALIDATION_FAILED", "rejected"))
+        if call["url"].endswith("/lease"):
+            return FakeResponse(200, renewal_body())
+        raise AssertionError(f"unexpected API call: {call['url']}")
+
+    api.claimed = False
+    worker, _, _ = make_worker(api, bridge_handler=bridge, tick=0.01)
+    completed = worker.run_forever(max_polls=3)
+    report = worker.last_run_report
+
+    assert completed == 0
+    assert report["rejected"] == 1, f"terminal 422 must count as rejected; report={report}"
+    assert report["unknown"] == 0, f"terminal 422 is not ambiguous; report={report}"
+    assert report["accepted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Fix B — fail closed on unknown model completion state
+# ---------------------------------------------------------------------------
+
+
+
+def test_model_missing_finish_reason_fails_closed() -> None:
+    """A model response with no finish_reason must fail closed (never submitted)."""
+    # Chat response missing finish_reason entirely
+    wire = {
+        "id": "cmpl-1",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": ANSWER}}],
+    }
+    worker, _api, model, submitted = direct_worker(lambda call: FakeResponse(200, wire))
+    exc = expect_raises(BridgeResponseError, lambda: worker.process_job(worker.claim().job))
+    msg = str(exc).lower()
+    assert "finish_reason" in msg or "completion" in msg, f"unexpected error: {exc}"
+    assert submitted == [], f"must not submit when completion is unestablished; got {submitted}"
+    assert len(model.calls) == 1
+
+
+def test_model_null_finish_reason_fails_closed() -> None:
+    """A model response with finish_reason=null must fail closed."""
+    wire = {
+        "id": "cmpl-1",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": ANSWER}, "finish_reason": None}],
+    }
+    worker, _api, model, submitted = direct_worker(lambda call: FakeResponse(200, wire))
+    exc = expect_raises(BridgeResponseError, lambda: worker.process_job(worker.claim().job))
+    assert "finish_reason" in str(exc).lower() or "completion" in str(exc).lower()
+    assert submitted == []
+    assert len(model.calls) == 1
+
+
+def test_model_unrecognized_finish_reason_fails_closed() -> None:
+    """An unrecognized finish_reason (not stop/length) must fail closed."""
+    wire = {
+        "id": "cmpl-1",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": ANSWER}, "finish_reason": "content_filter"}],
+    }
+    worker, _api, model, submitted = direct_worker(lambda call: FakeResponse(200, wire))
+    exc = expect_raises(BridgeResponseError, lambda: worker.process_job(worker.claim().job))
+    assert "unrecognized" in str(exc).lower() or "finish_reason" in str(exc).lower()
+    assert submitted == []
+    assert len(model.calls) == 1
+
+
+def test_model_stop_finish_reason_is_complete() -> None:
+    """finish_reason 'stop' is recognized normal completion → COMPLETE, submitted."""
+    worker, _api, model, submitted = direct_worker(lambda call: chat_wire(ANSWER, "stop"))
+    outcome = worker.process_job(worker.claim().job)
+    assert outcome.accepted is True
+    assert len(submitted) == 1
+    body = submitted[0]["json"]["bridge_body"]
+    assert body["completion_status"] == "COMPLETE"
+    assert body["finish_reason"] == "stop"
+
+
+def test_model_length_finish_reason_is_truncated_not_complete() -> None:
+    """finish_reason 'length' must remain TRUNCATED (not submitted as COMPLETE).
+
+    The worker marks it TRUNCATED and passes it through; the server's
+    deterministic pipeline decides. The key invariant: it is never labeled
+    COMPLETE.
+    """
+    worker, _api, model, submitted = direct_worker(lambda call: chat_wire(ANSWER, "length"))
+    # The worker submits the body (server will reject); what matters here is the
+    # label is TRUNCATED, never COMPLETE.
+    try:
+        worker.process_job(worker.claim().job)
+    except (ApiError, BridgeResponseError, LeaseLost):
+        pass  # server-side rejection is fine; we care about what was sent
+    assert len(submitted) <= 1
+    if submitted:
+        body = submitted[0]["json"]["bridge_body"]
+        assert body["completion_status"] == "TRUNCATED", body
+        assert body["completion_status"] != "COMPLETE"
+        assert body["finish_reason"] == "length"
+
+
 TESTS = (
     test_no_work_and_headers,
     test_claimed_job,
@@ -1461,6 +1630,13 @@ TESTS = (
     test_model_chat_dialect_malformed_json_fails_closed,
     test_model_chat_dialect_empty_output_fails_closed,
     test_model_chat_dialect_tenant_isolation,
+    test_submission_503_is_unknown_not_rejected,
+    test_submission_terminal_rejection_still_counted_as_rejected,
+    test_model_missing_finish_reason_fails_closed,
+    test_model_null_finish_reason_fails_closed,
+    test_model_unrecognized_finish_reason_fails_closed,
+    test_model_stop_finish_reason_is_complete,
+    test_model_length_finish_reason_is_truncated_not_complete,
 )
 
 

@@ -576,8 +576,14 @@ def section_p(client: TestClient) -> None:
         r = client.get("/v1/health")
         check("P1 /v1/health works without any client", r.status_code == 200)
         src = Path("api/routes/developer.py").read_text(encoding="utf-8")
-        health_src = src.split("def health_v1")[1].split("@router.get(\"/v1/ready\"")[0]
-        check("P2 health handler never calls _get_client", "_get_client" not in health_src)
+        # Bound the slice by the NEXT route decorator rather than by the literal
+        # text of the readiness decorator. The readiness route's decorator is now
+        # multi-line (it declares its 503 response), and pinning the assertion to
+        # that formatting made this check fail on a purely cosmetic change while
+        # testing nothing about the health handler itself.
+        health_src = src.split("def health_v1", 1)[1].split("\n@router.", 1)[0]
+        check("P2 health handler never calls _get_client", "_get_client" not in health_src,
+              health_src[:120])
     finally:
         developer._get_client._override = None
 
@@ -594,26 +600,55 @@ def section_q(client: TestClient) -> None:
     try:
         r = client.get("/v1/ready")
         body = r.json()
+        # HTTP CONTRACT (readiness deadline follow-up, 2026-10-20): the status
+        # code IS the verdict. not_ready now answers 503, so an orchestrator
+        # that gates on the status code cannot route traffic to a deployment
+        # that would refuse every metered request. The body shape is unchanged.
         check("Q1 zero-config open mode is NOT ready (admission unconfigured)",
-              r.status_code == 200 and body["status"] == "not_ready", str(body.get("status")))
+              r.status_code == 503 and body["status"] == "not_ready",
+              f"code={r.status_code} status={body.get('status')}")
+        check("Q1a not_ready answers a NON-2xx status (gateable by an orchestrator)",
+              not (200 <= r.status_code < 300), str(r.status_code))
+        check("Q1a-2 the 503 body keeps the documented readiness shape",
+              {"status", "api_version", "provider", "admission", "reason"} <= set(body),
+              str(sorted(body)))
         adm = body.get("admission") or {}
         check("Q1b the not_ready reason names the missing admission configuration",
               "admission" in str(body.get("reason", "")), str(body.get("reason")))
         check("Q1c admission block reports open-anonymous + production_ready=false",
               adm.get("mode") == "open-anonymous" and adm.get("production_ready") is False, str(adm))
         h = client.get("/v1/health")
-        check("Q1d /health stays GREEN while /ready is not_ready (liveness ≠ readiness)",
+        check("Q1d /health stays GREEN (200) while /ready is 503 (liveness ≠ readiness)",
               h.status_code == 200 and h.json().get("status") == "ok", str(h.status_code))
     finally:
         developer.reset_client()
 
-    # With an admission boundary configured and its store reachable,
+    # With an admission boundary configured AND its store genuinely reachable,
     # readiness follows the provider again.
+    #
+    # Readiness fix (2026-10-20): /v1/ready now performs a real bounded
+    # `SELECT 1` instead of only constructing an Engine, so a configured URL is
+    # no longer sufficient — the double below must ANSWER THE PROBE. Previously
+    # this section asserted "production-ready" using a no-op factory while the
+    # URL pointed at an unresolvable host (``h:5432``); that assertion was
+    # satisfied by the same false-positive the fix removes.
+    from backend.auth import admission as admission_boundary
     from backend.auth import gate as metered_gate
 
     os.environ["PLATRIXA_METERING_DATABASE_URL"] = "postgresql://u:p@h:5432/db"
     real_factory = metered_gate._session_factory
-    metered_gate._session_factory = lambda: (lambda: None)
+    probe_calls: list[int] = []
+    admission_boundary.reset_readiness_cache()
+
+    class _ProbeSession:
+        def execute(self, *_args, **_kwargs):
+            probe_calls.append(1)
+            return None
+
+        def close(self):
+            return None
+
+    metered_gate._session_factory = lambda: (lambda: _ProbeSession())
     developer.set_client(TransportStub("VERIFIED"))
     try:
         r = client.get("/v1/ready")
@@ -621,16 +656,42 @@ def section_q(client: TestClient) -> None:
         check("Q1e ready when provider is loadable AND admission is production-ready",
               r.status_code == 200 and body["status"] == "ready"
               and (body.get("admission") or {}).get("production_ready") is True, str(body)[:160])
+        check("Q1e-2 readiness measured the store (a configured URL alone is not enough)",
+              probe_calls == [1], f"probe calls={len(probe_calls)}")
+
+        # The converse must hold, and it is the case the old check could not
+        # distinguish: configured but unreachable is NOT production-ready.
+        def _dead_factory():
+            raise RuntimeError("postgres://secret-user:secret-pw@host/db (leak attempt)")
+
+        metered_gate._session_factory = _dead_factory
+        admission_boundary.reset_readiness_cache()  # a cached "ready" must not mask it
+        r_dead = client.get("/v1/ready")
+        dead = r_dead.json()
+        dead_adm = dead.get("admission") or {}
+        check("Q1f an unreachable metering store is NOT production-ready",
+              r_dead.status_code == 503 and dead.get("status") == "not_ready"
+              and dead_adm.get("production_ready") is False
+              and dead_adm.get("metering_store_available") is False,
+              f"code={r_dead.status_code} {str(dead)[:200]}")
+        check("Q1g the not_ready reason attributes the failure to the store",
+              "unreachable" in str(dead.get("reason", "")), str(dead.get("reason")))
+        check("Q1h the unreachable-store body leaks no connection material",
+              "secret-user" not in r_dead.text and "postgres://" not in r_dead.text,
+              r_dead.text[:200])
     finally:
         developer.reset_client()
         metered_gate._session_factory = real_factory
+        admission_boundary.reset_readiness_cache()
         os.environ.pop("PLATRIXA_METERING_DATABASE_URL", None)
 
     developer.set_client(NotReadyStub())
     try:
         r = client.get("/v1/ready")
         body = r.json()
-        check("Q2 not_ready when provider is hard-failed", body["status"] == "not_ready" and body.get("reason"))
+        check("Q2 not_ready when provider is hard-failed",
+              r.status_code == 503 and body["status"] == "not_ready" and body.get("reason"),
+              f"code={r.status_code}")
         check("Q3 dependency failure is not hidden", body.get("provider", {}).get("available") is False)
     finally:
         developer.reset_client()
