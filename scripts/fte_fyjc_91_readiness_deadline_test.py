@@ -740,9 +740,19 @@ def section_e() -> None:
 
     # The pre-fix readiness_block, extracted from git, must still FAIL the Q1e-2
     # assertion — otherwise the regression test has stopped detecting anything.
+    # The baseline must be the revision BEFORE the fix, resolved from history —
+    # never HEAD. Once the fix is committed, HEAD *is* the corrected code, so
+    # reading HEAD here asserts the opposite of what this check claims and
+    # fails on every clean checkout (fixed 2026-11-12).
     try:
+        introduced = subprocess.run(
+            ["git", "log", "--format=%H", "--reverse", "-S", "def store_reachable",
+             "--", "backend/auth/admission.py"],
+            cwd=str(ROOT), capture_output=True, text=True, check=True,
+        ).stdout.split()
+        baseline = f"{introduced[0]}^" if introduced else "HEAD"
         old_src = subprocess.run(
-            ["git", "show", "HEAD:backend/auth/admission.py"],
+            ["git", "show", f"{baseline}:backend/auth/admission.py"],
             cwd=str(ROOT), capture_output=True, text=True, check=True,
         ).stdout
     except Exception as exc:
