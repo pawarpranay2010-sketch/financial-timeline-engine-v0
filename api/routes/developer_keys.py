@@ -24,6 +24,7 @@ validation failures → 400 with the existing envelope and codes.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -74,22 +75,90 @@ def _error_response(
 def _authorize(request: Request) -> str:
     """Authorize the management plane. Returns the bound tenant_id.
 
-    Fails closed on every ambiguous state (mirrors the gate's mapping
-    discipline):
+    Per Phase 1B, gateway-originated management requests require BOTH:
+      1. A valid management gateway assertion (HMAC-SHA256 canonical message)
+      2. Existing authorize_management() verification using x-platrixa-management-token
+
+    Fails closed on every ambiguous state:
       NOT_CONFIGURED → 400 (deployment disabled; client-side config)
       MISCONFIGURED  → 503 (token set but tenant binding missing)
       INVALID        → 403 (wrong/absent token — including a runtime
                        API key masquerading as a management token)
       store error    → 503
+
+    Gateway-originated requests are identified by the presence of assertion
+    headers (x-platrixa-assertion-signature, etc.). For such requests,
+    both the gateway assertion AND authorize_management() must pass, and
+    the tenant_ids must match.
+
+    Non-gateway requests (no assertion headers) only require
+    authorize_management() — these will fail for browser requests since
+    the public proxy strips the management token.
     """
     from backend.auth import api_keys as store
 
     token = request.headers.get("x-platrixa-management-token", "")
     reason, tenant_id = store.authorize_management(token)
-    if reason == store.MGMT_OK:
-        return tenant_id  # type: ignore[return-value]
 
-    request_id = request.headers.get("x-request-id")
+    # Check for management gateway assertion headers (gateway-originated)
+    has_assertion_sig = request.headers.get("x-platrixa-assertion-signature")
+    has_assertion_issuer = request.headers.get("x-platrixa-assertion-issuer")
+    has_assertion_audience = request.headers.get("x-platrixa-assertion-audience")
+
+    if has_assertion_sig and has_assertion_issuer and has_assertion_audience:
+      # Gateway-originated request: also validate the gateway assertion
+      from backend.auth.api_keys import (
+          validate_management_gateway_assertion,
+      )
+
+      assertion_tenant = None
+      try:
+          result = validate_management_gateway_assertion(
+              secret=os.getenv("PLATRIXA_MANAGEMENT_ASSERTION_SECRET"),
+              signature=request.headers.get("x-platrixa-assertion-signature"),
+              issuer=request.headers.get("x-platrixa-assertion-issuer"),
+              audience=request.headers.get("x-platrixa-assertion-audience"),
+              tenant_id=request.headers.get("x-platrixa-assertion-tenant-id"),
+              method=request.headers.get("x-platrixa-assertion-method") or '',
+              path=request.headers.get("x-platrixa-assertion-path") or '',
+              query_string=request.headers.get("x-platrixa-assertion-query-string") or '',
+              content_type=request.headers.get("x-platrixa-assertion-content-type") or '',
+              body_hash=request.headers.get("x-platrixa-assertion-body-hash") or '',
+              timestamp=request.headers.get("x-platrixa-assertion-timestamp") or '',
+              nonce=request.headers.get("x-platrixa-assertion-nonce") or '',
+          )
+          if result[0] == store.MGMT_OK:
+              assertion_tenant = result[1]
+          else:
+              # Assertion invalid → reject with 403
+              request_id = request.headers.get("x-request-id")
+              raise HTTPException(
+                  status_code=403,
+                  detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
+                  headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+              )
+      except Exception as e:
+          logger.warning(f"Gateway assertion validation error: {e}")
+          request_id = request.headers.get("x-request-id")
+          raise HTTPException(
+              status_code=403,
+              detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
+              headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+          )
+
+      # Both assertion and authorize_management must pass, and tenant_ids must match
+      if tenant_id != assertion_tenant:
+          request_id = request.headers.get("x-request-id")
+          logger.warning(
+            f"Management tenant mismatch: authorize_management={tenant_id}, "
+            f"assertion={assertion_tenant}"
+          )
+          raise HTTPException(
+              status_code=403,
+              detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
+              headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+          )
+
     if reason == store.MGMT_NOT_CONFIGURED:
         raise HTTPException(
             status_code=400,
@@ -103,11 +172,13 @@ def _authorize(request: Request) -> str:
             detail="API_KEY_MANAGEMENT_UNAVAILABLE",
             headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAVAILABLE"},
         )
-    raise HTTPException(
-        status_code=403,
-        detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
-        headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
-    )
+    if reason != store.MGMT_OK:
+        raise HTTPException(
+            status_code=403,
+            detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
+            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+        )
+    return tenant_id
 
 
 def _store_error_response(request: Request) -> JSONResponse:

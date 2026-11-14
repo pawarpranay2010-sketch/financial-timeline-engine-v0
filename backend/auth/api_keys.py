@@ -39,6 +39,7 @@ SECURITY MODEL (stated honestly):
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -57,6 +58,21 @@ from backend.auth.tokens import hash_token
 MANAGEMENT_TOKEN_ENV_VAR = "PLATRIXA_KEY_MANAGEMENT_TOKEN"
 MANAGEMENT_TENANT_ENV_VAR = "PLATRIXA_KEY_MANAGEMENT_TENANT_ID"
 
+# Explicit allowlist of issuers whose gateway assertions are trusted. There is
+# deliberately NO implicit default: an unset, empty or malformed allowlist makes
+# management gateway authentication fail closed.
+MANAGEMENT_TRUSTED_ISSUERS_ENV_VAR = "PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS"
+
+# Exact issuer identifier format: no whitespace, no separators that could be
+# confused with the pipe-delimited canonical message.
+_MANAGEMENT_ISSUER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+# Assertion nonce format (the raw value is hashed before storage).
+_MANAGEMENT_NONCE_RE = re.compile(r"^[A-Za-z0-9._:-]{16,128}$")
+# A consumed nonce outlives the 300s assertion window with margin for skew.
+_MANAGEMENT_NONCE_TTL_SECONDS = 600
+_MANAGEMENT_NONCE_SCHEMA_READY: set = set()
+_MANAGEMENT_NONCE_ENGINES: dict = {}
+
 ENVIRONMENTS = ("test", "live")
 DEFAULT_ENVIRONMENT = "test"
 
@@ -69,6 +85,8 @@ MGMT_OK = "OK"
 MGMT_NOT_CONFIGURED = "NOT_CONFIGURED"
 MGMT_MISCONFIGURED = "MISCONFIGURED"
 MGMT_INVALID = "INVALID"
+MGMT_REPLAY = "REPLAYDETECTED"
+MGMT_NONCE_UNAVAILABLE = "NONCE_STORE_UNAVAILABLE"
 
 KEY_NOT_FOUND = "API_KEY_NOT_FOUND"
 KEY_REVOKED = "API_KEY_REVOKED"
@@ -590,3 +608,361 @@ def rotate_api_key(tenant_id: str, key_id: str) -> Tuple[Optional[dict], str]:
         raise
     except Exception as exc:
         raise ApiKeyStoreError("rotation failed") from exc
+
+
+# ---------------------------------------------------------------------------
+# Visitor identities are bounded opaque ids (256-bit hex or UUID-shaped).
+_VISITOR_ID_RE = re.compile(r"^[A-Za-z0-9-]{16,64}$")
+
+
+# Visitor assertion validation (Phase 1B V2)
+# ---------------------------------------------------------------------------
+
+def validate_visitor_assertion(
+    provided_assertion: Optional[str] = None,
+    provided_visitor_id: Optional[str] = None,
+    provided_timestamp: Optional[str] = None,
+    provided_nonce: Optional[str] = None,
+    method: Optional[str] = None,
+    path: Optional[str] = None,
+    query_string: Optional[str] = None,
+    body_hash: Optional[str] = None,
+    secret: Optional[str] = None,
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """Validate a visitor HMAC-SHA256 assertion.
+
+    Returns ``(reason, visitor_id, tenant_id)``.
+
+    - ``reason``: ``VALID`` or one of the reject reasons.
+    - ``visitor_id``: The derived visitor identifier (lowercased hex), or
+      ``None`` if the assertion is invalid.
+    - ``tenant_id``: The tenant that the API key maps to (from the backend
+      API key's tenant scoping), or ``None`` if the key has no tenant.
+
+    The assertion format is a versioned canonical encoding:
+      V1|platrixa|<visitor_id>|<METHOD>|<PATH>|<QUERY>|<BODY_HASH>|<TIMESTAMP>|<NONCE>|<HMAC>
+
+    Tenant resolution is INDEPENDENT from the assertion's tenant claim.
+    The assertion's tenant_id is a non-authoritative consistency check;
+    the real tenant is resolved from the authenticated server-side API key.
+
+    The canonical format and verification rules:
+    1. Parse the pipe-delimited format: V1|platrixa|visitor_id|method|path|query|body_hash|timestamp|nonce|hmac
+    2. Verify the method matches the actual request method
+    3. Verify the path matches (do NOT lowercase)
+    4. Verify the query string preserves duplicates and order
+    5. Verify the body hash equals SHA-256 of the exact raw request body bytes
+    6. Verify the timestamp is within 60 seconds tolerance
+    7. Verify the nonce is not replayed (via the nonce store)
+    8. Use constant-time signature comparison
+
+    The tenant in the assertion is a non-authoritative consistency field;
+    the authoritative tenant is resolved from the server-side API key that
+    authenticated the request.
+    """
+    import hmac
+    import hashlib
+
+    # Use the PLATRIXA_VISITOR_HMAC_SECRET from environment
+    visitor_secret = (os.getenv("PLATRIXA_VISITOR_HMAC_SECRET", "") or "").strip()
+    if not visitor_secret:
+        return "VISITOR_AUTH_DISABLED", None, None
+
+    # Parse the versioned canonical format
+    # Expected: V1|platrixa|<visitor_id>|<METHOD>|<PATH>|<QUERY>|<BODY_HASH>|<TIMESTAMP>|<NONCE>|<HMAC>
+    parts = provided_assertion.split("|")
+    if len(parts) != 10 or parts[0] != "V1" or parts[1] != "platrixa":
+        return "MALFORMED_ASSERTION", None, None
+
+    assertion_visitor_id = parts[2]
+    assertion_method = parts[3]
+    assertion_path = parts[4]
+    assertion_query = parts[5]
+    assertion_body_hash = parts[6]
+    assertion_timestamp = parts[7]
+    assertion_nonce = parts[8]
+    assertion_signature = parts[9]
+
+    # Verify the HMAC-SHA256 signature FIRST, over the canonical 9 fields.
+    # Without this check a caller could simply write any visitor id into the
+    # assertion, defeating visitor isolation entirely.
+    canonical = "|".join(parts[:9])
+    expected_signature = hmac.new(
+        visitor_secret.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, assertion_signature):
+        return "SIGNATURE_MISMATCH", None, None
+
+    # The visitor identity must be a bounded, well-formed identifier and must
+    # agree with any separately supplied visitor id (never trust a bare header).
+    if not _VISITOR_ID_RE.fullmatch(assertion_visitor_id or ""):
+        return "MALFORMED_VISITOR_ID", None, None
+    if provided_visitor_id is not None and provided_visitor_id != assertion_visitor_id:
+        return "VISITOR_MISMATCH", None, None
+    if not (assertion_nonce or "").strip():
+        return "MALFORMED_ASSERTION", None, None
+
+    # Verify the method matches
+    if assertion_method != (method or ""):
+        return "METHOD_MISMATCH", None, None
+
+    # Verify the path matches (do NOT lowercase)
+    if assertion_path != (path or ""):
+        return "PATH_MISMATCH", None, None
+
+    # Verify the query string (preserve duplicates and order)
+    if assertion_query != (query_string or ""):
+        return "QUERY_MISMATCH", None, None
+
+    # Verify the body hash (raw SHA-256 of exact request body bytes)
+    if assertion_body_hash != (body_hash or ""):
+        return "BODY_HASH_MISMATCH", None, None
+
+    # Verify the timestamp is within tolerance (60 seconds) against the
+    # SERVER clock. A client-supplied timestamp can never be the freshness
+    # anchor — otherwise a captured assertion would stay valid forever.
+    try:
+        req_ts = int(assertion_timestamp)
+    except (ValueError, TypeError):
+        return "INVALID_TIMESTAMP", None, None
+
+    if provided_timestamp is not None and str(provided_timestamp).strip() != str(req_ts):
+        return "INVALID_TIMESTAMP", None, None
+
+    import time as _time
+
+    now_ts = int(_time.time())
+    if req_ts > now_ts + 60:
+        return "TIMESTAMP_FUTURE", None, None
+    if now_ts - req_ts > 60:
+        return "TIMESTAMP_EXPIRED", None, None
+
+    # --- Replay protection: atomic nonce consumption ---
+    # Use the visitor assertion nonce store to atomically consume the nonce.
+    # This ensures each nonce is consumed exactly once, preventing replay attacks.
+    from backend.auth.init_visitor_nonce import initialise_visitor_nonce_schema
+
+    nonce_store_available = initialise_visitor_nonce_schema()
+    if nonce_store_available:
+        from sqlalchemy import create_engine, text
+
+        url = (os.getenv("PLATRIXA_METERING_DATABASE_URL", "") or "").strip()
+        if url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+        try:
+            engine = create_engine(url, future=True)
+            with engine.begin() as conn:
+                # Atomic check-and-consume: the PRIMARY KEY on 'nonce' makes
+                # exactly one consumer win. DO NOTHING means a conflicting
+                # insert returns NO row — that is the replay signal. (Returning
+                # a column here would always yield a value and never detect a
+                # replay.)
+                consumed_row = conn.execute(
+                    text(
+                        """
+                        INSERT INTO visitor_assertion_nonces (nonce, asserted_at, consumed, expires_at)
+                        VALUES (:nonce, NOW(), TRUE, NOW() + INTERVAL '1 hour')
+                        ON CONFLICT (nonce) DO NOTHING
+                        RETURNING nonce
+                        """
+                    ).bindparams(nonce=assertion_nonce),
+                ).first()
+                if consumed_row is None:
+                    return "REPLAYDETECTED", None, None  # nonce already consumed → replay rejected
+        except Exception as e:
+            # Nonce store failure → fail closed (reject the assertion)
+            # This ensures we never accidentally accept a replayed assertion.
+            return "NONCE_STORE_ERROR", None, None
+    else:
+        # Replay protection is mandatory: without the nonce store we cannot
+        # prove single use, so fail closed rather than accepting a replayable
+        # assertion.
+        return "NONCE_STORE_UNAVAILABLE", None, None
+
+    # All checks passed — visitor assertion is valid
+    # Resolve tenant from the API key (independent from assertion)
+    # The tenant_id will be provided by the caller from the API key's tenant scoping
+
+    return "VALID", assertion_visitor_id, None  # tenant_id resolved separately
+
+
+# ---------------------------------------------------------------------------
+# Management gateway assertion validation (unchanged, for reference)
+# ---------------------------------------------------------------------------
+
+def trusted_management_issuers() -> Optional[frozenset]:
+    """The configured trusted issuer set, or ``None`` when unusable.
+
+    ``None`` means FAIL CLOSED: the caller must reject every gateway
+    assertion. Parsing rules: comma-separated, whitespace-trimmed, empty
+    entries dropped, every entry must match the exact issuer format. No
+    substring, wildcard or prefix matching is ever performed.
+    """
+    raw = (os.getenv(MANAGEMENT_TRUSTED_ISSUERS_ENV_VAR, "") or "").strip()
+    if not raw:
+        return None
+    entries = [part.strip() for part in raw.split(",")]
+    entries = [entry for entry in entries if entry]
+    if not entries:
+        return None
+    for entry in entries:
+        if not _MANAGEMENT_ISSUER_RE.match(entry):
+            return None
+    return frozenset(entries)
+
+
+def _management_nonce_engine():
+    """Cached engine for the management nonce store (schema ensured once)."""
+    from sqlalchemy import create_engine
+
+    from backend.auth.init_management_nonce import initialise_management_nonce_schema
+
+    url = (os.getenv("PLATRIXA_METERING_DATABASE_URL", "") or "").strip()
+    if not url:
+        raise RuntimeError("management nonce store is not configured")
+    sqlalchemy_url = url.replace("postgresql://", "postgresql+psycopg2://", 1) if url.startswith("postgresql://") else url
+    if sqlalchemy_url not in _MANAGEMENT_NONCE_SCHEMA_READY:
+        if not initialise_management_nonce_schema():
+            raise RuntimeError("management nonce schema unavailable")
+        _MANAGEMENT_NONCE_SCHEMA_READY.add(sqlalchemy_url)
+    engine = _MANAGEMENT_NONCE_ENGINES.get(sqlalchemy_url)
+    if engine is None:
+        engine = create_engine(sqlalchemy_url, future=True, pool_pre_ping=True)
+        _MANAGEMENT_NONCE_ENGINES[sqlalchemy_url] = engine
+    return engine
+
+
+def consume_management_nonce(issuer: str, nonce: str, asserted_at: int) -> str:
+    """Atomically consume ``(issuer, nonce)``; return OK / REPLAY / UNAVAILABLE.
+
+    The raw nonce is never stored: only its SHA-256 digest. The composite
+    primary key makes concurrent consumption of the same pair impossible to
+    accept twice — exactly one INSERT can return a row, every other attempt
+    conflicts and is treated as a replay. Any store failure returns
+    UNAVAILABLE so the caller rejects (never fails open).
+    """
+    import hashlib
+
+    nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+    expires_at = asserted_at + _MANAGEMENT_NONCE_TTL_SECONDS
+    try:
+        from sqlalchemy import text
+
+        engine = _management_nonce_engine()
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    "INSERT INTO management_assertion_nonces "
+                    "(issuer, nonce_hash, expires_at) "
+                    "VALUES (:issuer, :nonce_hash, to_timestamp(:expires_at)) "
+                    "ON CONFLICT (issuer, nonce_hash) DO NOTHING "
+                    "RETURNING nonce_hash"
+                ),
+                {"issuer": issuer, "nonce_hash": nonce_hash, "expires_at": expires_at},
+            ).first()
+    except Exception:  # noqa: BLE001 - any store failure must fail closed
+        return MGMT_NONCE_UNAVAILABLE
+    if row is None:
+        return MGMT_REPLAY
+    return MGMT_OK
+
+
+def validate_management_gateway_assertion(
+    provided_assertion: Optional[str] = None,
+    signature: Optional[str] = None,
+    issuer: Optional[str] = None,
+    audience: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    method: Optional[str] = None,
+    path: Optional[str] = None,
+    query_string: Optional[str] = None,
+    content_type: Optional[str] = None,
+    body_hash: Optional[str] = None,
+    timestamp: Optional[str] = None,
+    nonce: Optional[str] = None,
+    secret: Optional[str] = None,
+) -> Tuple[str, Optional[str]]:
+    """Validate a management gateway assertion.
+
+    Per Phase 1B requirements, gateway-originated management requests
+    require BOTH:
+      1. A valid management gateway assertion (HMAC-SHA256 canonical message)
+      2. Existing authorize_management() verification using x-platrixa-management-token
+    """
+
+    import hashlib
+    import hmac
+
+    resolved_secret = (secret or os.getenv("PLATRIXA_MANAGEMENT_ASSERTION_SECRET", "") or "").strip()
+    if not resolved_secret:
+        return MGMT_INVALID, None
+
+    if (audience or "").strip() != "platrixa-management":
+        return MGMT_INVALID, None
+
+    # Explicit issuer allowlist (exact match only). Missing, empty or malformed
+    # configuration fails closed — there is no implicit trusted issuer.
+    allowed_issuers = trusted_management_issuers()
+    if not allowed_issuers:
+        return MGMT_INVALID, None
+
+    asserted_issuer = (issuer or "").strip()
+    if not asserted_issuer or not _MANAGEMENT_ISSUER_RE.match(asserted_issuer):
+        return MGMT_INVALID, None
+    if asserted_issuer not in allowed_issuers:
+        return MGMT_INVALID, None
+
+    if not (issuer or "").strip():
+        return MGMT_INVALID, None
+    if not (signature or "").strip():
+        return MGMT_INVALID, None
+    if not (tenant_id or "").strip():
+        return MGMT_INVALID, None
+    asserted_nonce = (nonce or "").strip()
+    if not asserted_nonce or not _MANAGEMENT_NONCE_RE.match(asserted_nonce):
+        return MGMT_INVALID, None
+
+    try:
+        asserted_at = int(timestamp or "")
+    except (TypeError, ValueError):
+        return MGMT_INVALID, None
+    import time as _time
+
+    if abs(int(_time.time()) - asserted_at) > 300:
+        return MGMT_INVALID, None
+
+    # Canonical management assertion (versioned, pipe-delimited):
+    #   issuer|audience|tenant_id|method|path|query_string|content_type|body_hash|timestamp|nonce
+    canonical = "|".join(
+        [
+            issuer or "",
+            audience or "",
+            tenant_id or "",
+            method or "",
+            path or "",
+            query_string or "",
+            content_type or "",
+            body_hash or "",
+            timestamp or "",
+            nonce or "",
+        ]
+    )
+    expected = hmac.new(
+        resolved_secret.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return MGMT_INVALID, None
+
+    # Replay protection LAST: a request that fails any check above must not
+    # consume a nonce. Consumption is durable, atomic and fenced by the
+    # (issuer, nonce_hash) primary key.
+    consumed = consume_management_nonce(asserted_issuer, asserted_nonce, asserted_at)
+    if consumed != MGMT_OK:
+        return consumed, None
+
+    return MGMT_OK, tenant_id

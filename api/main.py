@@ -13,6 +13,7 @@ Architecture:
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -120,6 +121,76 @@ def create_app() -> FastAPI:
         return _client_key(request)
 
     from api.rate_limit import EXEMPT_EXACT as _RATE_LIMIT_EXEMPT
+
+    @app.middleware("http")
+    async def _visitor_scope_and_csrf(request, call_next):
+        """Phase 1B V2 — fail-closed visitor scope + CSRF origin enforcement.
+
+        A request is a WEBSITE request only when the trusted edge proxy marks
+        it ``x-platrixa-surface: website`` and signs a fresh assertion. The
+        browser cannot set either: the proxy overwrites them.
+
+        For the website surface the HMAC is verified over the exact method,
+        path, query, body hash, timestamp and nonce BEFORE any visitor scope
+        is bound. Missing, malformed, unsigned, stale or replayed assertions
+        therefore establish NO scope and the request is refused — there is no
+        tenant-only fallback for a website request.
+
+        Developer API clients and workers never send the surface marker, so
+        their existing tenant-scoped authorization is unchanged.
+        """
+        from backend.auth import async_jobs as _async_jobs
+        from backend.auth import visitor_request as _vr
+
+        if _vr.is_website_surface(request.headers.get(_vr.HEADER_SURFACE)):
+            body = await request.body()
+            body_hash = hashlib.sha256(body).hexdigest()
+            reason, visitor_id = _vr.verify_visitor_request(
+                assertion=request.headers.get(_vr.HEADER_ASSERTION),
+                visitor_id=request.headers.get(_vr.HEADER_VISITOR_ID),
+                timestamp=request.headers.get(_vr.HEADER_TIMESTAMP),
+                nonce=request.headers.get(_vr.HEADER_NONCE),
+                method=request.method,
+                path=request.url.path,
+                query_string=request.url.query,
+                body_hash=body_hash,
+            )
+            if reason != "VALID" or not visitor_id:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "api_version": "v1",
+                        "error": {
+                            "code": "VISITOR_AUTH_REQUIRED",
+                            "message": "website request has no verified visitor identity",
+                            "reason": reason,
+                        },
+                    },
+                )
+            if not _vr.csrf_origin_allowed(
+                method=request.method,
+                origin=request.headers.get("origin"),
+                public_origin=os.getenv("PLATRIXA_PUBLIC_ORIGIN"),
+            ):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "api_version": "v1",
+                        "error": {
+                            "code": "csrf_invalid_origin",
+                            "message": "request Origin is not trusted",
+                        },
+                    },
+                )
+            token = _async_jobs.set_visitor_scope(visitor_id)
+        else:
+            # Developer / worker surface: no visitor scope, tenant-only access.
+            token = _async_jobs.set_visitor_scope(None)
+
+        try:
+            return await call_next(request)
+        finally:
+            _async_jobs.reset_visitor_scope(token)
 
     @app.middleware("http")
     async def _request_rate_limit(request, call_next):

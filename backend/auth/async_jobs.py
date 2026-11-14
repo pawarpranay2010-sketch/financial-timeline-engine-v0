@@ -40,6 +40,7 @@ Security boundary (mirrors backend.auth.gate / idempotency):
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import hmac
 import json
@@ -51,6 +52,33 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("platrixa.api")
+
+# ---------------------------------------------------------------------------
+# Request-scoped visitor identity (Phase 1B V2 ownership enforcement)
+# ---------------------------------------------------------------------------
+# The edge proxy sets ``x-platrixa-visitor-id`` from the HttpOnly visitor
+# cookie; api/main.py binds it here for the lifetime of one request. Worker
+# and developer paths never bind a scope, so they keep the pre-existing
+# tenant-only behaviour exactly.
+_VISITOR_SCOPE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "platrixa_visitor_scope", default=None
+)
+
+
+def set_visitor_scope(visitor_id: Optional[str]):
+    """Bind the verified website visitor id for THIS request/task."""
+    return _VISITOR_SCOPE.set(visitor_id)
+
+
+def reset_visitor_scope(token) -> None:
+    """Restore the previous visitor scope (call in a ``finally``)."""
+    _VISITOR_SCOPE.reset(token)
+
+
+def current_visitor_scope() -> Optional[str]:
+    """The bound website visitor id, or None for developer/worker callers."""
+    return _VISITOR_SCOPE.get()
+
 
 # Worker lease: a PROCESSING job whose lease expired is considered
 # orphaned (worker crashed) and is claimed again for reprocessing.
@@ -963,6 +991,7 @@ def create_job(
     *,
     request_id: Optional[str] = None,
     kind: str = JOB_KIND_DOCUMENT,
+    visitor_id: Optional[str] = None,
 ) -> JobRecord:
     """Insert one QUEUED job. Raises AsyncStoreUnavailableError if down.
 
@@ -979,6 +1008,10 @@ def create_job(
 
     job_id = new_job_id()
     result_id = new_result_id()
+    # Ownership metadata: a website visitor request (scope bound by the edge
+    # proxy) owns the row; every other caller is a developer/legacy client.
+    owner_visitor = visitor_id if visitor_id is not None else current_visitor_scope()
+    owner_type = "website_visitor" if owner_visitor else "developer_client"
     try:
         SessionLocal = _session_factory()
         with SessionLocal() as session:
@@ -986,8 +1019,8 @@ def create_job(
                 session.execute(
                     text(
                         "INSERT INTO platrixa_async_jobs "
-                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at) "
-                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now())"
+                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at, visitor_id, owner_type) "
+                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now(), :v, :o)"
                     ),
                     {
                         "j": job_id,
@@ -997,6 +1030,8 @@ def create_job(
                         "k": kind,
                         "req": json.dumps(request_payload, ensure_ascii=False),
                         "rid": request_id,
+                        "v": owner_visitor,
+                        "o": owner_type,
                     },
                 )
     except AsyncStoreUnavailableError:
@@ -1004,11 +1039,21 @@ def create_job(
     except Exception as exc:
         logger.warning("async job create failed: %s", type(exc).__name__)
         raise AsyncStoreUnavailableError("async store unavailable") from exc
-    return get_job(tenant_id, job_id)  # type: ignore[return-value]
+    return get_job(tenant_id, job_id, visitor_id=owner_visitor)  # type: ignore[return-value]
 
 
-def get_job(tenant_id: str, job_id: str) -> Optional[JobRecord]:
-    """Tenant-scoped job read (no cross-tenant path exists)."""
+def get_job(tenant_id: str, job_id: str, visitor_id: Optional[str] = None) -> Optional[JobRecord]:
+    """Tenant-scoped job read with visitor ownership enforcement.
+
+    Website visitors require ALL THREE conditions:
+      tenant_id = authenticated_website_tenant
+      owner_type = 'website_visitor'
+      visitor_id = authenticated_visitor_id
+
+    Developer and legacy jobs are excluded by these predicates.
+    """
+    if visitor_id is None:
+        visitor_id = current_visitor_scope()
     from sqlalchemy import text
 
     try:
@@ -1019,13 +1064,21 @@ def get_job(tenant_id: str, job_id: str) -> Optional[JobRecord]:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
     try:
         with SessionLocal() as session:
-            row = session.execute(
-                text(
-                    "SELECT " + _JOB_COLUMNS +
-                    " FROM platrixa_async_jobs WHERE tenant_id = :t AND job_id = :j"
-                ),
-                {"t": tenant_id, "j": job_id},
-            ).mappings().first()
+            conditions = ["tenant_id = :t AND job_id = :j"]
+            params: dict[str, str] = {"t": tenant_id, "j": job_id}
+
+            # Website visitor ownership enforcement
+            if visitor_id is not None:
+                conditions.append("owner_type = 'website_visitor'")
+                conditions.append("visitor_id = :v")
+                params["v"] = visitor_id
+            else:
+                # When visitor_id is None (e.g. developer API client),
+                # only enforce tenant scoping (no visitor filter)
+                pass
+
+            query = "SELECT " + _JOB_COLUMNS + " FROM platrixa_async_jobs WHERE " + " AND ".join(conditions)
+            row = session.execute(text(query), params).mappings().first()
         return _row_to_record(row) if row else None
     except AsyncStoreUnavailableError:
         raise
@@ -1034,8 +1087,18 @@ def get_job(tenant_id: str, job_id: str) -> Optional[JobRecord]:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
-def get_result_record(tenant_id: str, result_id: str) -> Optional[JobRecord]:
-    """Tenant-scoped result lookup (the completed job holding result_id)."""
+def get_result_record(tenant_id: str, result_id: str, visitor_id: Optional[str] = None) -> Optional[JobRecord]:
+    """Tenant-scoped result lookup with visitor ownership enforcement.
+
+    Website visitors require ALL THREE conditions:
+      tenant_id = authenticated_website_tenant
+      owner_type = 'website_visitor'
+      visitor_id = authenticated_visitor_id
+
+    Developer and legacy jobs are excluded by these predicates.
+    """
+    if visitor_id is None:
+        visitor_id = current_visitor_scope()
     from sqlalchemy import text
 
     try:
@@ -1046,13 +1109,21 @@ def get_result_record(tenant_id: str, result_id: str) -> Optional[JobRecord]:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
     try:
         with SessionLocal() as session:
-            row = session.execute(
-                text(
-                    "SELECT " + _JOB_COLUMNS +
-                    " FROM platrixa_async_jobs WHERE tenant_id = :t AND result_id = :r"
-                ),
-                {"t": tenant_id, "r": result_id},
-            ).mappings().first()
+            conditions = ["tenant_id = :t AND result_id = :r"]
+            params: dict[str, str] = {"t": tenant_id, "r": result_id}
+
+            # Website visitor ownership enforcement
+            if visitor_id is not None:
+                conditions.append("owner_type = 'website_visitor'")
+                conditions.append("visitor_id = :v")
+                params["v"] = visitor_id
+            else:
+                # When visitor_id is None (e.g. developer API client),
+                # only enforce tenant scoping (no visitor filter)
+                pass
+
+            query = "SELECT " + _JOB_COLUMNS + " FROM platrixa_async_jobs WHERE " + " AND ".join(conditions)
+            row = session.execute(text(query), params).mappings().first()
         return _row_to_record(row) if row else None
     except AsyncStoreUnavailableError:
         raise
@@ -1061,13 +1132,19 @@ def get_result_record(tenant_id: str, result_id: str) -> Optional[JobRecord]:
         raise AsyncStoreUnavailableError("async store unavailable") from exc
 
 
-def get_job_request_json(tenant_id: str, job_id: str) -> Optional[str]:
+def get_job_request_json(
+    tenant_id: str, job_id: str, visitor_id: Optional[str] = None
+) -> Optional[str]:
     """The stored request payload for a job — TENANT-SCOPED.
 
     Deliberately a separate, tenant-scoped read rather than projecting
     ``request_json`` into ``_JOB_COLUMNS``: a document job's payload can be
     ~16 MiB of base64, and every status read must not have to carry it.
+
+    Website visitors are restricted to their own ``website_visitor`` rows.
     """
+    if visitor_id is None:
+        visitor_id = current_visitor_scope()
     from sqlalchemy import text
 
     try:
@@ -1082,8 +1159,13 @@ def get_job_request_json(tenant_id: str, job_id: str) -> Optional[str]:
                 text(
                     "SELECT request_json FROM platrixa_async_jobs "
                     "WHERE tenant_id = :t AND job_id = :j"
+                    + (
+                        " AND owner_type = 'website_visitor' AND visitor_id = :v"
+                        if visitor_id is not None
+                        else ""
+                    )
                 ),
-                {"t": tenant_id, "j": job_id},
+                {"t": tenant_id, "j": job_id, "v": visitor_id},
             ).first()
         return row[0] if row else None
     except AsyncStoreUnavailableError:

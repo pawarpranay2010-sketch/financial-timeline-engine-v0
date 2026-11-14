@@ -1105,6 +1105,15 @@ def main() -> int:
     print("isolation guardrails: OK (loopback only, no PLATRIXA_* origin, no real credential)")
 
     srv, engine = S1.pg_backend()
+    # The disposable cluster is brand new: apply the same visitor-ownership
+    # migrations a real deployment applies before the store is used. Without
+    # them ``platrixa_async_jobs`` has no visitor_id/owner_type and job creation
+    # fails closed with ASYNC_UNAVAILABLE.
+    from backend.auth.init_visitor_nonce import initialise_visitor_nonce_schema
+    from backend.auth.init_visitor_schema import initialise_visitor_schema
+
+    if not initialise_visitor_schema() or not initialise_visitor_nonce_schema():
+        raise SystemExit("ABORT: visitor schema migrations could not be applied to the test cluster")
     print(f"embedded PostgreSQL ready (disposable cluster under {S1.Path('/tmp/platrixa_fte89_pgdata')})")
     stub = S1.HarnessClient()
     developer.set_client(stub)

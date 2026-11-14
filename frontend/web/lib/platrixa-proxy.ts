@@ -27,10 +27,14 @@
  *     verbatim (the backend sanitizes/re-echoes it; behavior unchanged).
  */
 
+import crypto from "crypto";
 import type { NextRequest } from "next/server";
 
 export const PROXY_BASE_ENV = "PLATRIXA_API_BASE_URL";
 export const PROXY_KEY_ENV = "PLATRIXA_API_KEY";
+
+/** Upper bound on one proxied call (mirrors the Cloudflare Pages functions). */
+export const PROXY_TIMEOUT_MS = 25_000;
 
 /** The only path namespaces this proxy will ever forward. */
 const FORWARDED_PREFIXES = ["/api/", "/v1/"] as const;
@@ -46,7 +50,10 @@ const FORWARD_HEADERS = new Set([
   // reach the backend UNCHANGED. The proxy NEVER invents, substitutes,
   // or overwrites a caller-supplied credential.
   "x-platrixa-api-key",
-  "x-platrixa-management-token",
+  // Management token stripped from public proxy forwarding
+  // Public browser routes must NOT forward management tokens to Railway.
+  // Management credentials are only accepted at the operator ingress route.
+  // "x-platrixa-management-token",
   "idempotency-key",
 ]);
 
@@ -92,6 +99,23 @@ function errorEnvelope(
     contentType: "application/json",
     requestId,
   };
+}
+
+
+const VISITOR_COOKIE_NAME = "platrixa_visitor_id";
+const VISITOR_ID_RE = /^[A-Za-z0-9-]{16,64}$/;
+
+/** Read the edge-issued visitor id from the HttpOnly cookie, or null. */
+function readVisitorCookie(cookieHeader: string | null): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() !== VISITOR_COOKIE_NAME) continue;
+    const value = part.slice(eq + 1).trim();
+    return VISITOR_ID_RE.test(value) ? value : null;
+  }
+  return null;
 }
 
 export function sanitizeRequestId(value: string | null): string | null {
@@ -146,10 +170,111 @@ export async function forwardToPlatrixa(
 
   const target = `${base}${incomingPath}${searchParams ? `?${searchParams}` : ""}`;
 
+  // --- Server-side API key injection ---
+  // Always inject the server-side website API key; strip any browser-supplied key.
+  // The browser must never influence which API key authenticates the request.
+  const serverApiKey = (process.env.PLATRIXA_API_KEY || "").trim();
   const headers = new Headers();
+  if (serverApiKey) {
+    headers.set("x-platrixa-api-key", serverApiKey);
+  }
+
+  // --- Visitor identity (edge-owned) ---
+  // Derived exclusively from the HttpOnly visitor cookie. Any browser-supplied
+  // `x-platrixa-visitor-id` header is ignored; the forwarded value is set below.
+  const visitorId =
+    readVisitorCookie(request.headers.get("cookie")) || crypto.randomUUID();
+
+  // --- CSRF Origin validation for browser state-changing requests ---
+  // Validate Origin against the exact configured public origin. GET and HEAD
+  // are strictly read-only; every other method requires a trusted origin.
+  // Fail closed when PLATRIXA_PUBLIC_ORIGIN is not configured.
+  const isStateChanging = request.method !== "GET" && request.method !== "HEAD";
+  if (isStateChanging) {
+    const requestOrigin = (request.headers.get("origin") ?? "").trim();
+    const publicOrigin = (process.env.PLATRIXA_PUBLIC_ORIGIN ?? "").trim();
+    if (!publicOrigin) {
+      return errorEnvelope(
+        403,
+        "csrf_missing_public_origin",
+        "CSRF origin validation is not configured.",
+        requestId,
+      );
+    }
+    if (!requestOrigin || requestOrigin !== publicOrigin) {
+      return errorEnvelope(
+        403,
+        "csrf_invalid_origin",
+        `Request Origin ${requestOrigin || "missing"} is not trusted.`,
+        requestId,
+      );
+    }
+  }
+  // -----------------------------------------------------------------
+
+  // --- Build forwarded headers ---
+  // Start with server-injected API key
+  if (serverApiKey) {
+    headers.set("x-platrixa-api-key", serverApiKey);
+  }
+  // --- Visitor assertion signing (edge-owned HMAC-SHA256) ---
+  // A fresh, single-use assertion is signed over the exact method, path,
+  // query, body hash, timestamp and nonce. The secret stays server-side.
+  const visitorSecret = (process.env.PLATRIXA_VISITOR_HMAC_SECRET ?? "").trim();
+  if (!visitorSecret) {
+    return errorEnvelope(
+      503,
+      "VISITOR_SIGNING_NOT_CONFIGURED",
+      "Visitor signing is not configured for this frontend environment.",
+      requestId,
+    );
+  }
+
+  const isReadOnly = request.method === "GET" || request.method === "HEAD";
+  const bodyBytes = isReadOnly
+    ? new Uint8Array(0)
+    : new Uint8Array(await request.arrayBuffer());
+  const bodyHash = crypto.createHash("sha256").update(bodyBytes).digest("hex");
+  const requestTimestamp = String(Math.floor(Date.now() / 1000));
+  const requestNonce = crypto.randomUUID();
+  const canonical = [
+    "V1",
+    "platrixa",
+    visitorId,
+    request.method.toUpperCase(),
+    incomingPath,
+    searchParams,
+    bodyHash,
+    requestTimestamp,
+    requestNonce,
+  ].join("|");
+  const assertion = `${canonical}|${crypto
+    .createHmac("sha256", visitorSecret)
+    .update(canonical)
+    .digest("hex")}`;
+
+  // Edge-owned identity — overwrites any browser-supplied value.
+  headers.set("x-platrixa-visitor-id", visitorId);
+  headers.set("x-platrixa-visitor-assertion", assertion);
+  headers.set("x-platrixa-request-timestamp", requestTimestamp);
+  headers.set("x-platrixa-visitor-nonce", requestNonce);
+  headers.set("x-platrixa-surface", "website");
+  // Forward the Origin the proxy already validated so the backend's own
+  // defence-in-depth CSRF check sees the same value (it re-validates).
+  const forwardedOrigin = request.headers.get("origin");
+  if (forwardedOrigin) headers.set("origin", forwardedOrigin);
+
+  // Forward other allowed headers, skipping browser-supplied trusted headers
   for (const [name, value] of request.headers.entries()) {
     const lower = name.toLowerCase();
+    // Skip browser-supplied trusted headers that the handler must manage
     if (NON_BROWSER_HEADERS.has(lower)) continue;
+    if (lower === "x-platrixa-api-key") continue;  // always server-side
+    if (lower === "x-platrixa-visitor-id") continue;  // edge-managed
+    if (lower === "x-platrixa-visitor-assertion") continue;  // edge-managed
+    if (lower === "x-platrixa-request-timestamp") continue;  // edge-managed
+    if (lower === "x-platrixa-visitor-nonce") continue;  // edge-managed
+    if (lower === "x-platrixa-surface") continue;  // edge-managed
     if (FORWARD_HEADERS.has(lower)) headers.set(name, value);
   }
 
@@ -166,22 +291,48 @@ export async function forwardToPlatrixa(
 
   const method = request.method.toUpperCase();
   const init: RequestInit = { method, headers, redirect: "follow" };
-  if (method !== "GET" && method !== "HEAD") {
-    init.body = await request.arrayBuffer();
+  if (bodyBytes.length > 0) {
+    init.body = bodyBytes;
   }
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, init);
-  } catch {
-    return errorEnvelope(502, "BACKEND_UNREACHABLE", "The Platrixa backend could not be reached.", requestId);
+    upstream = await fetch(target, { ...init, signal: AbortSignal.timeout(PROXY_TIMEOUT_MS) });
+  } catch (err) {
+    const timedOut =
+      err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    return timedOut
+      ? errorEnvelope(
+          504,
+          "BACKEND_TIMEOUT",
+          "The Platrixa backend did not answer in time; retry shortly.",
+          requestId,
+        )
+      : errorEnvelope(502, "BACKEND_UNREACHABLE", "The Platrixa backend could not be reached.", requestId);
   }
 
+  const contentType = upstream.headers.get("content-type") ?? "";
   const body = await upstream.text();
+
+  // A non-JSON body is NOT relayed: it is the hosting platform's own error page
+  // (a hibernation notice, a CDN challenge), which exposes infrastructure and
+  // carries no code the client can act on. Same contract as the Pages proxies.
+  if (!contentType.toLowerCase().includes("application/json")) {
+    const status = upstream.status >= 400 ? upstream.status : 502;
+    return errorEnvelope(
+      status,
+      "BACKEND_ERROR",
+      status === 429
+        ? "The Platrixa backend is rate-limited or starting up; retry shortly."
+        : `The Platrixa backend returned a response that is not a JSON envelope (HTTP ${upstream.status}).`,
+      requestId,
+    );
+  }
+
   return {
     status: upstream.status,
     body,
-    contentType: upstream.headers.get("content-type") ?? "application/json",
+    contentType,
     requestId,
     responseHeaders: upstream.headers,
   };
