@@ -23,11 +23,12 @@ validation failures → 400 with the existing envelope and codes.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from api.schemas import (
@@ -72,93 +73,78 @@ def _error_response(
     )
 
 
-def _authorize(request: Request) -> str:
-    """Authorize the management plane. Returns the bound tenant_id.
+# ---------------------------------------------------------------------------
+# Management authorization — one shared dependency for every management route
+# ---------------------------------------------------------------------------
 
-    Per Phase 1B, gateway-originated management requests require BOTH:
-      1. A valid management gateway assertion (HMAC-SHA256 canonical message)
-      2. Existing authorize_management() verification using x-platrixa-management-token
+# Every header that makes up a COMPLETE gateway assertion. A partial set is an
+# error, never a downgrade: authentication must not silently fall back to the
+# static token when a caller forgets (or an attacker strips) one header.
+_ASSERTION_HEADERS = (
+    "x-platrixa-assertion-signature",
+    "x-platrixa-assertion-issuer",
+    "x-platrixa-assertion-audience",
+    "x-platrixa-assertion-tenant-id",
+    "x-platrixa-assertion-method",
+    "x-platrixa-assertion-path",
+    "x-platrixa-assertion-query-string",
+    "x-platrixa-assertion-content-type",
+    "x-platrixa-assertion-body-hash",
+    "x-platrixa-assertion-timestamp",
+    "x-platrixa-assertion-nonce",
+)
+
+
+def _management_denied() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
+        headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+    )
+
+
+def canonical_management_path(raw_path: str) -> Optional[str]:
+    """The one canonical path form shared by edge signing and ASGI checking.
+
+    Rules (identical to the operator gateway's ``canonicalizePath``):
+      * must start with ``/``
+      * no ``..`` path component
+      * no control characters
+      * trailing slashes preserved
+      * percent-encoding preserved EXACTLY as received — ``%2F`` is never
+        decoded into a separator, so a signature over one representation can
+        never be replayed as another.
+    """
+    if not raw_path or not raw_path.startswith("/"):
+        return None
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw_path):
+        return None
+    if ".." in raw_path.split("/"):
+        return None
+    return raw_path
+
+
+async def require_management(request: Request) -> str:
+    """Authorize one MANAGEMENT request. Returns the bound tenant_id.
+
+    Both credentials are mandatory on every management endpoint:
+
+      1. the static management token (``X-Platrixa-Management-Token``), and
+      2. a COMPLETE signed gateway assertion.
+
+    The assertion is bound to the ACTUAL request: its declared method, path,
+    query string, content-type and body hash must equal what this server
+    received, and the signature is verified over those received values —
+    never over the caller's claim about them.
 
     Fails closed on every ambiguous state:
-      NOT_CONFIGURED → 400 (deployment disabled; client-side config)
-      MISCONFIGURED  → 503 (token set but tenant binding missing)
-      INVALID        → 403 (wrong/absent token — including a runtime
-                       API key masquerading as a management token)
-      store error    → 503
-
-    Gateway-originated requests are identified by the presence of assertion
-    headers (x-platrixa-assertion-signature, etc.). For such requests,
-    both the gateway assertion AND authorize_management() must pass, and
-    the tenant_ids must match.
-
-    Non-gateway requests (no assertion headers) only require
-    authorize_management() — these will fail for browser requests since
-    the public proxy strips the management token.
+      NOT_CONFIGURED -> 400, MISCONFIGURED -> 503, INVALID -> 403,
+      nonce store unavailable -> 503.
     """
     from backend.auth import api_keys as store
 
     token = request.headers.get("x-platrixa-management-token", "")
     reason, tenant_id = store.authorize_management(token)
-
-    # Check for management gateway assertion headers (gateway-originated)
-    has_assertion_sig = request.headers.get("x-platrixa-assertion-signature")
-    has_assertion_issuer = request.headers.get("x-platrixa-assertion-issuer")
-    has_assertion_audience = request.headers.get("x-platrixa-assertion-audience")
-
-    if has_assertion_sig and has_assertion_issuer and has_assertion_audience:
-      # Gateway-originated request: also validate the gateway assertion
-      from backend.auth.api_keys import (
-          validate_management_gateway_assertion,
-      )
-
-      assertion_tenant = None
-      try:
-          result = validate_management_gateway_assertion(
-              secret=os.getenv("PLATRIXA_MANAGEMENT_ASSERTION_SECRET"),
-              signature=request.headers.get("x-platrixa-assertion-signature"),
-              issuer=request.headers.get("x-platrixa-assertion-issuer"),
-              audience=request.headers.get("x-platrixa-assertion-audience"),
-              tenant_id=request.headers.get("x-platrixa-assertion-tenant-id"),
-              method=request.headers.get("x-platrixa-assertion-method") or '',
-              path=request.headers.get("x-platrixa-assertion-path") or '',
-              query_string=request.headers.get("x-platrixa-assertion-query-string") or '',
-              content_type=request.headers.get("x-platrixa-assertion-content-type") or '',
-              body_hash=request.headers.get("x-platrixa-assertion-body-hash") or '',
-              timestamp=request.headers.get("x-platrixa-assertion-timestamp") or '',
-              nonce=request.headers.get("x-platrixa-assertion-nonce") or '',
-          )
-          if result[0] == store.MGMT_OK:
-              assertion_tenant = result[1]
-          else:
-              # Assertion invalid → reject with 403
-              request_id = request.headers.get("x-request-id")
-              raise HTTPException(
-                  status_code=403,
-                  detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
-                  headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
-              )
-      except Exception as e:
-          logger.warning(f"Gateway assertion validation error: {e}")
-          request_id = request.headers.get("x-request-id")
-          raise HTTPException(
-              status_code=403,
-              detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
-              headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
-          )
-
-      # Both assertion and authorize_management must pass, and tenant_ids must match
-      if tenant_id != assertion_tenant:
-          request_id = request.headers.get("x-request-id")
-          logger.warning(
-            f"Management tenant mismatch: authorize_management={tenant_id}, "
-            f"assertion={assertion_tenant}"
-          )
-          raise HTTPException(
-              status_code=403,
-              detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
-              headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
-          )
-
     if reason == store.MGMT_NOT_CONFIGURED:
         raise HTTPException(
             status_code=400,
@@ -172,12 +158,83 @@ def _authorize(request: Request) -> str:
             detail="API_KEY_MANAGEMENT_UNAVAILABLE",
             headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAVAILABLE"},
         )
-    if reason != store.MGMT_OK:
-        raise HTTPException(
-            status_code=403,
-            detail="API_KEY_MANAGEMENT_UNAUTHORIZED",
-            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAUTHORIZED"},
+    if reason != store.MGMT_OK or not tenant_id:
+        raise _management_denied()
+
+    # Complete-or-nothing: any missing assertion header is a hard rejection.
+    for header in _ASSERTION_HEADERS:
+        if request.headers.get(header) is None:
+            raise _management_denied()
+
+    # --- Bind to the ACTUAL request -------------------------------------
+    # raw_path/query_string are the undecoded ASGI values, so percent-encoding
+    # survives intact and matches exactly what the edge signed.
+    raw_path = request.scope.get("raw_path")
+    path = canonical_management_path(
+        raw_path.decode("latin-1") if raw_path else request.url.path
+    )
+    query_string = request.scope.get("query_string", b"").decode("latin-1")
+    content_type = request.headers.get("content-type", "")
+    body = await request.body()
+    body_hash = hashlib.sha256(body).hexdigest()
+
+    if path is None:
+        raise _management_denied()
+
+    actual_method = request.method.upper()
+    actual = {
+        "method": actual_method,
+        "path": path,
+        "query_string": query_string,
+        "content_type": content_type,
+        "body_hash": body_hash,
+    }
+    declared = {
+        "method": request.headers.get("x-platrixa-assertion-method", ""),
+        "path": request.headers.get("x-platrixa-assertion-path", ""),
+        "query_string": request.headers.get("x-platrixa-assertion-query-string", ""),
+        "content_type": request.headers.get("x-platrixa-assertion-content-type", ""),
+        "body_hash": request.headers.get("x-platrixa-assertion-body-hash", ""),
+    }
+    if declared != actual:
+        raise _management_denied()
+
+    # Tenant binding is checked before the HMAC so a wrong-tenant assertion
+    # never consumes a nonce.
+    declared_tenant = request.headers.get("x-platrixa-assertion-tenant-id", "")
+    if declared_tenant != tenant_id:
+        logger.warning(
+            "Management tenant mismatch: authorize_management=%s, assertion=%s",
+            tenant_id,
+            declared_tenant,
         )
+        raise _management_denied()
+
+    result, assertion_tenant = store.validate_management_gateway_assertion(
+        secret=os.getenv("PLATRIXA_MANAGEMENT_ASSERTION_SECRET"),
+        signature=request.headers.get("x-platrixa-assertion-signature"),
+        issuer=request.headers.get("x-platrixa-assertion-issuer"),
+        audience=request.headers.get("x-platrixa-assertion-audience"),
+        tenant_id=declared_tenant,
+        method=actual_method,
+        path=path,
+        query_string=query_string,
+        content_type=content_type,
+        body_hash=body_hash,
+        timestamp=request.headers.get("x-platrixa-assertion-timestamp"),
+        nonce=request.headers.get("x-platrixa-assertion-nonce"),
+    )
+    if result == store.MGMT_NONCE_UNAVAILABLE:
+        # Fail closed: without durable replay protection nothing is accepted.
+        raise HTTPException(
+            status_code=503,
+            detail="API_KEY_MANAGEMENT_UNAVAILABLE",
+            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAVAILABLE"},
+        )
+    if result != store.MGMT_OK:
+        raise _management_denied()
+    if assertion_tenant != tenant_id:
+        raise _management_denied()
     return tenant_id
 
 
@@ -209,9 +266,8 @@ def _store_error_response(request: Request) -> JSONResponse:
 def create_api_key(
     request: Request,
     payload: ApiKeyCreateRequest,
-    x_platrixa_management_token: Optional[str] = Header(default=None),
+    tenant_id: str = Depends(require_management),
 ):
-    tenant_id = _authorize(request)
     from backend.auth import api_keys as store
 
     if store.validate_name(payload.name) is None:
@@ -255,9 +311,8 @@ def create_api_key(
 )
 def list_api_keys(
     request: Request,
-    x_platrixa_management_token: Optional[str] = Header(default=None),
+    tenant_id: str = Depends(require_management),
 ):
-    tenant_id = _authorize(request)
     from backend.auth import api_keys as store
 
     try:
@@ -284,9 +339,8 @@ def list_api_keys(
 def revoke_api_key(
     request: Request,
     key_id: str,
-    x_platrixa_management_token: Optional[str] = Header(default=None),
+    tenant_id: str = Depends(require_management),
 ):
-    tenant_id = _authorize(request)
     from backend.auth import api_keys as store
 
     try:
@@ -328,9 +382,8 @@ def revoke_api_key(
 def rotate_api_key(
     request: Request,
     key_id: str,
-    x_platrixa_management_token: Optional[str] = Header(default=None),
+    tenant_id: str = Depends(require_management),
 ):
-    tenant_id = _authorize(request)
     from backend.auth import api_keys as store
 
     try:

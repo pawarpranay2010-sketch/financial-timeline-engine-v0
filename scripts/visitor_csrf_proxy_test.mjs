@@ -26,7 +26,7 @@ const SOURCES = [
 const PUBLIC_ORIGIN = "https://app.platrixa.test";
 const BACKEND = "https://backend.platrixa.test";
 const SERVER_KEY = "server-side-website-key";
-const VISITOR_FROM_COOKIE = "0123456789abcdef0123456789abcdef";
+const VISITOR_FROM_COOKIE = "3f2b8c1e-9a4d-4f6b-8c2e-1d5a7b9c0e21";
 const VISITOR_SECRET = "edge-shared-visitor-secret";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "platrixa-proxy-"));
@@ -169,7 +169,7 @@ for (const source of SOURCES) {
         origin: PUBLIC_ORIGIN,
         "x-platrixa-api-key": "browser-forged-key",
         "x-platrixa-visitor-id": "spoofed-visitor-id-value",
-        cookie: `platrixa_visitor_id=${VISITOR_FROM_COOKIE}`,
+        cookie: `__Host-platrixa_visitor=${VISITOR_FROM_COOKIE}`,
       },
     }));
     const sent = lastUpstream.headers;

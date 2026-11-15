@@ -14,10 +14,14 @@ Run:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import sys
 import threading
+import time
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -43,8 +47,103 @@ _TENANT_A = "tenant-5g"
 _TENANT_B = "tenant-5g-b"
 
 
+_ASSERTION_SECRET = "phase5g-assertion-secret"
+_ISSUER = "platrixa-operator-v1"
+_AUDIENCE = "platrixa-management"
+
+
 def mgmt_hdr(token: str | None = _MGMT_TOKEN) -> dict:
     return {"X-Platrixa-Management-Token": token} if token else {}
+
+
+def _json_bytes(obj: object) -> bytes:
+    return json.dumps(
+        obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def assertion_headers(
+    method: str,
+    path: str,
+    query: str = "",
+    body: bytes = b"",
+    content_type: str = "",
+    tenant: str | None = None,
+) -> dict:
+    """Assertion headers bound to the ACTUAL request the client will send."""
+    if tenant is None:
+        tenant = os.environ.get(key_store.MANAGEMENT_TENANT_ENV_VAR, "")
+    ts = str(int(time.time()))
+    nonce = f"mgmt-{uuid.uuid4().hex}"
+    body_hash = hashlib.sha256(body).hexdigest()
+    canonical = "|".join(
+        [_ISSUER, _AUDIENCE, tenant, method, path, query, content_type, body_hash, ts, nonce]
+    )
+    signature = hmac.new(
+        _ASSERTION_SECRET.encode(), canonical.encode(), hashlib.sha256
+    ).hexdigest()
+    return {
+        "x-platrixa-assertion-signature": signature,
+        "x-platrixa-assertion-issuer": _ISSUER,
+        "x-platrixa-assertion-audience": _AUDIENCE,
+        "x-platrixa-assertion-tenant-id": tenant,
+        "x-platrixa-assertion-method": method,
+        "x-platrixa-assertion-path": path,
+        "x-platrixa-assertion-query-string": query,
+        "x-platrixa-assertion-content-type": content_type,
+        "x-platrixa-assertion-body-hash": body_hash,
+        "x-platrixa-assertion-timestamp": ts,
+        "x-platrixa-assertion-nonce": nonce,
+    }
+
+
+class MgmtClient:
+    """TestClient that attaches a request-bound gateway assertion whenever the
+    caller supplied a management token — the production management contract."""
+
+    def __init__(self, app) -> None:
+        self._c = TestClient(app)
+
+    def request(self, method, url, **kw):
+        headers = dict(kw.pop("headers", {}) or {})
+        token = next(
+            (v for k, v in headers.items() if k.lower() == "x-platrixa-management-token"),
+            None,
+        )
+        if token:
+            body = b""
+            content_type = ""
+            if "json" in kw:
+                body = _json_bytes(kw["json"])
+                content_type = "application/json"
+            elif "content" in kw:
+                body = kw["content"]
+                content_type = next(
+                    (v for k, v in headers.items() if k.lower() == "content-type"), ""
+                )
+            path, _, query = url.partition("?")
+            headers.update(
+                assertion_headers(method.upper(), path, query, body, content_type)
+            )
+        return self._c.request(method, url, headers=headers, **kw)
+
+    def get(self, url, **kw):
+        return self.request("GET", url, **kw)
+
+    def post(self, url, **kw):
+        return self.request("POST", url, **kw)
+
+    def put(self, url, **kw):
+        return self.request("PUT", url, **kw)
+
+    def patch(self, url, **kw):
+        return self.request("PATCH", url, **kw)
+
+    def delete(self, url, **kw):
+        return self.request("DELETE", url, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
 
 
 def set_mgmt_tenant(tenant_id: str) -> None:
@@ -75,6 +174,8 @@ def pg_backend() -> tuple[object, str]:
     os.environ[metered_gate.METERING_ENV_VAR] = uri
     os.environ[key_store.MANAGEMENT_TOKEN_ENV_VAR] = _MGMT_TOKEN
     os.environ[key_store.MANAGEMENT_TENANT_ENV_VAR] = _TENANT_A
+    os.environ["PLATRIXA_MANAGEMENT_ASSERTION_SECRET"] = _ASSERTION_SECRET
+    os.environ["PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS"] = _ISSUER
     # Apply the Phase 16 quota DDL explicitly (same as suite 79) — the
     # runtime gate expects its table to exist; the Phase 5G registry DDL
     # self-ensures on first use of the key store.
@@ -151,10 +252,10 @@ class StubClient:
         return None
 
 
-def client() -> TestClient:
+def client() -> MgmtClient:
     os.environ.pop("PLATRIXA_DEV_API_KEY", None)
     developer.set_client(StubClient())
-    return TestClient(create_app())
+    return MgmtClient(create_app())
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +402,14 @@ def section_c(c: TestClient, created: dict) -> None:
         "repeat revoke → same deterministic REVOKED view (idempotent)",
         r2.status_code == 200 and r2.json()["status"] == "REVOKED",
         str(r2.status_code),
+    )
+    r2b = c.post(f"/v1/developer/api-keys/{first_id}/revoke", headers=mgmt_hdr())
+    check(
+        "third revoke → still 200, identical revoked_at (no 503)",
+        r2b.status_code == 200
+        and r2b.json()["status"] == "REVOKED"
+        and r2b.json()["revoked_at"] == r2.json()["revoked_at"],
+        f"{r2b.status_code} {r2b.text[:90]}",
     )
     r3 = c.post(f"/v1/developer/api-keys/{created['sibling']['id']}/revoke", headers=mgmt_hdr())
     check(

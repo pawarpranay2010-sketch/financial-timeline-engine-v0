@@ -31,8 +31,10 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from api.routes.developer_keys import require_management
 
 logger = logging.getLogger("platrixa.api")
 
@@ -163,26 +165,6 @@ def get_usage(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def _management_tenant(request: Request) -> str:
-    from backend.auth import api_keys as key_store
-
-    reason, tenant_id = key_store.authorize_management(
-        request.headers.get("x-platrixa-management-token", "")
-    )
-    if reason == key_store.MGMT_OK:
-        return tenant_id  # type: ignore[return-value]
-    if reason == key_store.MGMT_NOT_CONFIGURED:
-        raise HTTPException(
-            status_code=400, detail="API_KEY_MANAGEMENT_NOT_CONFIGURED"
-        )
-    if reason == key_store.MGMT_MISCONFIGURED:
-        logger.warning("key-management token set without a tenant binding")
-        raise HTTPException(
-            status_code=503, detail="API_KEY_MANAGEMENT_UNAVAILABLE"
-        )
-    raise HTTPException(status_code=403, detail="API_KEY_MANAGEMENT_UNAUTHORIZED")
-
-
 # ---------------------------------------------------------------------------
 # Management usage — per key + tenant aggregate
 # ---------------------------------------------------------------------------
@@ -197,10 +179,9 @@ def _management_tenant(request: Request) -> str:
         503: {"description": "Management/usage store unavailable (fail closed)"},
     },
 )
-def get_key_usage(request: Request, key_id: str):
+def get_key_usage(request: Request, key_id: str, tenant_id: str = Depends(require_management)):
     from backend.auth import api_keys as key_store
 
-    tenant_id = _management_tenant(request)
     try:
         keys = key_store.list_api_keys(tenant_id)
     except key_store.ApiKeyStoreError:
@@ -272,13 +253,12 @@ def get_key_usage(request: Request, key_id: str):
         503: {"description": "Usage store unavailable (fail closed)"},
     },
 )
-def get_tenant_usage(request: Request):
+def get_tenant_usage(request: Request, tenant_id: str = Depends(require_management)):
     from backend.auth import api_keys as key_store
     from backend.auth.gate import _session_factory as _quota_factory
     from backend.auth.models import TenantQuota, current_usage_month
     from sqlalchemy import select
 
-    tenant_id = _management_tenant(request)
     try:
         SessionLocal = _quota_factory()
         with SessionLocal() as session:
@@ -330,10 +310,10 @@ def list_requests(
     request: Request,
     limit: int = 50,
     offset: int = 0,
+    tenant_id: str = Depends(require_management),
 ):
     from backend.auth import request_log as rl
 
-    tenant_id = _management_tenant(request)
     if limit < 1 or limit > rl.HISTORY_MAX_LIMIT or offset < 0:
         return _error_response(
             400,
@@ -384,10 +364,13 @@ def list_requests(
         503: {"description": "History store unavailable (fail closed)"},
     },
 )
-def get_request_detail(request: Request, request_id: str):
+def get_request_detail(
+    request: Request,
+    request_id: str,
+    tenant_id: str = Depends(require_management),
+):
     from backend.auth import request_log as rl
 
-    tenant_id = _management_tenant(request)
     rid = _sanitize_request_id(request_id)
     if not rid:
         return _error_response(

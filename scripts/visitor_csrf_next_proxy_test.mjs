@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 const PUBLIC_ORIGIN = "https://app.platrixa.test";
 const BACKEND = "https://backend.platrixa.test";
 const SERVER_KEY = "server-side-website-key";
-const COOKIE_VISITOR = "0123456789abcdef0123456789abcdef";
+const COOKIE_VISITOR = "3f2b8c1e-9a4d-4f6b-8c2e-1d5a7b9c0e21";
 const VISITOR_SECRET = "edge-shared-visitor-secret";
 
 process.env.PLATRIXA_API_BASE_URL = BACKEND;
@@ -119,7 +119,7 @@ await test("browser key + visitor header spoofing ignored", async () => {
     headers: {
       "x-platrixa-api-key": "browser-forged-key",
       "x-platrixa-visitor-id": "spoofed-visitor-id-value",
-      cookie: `platrixa_visitor_id=${COOKIE_VISITOR}`,
+      cookie: `__Host-platrixa_visitor=${COOKIE_VISITOR}`,
     },
   });
   assert.equal(lastUpstream.headers.get("x-platrixa-api-key"), SERVER_KEY);

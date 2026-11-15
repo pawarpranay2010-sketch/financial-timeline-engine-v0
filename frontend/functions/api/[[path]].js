@@ -54,8 +54,8 @@ function requiresCSRFProtection(method) {
 // The visitor id is edge-owned: it is read ONLY from the HttpOnly cookie
 // issued by this proxy. A browser-supplied `x-platrixa-visitor-id` header is
 // never trusted — the forwarded value is always overwritten below.
-const VISITOR_COOKIE_NAME = "platrixa_visitor_id";
-const VISITOR_ID_RE = /^[A-Za-z0-9-]{16,64}$/;
+const VISITOR_COOKIE_NAME = "__Host-platrixa_visitor";
+const VISITOR_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function readVisitorCookie(cookieHeader) {
   if (!cookieHeader) return null;
@@ -152,9 +152,16 @@ export async function onRequest(context) {
   // --- Visitor identity + signed assertion (edge-owned) ---
   // The id comes ONLY from the HttpOnly cookie the edge issues. Any
   // browser-supplied visitor/assertion header is ignored and overwritten.
-  const visitorId =
-    readVisitorCookie(context.request.headers.get("cookie")) ||
-    crypto.randomUUID();
+  const incomingVisitorId = readVisitorCookie(context.request.headers.get("cookie"));
+  // Validate incoming cookie against strict UUID format; reject malformed values.
+  let visitorId;
+  if (incomingVisitorId && VISITOR_ID_RE.test(incomingVisitorId)) {
+    visitorId = incomingVisitorId;
+  } else {
+    // Generate a fresh UUID for a first-time or invalid-cookie visit.
+    visitorId = crypto.randomUUID();
+  }
+
 
   const visitorSecret = (context.env && context.env.PLATRIXA_VISITOR_HMAC_SECRET) || "";
   if (!visitorSecret) {
@@ -197,6 +204,14 @@ export async function onRequest(context) {
     headers.set("x-platrixa-api-key", serverApiKey);
   }
   // Edge-owned identity — overwrites any browser-supplied value.
+  // The visitor cookie belongs on the RESPONSE to the browser (below), never
+  // on the upstream request: a request header would hand the identity to the
+  // backend and the browser would never store it. Issued only when the
+  // incoming cookie is absent or invalid.
+  const visitorCookie =
+    incomingVisitorId == null || !VISITOR_ID_RE.test(incomingVisitorId)
+      ? `${VISITOR_COOKIE_NAME}=${visitorId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`
+      : null;
   headers.set("x-platrixa-visitor-id", visitorId);
   headers.set("x-platrixa-visitor-assertion", assertion);
   headers.set("x-platrixa-request-timestamp", requestTimestamp);
@@ -239,6 +254,19 @@ export async function onRequest(context) {
       "content-type",
       upstream.headers.get("content-type") || "application/json"
     );
+    // Preserve every Set-Cookie the backend sent (never overwrite one), then
+    // add the edge-owned visitor cookie. `new Headers()` can collapse repeated
+    // Set-Cookie entries, so re-add them individually from getSetCookie().
+    if (typeof upstream.headers.getSetCookie === "function") {
+      const upstreamCookies = upstream.headers.getSetCookie();
+      if (upstreamCookies.length > 0) {
+        respHeaders.delete("set-cookie");
+        for (const cookie of upstreamCookies) {
+          respHeaders.append("set-cookie", cookie);
+        }
+      }
+    }
+    if (visitorCookie) respHeaders.append("set-cookie", visitorCookie);
     return new Response(upstream.body, {
       status: upstream.status,
       headers: respHeaders,

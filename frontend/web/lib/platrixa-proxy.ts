@@ -81,6 +81,19 @@ export interface ProxyOutcome {
   requestId: string | null;
   /** Upstream response headers (contract headers are re-emitted). */
   responseHeaders?: Headers;
+  /** Set-Cookie values for the browser response (upstream + edge-owned). */
+  setCookies?: string[];
+}
+
+/**
+ * Every Set-Cookie an upstream response carried. `Headers` can collapse
+ * repeated Set-Cookie values into one entry, so prefer getSetCookie().
+ */
+function setCookieList(headers: Headers): string[] {
+  const maybe = headers as Headers & { getSetCookie?: () => string[] };
+  if (typeof maybe.getSetCookie === "function") return maybe.getSetCookie();
+  const single = headers.get("set-cookie");
+  return single ? [single] : [];
 }
 
 /** The same envelope shape the backend and the frontend already use. */
@@ -102,8 +115,8 @@ function errorEnvelope(
 }
 
 
-const VISITOR_COOKIE_NAME = "platrixa_visitor_id";
-const VISITOR_ID_RE = /^[A-Za-z0-9-]{16,64}$/;
+const VISITOR_COOKIE_NAME = "__Host-platrixa_visitor";
+const VISITOR_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Read the edge-issued visitor id from the HttpOnly cookie, or null. */
 function readVisitorCookie(cookieHeader: string | null): string | null {
@@ -182,8 +195,15 @@ export async function forwardToPlatrixa(
   // --- Visitor identity (edge-owned) ---
   // Derived exclusively from the HttpOnly visitor cookie. Any browser-supplied
   // `x-platrixa-visitor-id` header is ignored; the forwarded value is set below.
-  const visitorId =
-    readVisitorCookie(request.headers.get("cookie")) || crypto.randomUUID();
+  const incomingVisitorId = readVisitorCookie(request.headers.get("cookie"));
+  // Validate incoming cookie against strict UUID format; reject malformed values.
+  let visitorId: string;
+  if (incomingVisitorId && VISITOR_ID_RE.test(incomingVisitorId)) {
+    visitorId = incomingVisitorId;
+  } else {
+    // Generate a fresh UUID for a first-time or invalid-cookie visit.
+    visitorId = crypto.randomUUID();
+  }
 
   // --- CSRF Origin validation for browser state-changing requests ---
   // Validate Origin against the exact configured public origin. GET and HEAD
@@ -254,6 +274,14 @@ export async function forwardToPlatrixa(
     .digest("hex")}`;
 
   // Edge-owned identity — overwrites any browser-supplied value.
+  // The visitor cookie belongs on the RESPONSE to the browser (proxyResponse
+  // below), never on the upstream request: a request header would hand the
+  // identity to the backend and the browser would never store it. Issued only
+  // when the incoming cookie is absent or invalid.
+  const visitorCookie =
+    incomingVisitorId == null || !VISITOR_ID_RE.test(incomingVisitorId)
+      ? `${VISITOR_COOKIE_NAME}=${visitorId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=2592000`
+      : null;
   headers.set("x-platrixa-visitor-id", visitorId);
   headers.set("x-platrixa-visitor-assertion", assertion);
   headers.set("x-platrixa-request-timestamp", requestTimestamp);
@@ -317,16 +345,24 @@ export async function forwardToPlatrixa(
   // A non-JSON body is NOT relayed: it is the hosting platform's own error page
   // (a hibernation notice, a CDN challenge), which exposes infrastructure and
   // carries no code the client can act on. Same contract as the Pages proxies.
+  const setCookies = [
+    ...setCookieList(upstream.headers),
+    ...(visitorCookie ? [visitorCookie] : []),
+  ];
+
   if (!contentType.toLowerCase().includes("application/json")) {
     const status = upstream.status >= 400 ? upstream.status : 502;
-    return errorEnvelope(
-      status,
-      "BACKEND_ERROR",
-      status === 429
-        ? "The Platrixa backend is rate-limited or starting up; retry shortly."
-        : `The Platrixa backend returned a response that is not a JSON envelope (HTTP ${upstream.status}).`,
-      requestId,
-    );
+    return {
+      ...errorEnvelope(
+        status,
+        "BACKEND_ERROR",
+        status === 429
+          ? "The Platrixa backend is rate-limited or starting up; retry shortly."
+          : `The Platrixa backend returned a response that is not a JSON envelope (HTTP ${upstream.status}).`,
+        requestId,
+      ),
+      setCookies,
+    };
   }
 
   return {
@@ -335,15 +371,16 @@ export async function forwardToPlatrixa(
     contentType,
     requestId,
     responseHeaders: upstream.headers,
+    setCookies,
   };
 }
 
 /** Render a ProxyOutcome as a NextResponse (no data transformation). */
 export function proxyResponse(outcome: ProxyOutcome): Response {
-  const outHeaders: Record<string, string> = {
+  const outHeaders = new Headers({
     "content-type": outcome.contentType,
     "cache-control": "no-store",
-  };
+  });
   // Phase 5I (audit C2): idempotency and transport contract headers live
   // in the RESPONSE too — Idempotent-Replayed, Retry-After, and the
   // error-tag header are part of the public developer contract and were
@@ -360,9 +397,15 @@ export function proxyResponse(outcome: ProxyOutcome): Response {
         lower === "x-request-id" ||
         lower.startsWith("x-ratelimit-")
       ) {
-        outHeaders[name] = value;
+        outHeaders.set(name, value);
       }
     }
+  }
+  // Set-Cookie belongs on the browser response — never on the outbound
+  // request. append() preserves every upstream cookie and adds the
+  // edge-owned visitor cookie without overwriting anything.
+  for (const cookie of outcome.setCookies ?? []) {
+    outHeaders.append("set-cookie", cookie);
   }
   return new Response(outcome.body, {
     status: outcome.status,

@@ -28,8 +28,8 @@ if (!API_KEY || !VISITOR_SECRET) {
   process.exit(2);
 }
 
-const A = "a".repeat(32);
-const B = "b".repeat(32);
+const A = "7c9e4d2a-1b3f-4a5c-9d8e-2f6b0a1c3e57";
+const B = "b4d6f018-2c7a-4e39-a5b1-8f0d3c6e9a42";
 
 const ROOT = process.cwd();
 const SOURCES = [
@@ -72,7 +72,7 @@ async function test(name, fn) {
   }
 }
 
-const cookie = (visitor) => ({ cookie: `platrixa_visitor_id=${visitor}` });
+const cookie = (visitor) => ({ cookie: `__Host-platrixa_visitor=${visitor}` });
 
 // Job/result routes live under /v1 only; the /api namespace is exercised
 // separately below as a pass-through pipeline check.

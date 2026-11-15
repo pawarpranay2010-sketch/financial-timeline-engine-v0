@@ -98,14 +98,8 @@ class ApiKeyStoreError(Exception):
     The HTTP layer MUST fail closed on this (503) — never degrade.
     """
 
-
 # ---------------------------------------------------------------------------
 # ORM model — LAZILY registered on the shared declarative Base.
-#
-# backend.database.db raises at import when DATABASE_URL is absent, so —
-# exactly like backend/auth/gate.py and backend/auth/models.py consumers —
-# this module must stay importable in a zero-config deployment (Phase 7F
-# clean-import contract). The model class is created once, on first use.
 # ---------------------------------------------------------------------------
 
 _API_KEY_MODEL = None
@@ -207,7 +201,6 @@ def api_key_model():
 # Key material generation (cryptographically secure, prefix-preserving)
 # ---------------------------------------------------------------------------
 
-
 def generate_raw_key(environment: str) -> Tuple[str, str, str]:
     """Generate ``(raw_key, key_prefix, key_hash)`` for one environment.
 
@@ -235,9 +228,8 @@ def validate_name(name: object) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Store wiring (lazy, request-time; same store as the metering gate)
+# Shared helpers
 # ---------------------------------------------------------------------------
-
 
 def _store_database_url() -> Optional[str]:
     from backend.auth.gate import METERING_ENV_VAR
@@ -299,7 +291,6 @@ def _ensure_schema(engine) -> None:
 # Management authorization — deliberately separate from the data plane
 # ---------------------------------------------------------------------------
 
-
 def authorize_management(provided_token: Optional[str]) -> Tuple[str, Optional[str]]:
     """Authorize a key-MANAGEMENT request. Returns ``(reason, tenant_id)``.
 
@@ -336,9 +327,8 @@ def authorize_management(provided_token: Optional[str]) -> Tuple[str, Optional[s
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers
+# Shared helpers (continued)
 # ---------------------------------------------------------------------------
-
 
 def _session():
     SessionLocal = _session_factory()
@@ -358,14 +348,12 @@ def _looks_like_uuid(value: object) -> bool:
 def _scoped_row(session, tenant_id: str, key_id: str, for_update: bool):
     """Tenant-scoped row fetch. Cross-tenant and missing lookups are
     deliberately indistinguishable (both → KEY_NOT_FOUND, no existence
-    leak)."""
+    leak).
+    """
     from sqlalchemy import select
 
     model = api_key_model()
     stmt = select(model).where(model.id == key_id, model.tenant_id == tenant_id)
-    if for_update:
-        stmt = stmt.with_for_update()
-    return session.execute(stmt).scalar_one_or_none()
     if for_update:
         stmt = stmt.with_for_update()
     return session.execute(stmt).scalar_one_or_none()
@@ -391,7 +379,6 @@ def _safe_view(row: ApiKey, last_used: Optional[datetime]) -> dict:
 # ---------------------------------------------------------------------------
 # Lifecycle operations (tenant-scoped, transactional)
 # ---------------------------------------------------------------------------
-
 
 def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
     """Create a key: registry row + companion quota row, one transaction.
@@ -456,7 +443,7 @@ def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
             # Hash collision (2^-256) or a concurrent duplicate — retry
             # with freshly generated randomness; never overwrite.
             last_error = exc
-    raise ApiKeyStoreError("key generation failed after retries") from last_error
+    raise ApiKeyStoreError("key generation failed after retries")
 
 
 def list_api_keys(tenant_id: str) -> List[dict]:
@@ -522,7 +509,10 @@ def revoke_api_key(tenant_id: str, key_id: str) -> Tuple[Optional[dict], str]:
             if row is None:
                 return None, KEY_NOT_FOUND
             if row.status == "REVOKED":
-                session.rollback()  # idempotent no-op
+                # Idempotent no-op: this path performs no writes, so there is
+                # nothing to roll back. Serialize the row while the session is
+                # still open so a repeat revoke returns the deterministic
+                # REVOKED view instead of falling into the failure handler.
                 return _safe_view(row, _last_used_for(session, row.key_hash)), "OK"
 
             row.status = "REVOKED"

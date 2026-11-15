@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
 BASE = (os.getenv("NEXT_PROXY_BASE") or "http://127.0.0.1:3100").rstrip("/")
 PUBLIC_ORIGIN = (os.getenv("PLATRIXA_PUBLIC_ORIGIN") or "https://app.platrixa.test").strip()
 SECRET = (os.getenv("PLATRIXA_VISITOR_HMAC_SECRET") or "").strip()
-A, B = "a" * 32, "b" * 32
+A, B = "7c9e4d2a-1b3f-4a5c-9d8e-2f6b0a1c3e57", "b4d6f018-2c7a-4e39-a5b1-8f0d3c6e9a42"
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -45,7 +45,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def cookie(visitor: str) -> dict[str, str]:
-    return {"Cookie": f"platrixa_visitor_id={visitor}"}
+    return {"Cookie": f"__Host-platrixa_visitor={visitor}"}
 
 
 def db_engine():

@@ -13,8 +13,9 @@ checklist for whoever configures each environment.
 | `PLATRIXA_VISITOR_HMAC_SECRET` | HMAC-SHA256 secret used to sign (edge) and verify (backend) visitor assertions. High-entropy, server-side only, identical on both sides | Cloudflare `/api`, Cloudflare `/v1`, Next.js proxy, Railway backend |
 | `PLATRIXA_API_KEY` | Server-side website API key injected by the edge; the browser never supplies it | Cloudflare `/api`, Cloudflare `/v1`, Next.js proxy |
 | `PLATRIXA_METERING_DATABASE_URL` | PostgreSQL store holding `visitor_assertion_nonces` (and jobs) | Railway backend |
-| `PLATRIXA_MANAGEMENT_ASSERTION_SECRET` | Management gateway assertion secret (unchanged) | Railway backend |
+| `PLATRIXA_MANAGEMENT_ASSERTION_SECRET` | Management gateway assertion secret (HMAC-SHA256 key). Identical on the signing side and the verifying side; high-entropy, server-side only | Cloudflare operator function + Railway backend |
 | `PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS` | Comma-separated **exact** issuer allowlist for management gateway assertions. Unset/empty/malformed = every gateway assertion is rejected | Railway backend (+ the signing gateway must use one of these values) |
+| `PLATRIXA_MANAGEMENT_ASSERTION_ISSUER` | Issuer id the operator ingress signs into the `issuer` field of every gateway assertion. **Must be byte-identical to one entry of Railway's `PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS`**, otherwise every management call is rejected with 403. Unset or malformed = the operator refuses to sign (500 `MANAGEMENT_ASSERTION_ISSUER_INVALID`) | Cloudflare operator function |
 
 ## Where each value is read
 
@@ -24,6 +25,7 @@ checklist for whoever configures each environment.
 | Cloudflare Pages `/v1` function | `frontend/functions/v1/[[path]].js` | same three |
 | Next.js dev/preview proxy | `frontend/web/lib/platrixa-proxy.ts` | `process.env.PLATRIXA_PUBLIC_ORIGIN`, `PLATRIXA_VISITOR_HMAC_SECRET`, `PLATRIXA_API_KEY` |
 | Railway backend middleware | `api/main.py` (`_visitor_scope_and_csrf`) | `PLATRIXA_PUBLIC_ORIGIN`; verification uses `PLATRIXA_VISITOR_HMAC_SECRET` via `backend/auth/api_keys.py` |
+| Cloudflare operator ingress | `frontend/functions/operator/[[path]].js` | `env.PLATRIXA_MANAGEMENT_ASSERTION_SECRET`, `env.PLATRIXA_MANAGEMENT_ASSERTION_ISSUER`, `env.PLATRIXA_KEY_MANAGEMENT_TOKEN`, `env.PLATRIXA_KEY_MANAGEMENT_TENANT_ID`, `env.API_BACKEND_URL` |
 
 ## Required configuration per platform
 
@@ -34,6 +36,23 @@ project (Production and Preview as appropriate):
 - `PLATRIXA_PUBLIC_ORIGIN` = exact public origin of the site
 - `PLATRIXA_VISITOR_HMAC_SECRET` = same value as Railway
 - `PLATRIXA_API_KEY` = the Phase 15 website API key
+
+### Operator ingress (Cloudflare Pages, management plane)
+
+The operator function signs a management gateway assertion, so it needs both
+management-plane values. Add them as encrypted environment variables on the
+Pages project:
+
+- `PLATRIXA_MANAGEMENT_ASSERTION_SECRET` = same value as Railway
+- `PLATRIXA_MANAGEMENT_ASSERTION_ISSUER` = the issuer id to sign; it must
+  match one entry of Railway's `PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS`
+- `PLATRIXA_KEY_MANAGEMENT_TOKEN` / `PLATRIXA_KEY_MANAGEMENT_TENANT_ID` =
+  same values as Railway (the token authenticates the caller; the tenant is
+  derived from configuration, never from the request)
+- `API_BACKEND_URL` = backend origin (scheme + host only)
+
+Never put a real value in this document or in a commit; configure these in the
+Pages/Railway dashboards.
 
 ### Next.js server proxy (local/preview only)
 Set in the server environment (not `NEXT_PUBLIC_*`, so it never reaches the
