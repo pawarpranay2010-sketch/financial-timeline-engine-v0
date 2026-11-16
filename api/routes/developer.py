@@ -166,7 +166,7 @@ _GATE_ERROR_MESSAGES = {
         "key management is not configured on this deployment"
     ),
     "API_KEY_MANAGEMENT_UNAUTHORIZED": (
-        "management token missing, invalid, or not authorized for key management"
+        "management request is not authorized for key management"
     ),
     "API_KEY_MANAGEMENT_UNAVAILABLE": (
         "key management store unavailable; operation not performed"

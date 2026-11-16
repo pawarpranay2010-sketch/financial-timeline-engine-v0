@@ -6,10 +6,8 @@ from the data plane:
 
     X-Platrixa-API-Key  → authenticates /v1/process (data plane).
                           It can NEVER manage keys.
-    X-Platrixa-Management-Token → authorizes THESE endpoints only.
-                          Operator-issued, bound to exactly one tenant
-                          (PLATRIXA_KEY_MANAGEMENT_TOKEN +
-                          PLATRIXA_KEY_MANAGEMENT_TENANT_ID).
+    This endpoint uses assertion-only authorization: a valid signed gateway
+    assertion is required; no static management token is forwarded or required.
 
 Raw keys are shown EXACTLY ONCE (create / rotate response), stored only
 as SHA-256 hashes, never logged, never echoed, never serialized into
@@ -127,39 +125,18 @@ def canonical_management_path(raw_path: str) -> Optional[str]:
 async def require_management(request: Request) -> str:
     """Authorize one MANAGEMENT request. Returns the bound tenant_id.
 
-    Both credentials are mandatory on every management endpoint:
-
-      1. the static management token (``X-Platrixa-Management-Token``), and
-      2. a COMPLETE signed gateway assertion.
-
-    The assertion is bound to the ACTUAL request: its declared method, path,
-    query string, content-type and body hash must equal what this server
-    received, and the signature is verified over those received values —
+    This gate uses assertion-only authorization: a COMPLETE signed gateway
+    assertion is mandatory and no static management token is required, consumed
+    or forwarded. The assertion is bound to the ACTUAL request: its declared
+    method, path, query string, content-type and body hash must equal what this
+    server received, and the signature is verified over those received values —
     never over the caller's claim about them.
 
     Fails closed on every ambiguous state:
-      NOT_CONFIGURED -> 400, MISCONFIGURED -> 503, INVALID -> 403,
+      tenant binding missing -> 503, INVALID -> 403,
       nonce store unavailable -> 503.
     """
     from backend.auth import api_keys as store
-
-    token = request.headers.get("x-platrixa-management-token", "")
-    reason, tenant_id = store.authorize_management(token)
-    if reason == store.MGMT_NOT_CONFIGURED:
-        raise HTTPException(
-            status_code=400,
-            detail="API_KEY_MANAGEMENT_NOT_CONFIGURED",
-            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_NOT_CONFIGURED"},
-        )
-    if reason == store.MGMT_MISCONFIGURED:
-        logger.warning("key-management token set without a tenant binding")
-        raise HTTPException(
-            status_code=503,
-            detail="API_KEY_MANAGEMENT_UNAVAILABLE",
-            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAVAILABLE"},
-        )
-    if reason != store.MGMT_OK or not tenant_id:
-        raise _management_denied()
 
     # Complete-or-nothing: any missing assertion header is a hard rejection.
     for header in _ASSERTION_HEADERS:
@@ -199,13 +176,25 @@ async def require_management(request: Request) -> str:
     if declared != actual:
         raise _management_denied()
 
-    # Tenant binding is checked before the HMAC so a wrong-tenant assertion
-    # never consumes a nonce.
+    # Tenant authorization is TWO independent facts, and both must agree:
+    #   1. the tenant signed INSIDE the assertion (verified below by HMAC), and
+    #   2. this deployment's own binding (PLATRIXA_KEY_MANAGEMENT_TENANT_ID).
+    # The assertion is the only source of the claimed tenant — a caller-supplied
+    # header or body field can never name it — and the local binding stops a
+    # valid signature from addressing any tenant other than the configured one.
     declared_tenant = request.headers.get("x-platrixa-assertion-tenant-id", "")
-    if declared_tenant != tenant_id:
+    bound_tenant = (os.getenv("PLATRIXA_KEY_MANAGEMENT_TENANT_ID", "") or "").strip()
+    if not bound_tenant:
+        logger.warning("key-management tenant binding not configured")
+        raise HTTPException(
+            status_code=503,
+            detail="API_KEY_MANAGEMENT_UNAVAILABLE",
+            headers={"X-Platrixa-Error": "API_KEY_MANAGEMENT_UNAVAILABLE"},
+        )
+    if not declared_tenant or declared_tenant != bound_tenant:
         logger.warning(
-            "Management tenant mismatch: authorize_management=%s, assertion=%s",
-            tenant_id,
+            "Management tenant mismatch: bound=%s, assertion=%s",
+            bound_tenant,
             declared_tenant,
         )
         raise _management_denied()
@@ -233,9 +222,9 @@ async def require_management(request: Request) -> str:
         )
     if result != store.MGMT_OK:
         raise _management_denied()
-    if assertion_tenant != tenant_id:
+    if assertion_tenant != bound_tenant:
         raise _management_denied()
-    return tenant_id
+    return bound_tenant
 
 
 def _store_error_response(request: Request) -> JSONResponse:

@@ -294,7 +294,15 @@ def _ensure_schema(engine) -> None:
 def authorize_management(provided_token: Optional[str]) -> Tuple[str, Optional[str]]:
     """Authorize a key-MANAGEMENT request. Returns ``(reason, tenant_id)``.
 
-    This is the entire authorization model, kept honest and small:
+    DEPRECATED — NOT THE AUTHORIZATION MODEL. No backend route calls this
+    function: every management route authorizes through
+    ``api.routes.developer_keys.require_management`` with a signed
+    assertion only. This helper is retained because operator tooling and
+    tests still reference the static-token comparison, and it must never be
+    wired back into a management route (that would restore the shared-secret
+    forwarding this phase removed).
+
+    When called directly, its rules are:
 
       * No token configured  → NOT_CONFIGURED (deployment disabled it).
       * Token set, tenant binding missing → MISCONFIGURED (fail closed;
@@ -882,10 +890,13 @@ def validate_management_gateway_assertion(
 ) -> Tuple[str, Optional[str]]:
     """Validate a management gateway assertion.
 
-    Per Phase 1B requirements, gateway-originated management requests
-    require BOTH:
-      1. A valid management gateway assertion (HMAC-SHA256 canonical message)
-      2. Existing authorize_management() verification using x-platrixa-management-token
+    This is the ONLY credential the backend consumes for management
+    operations: a valid HMAC-SHA256 assertion over the canonical message.
+    The raw management token is an edge-side credential and is never
+    required, read or forwarded here (there is deliberately no fallback to
+    it). The caller-supplied tenant is trusted only because it is inside the
+    signed message; API routes additionally compare it with the local
+    tenant binding before trusting it.
     """
 
     import hashlib

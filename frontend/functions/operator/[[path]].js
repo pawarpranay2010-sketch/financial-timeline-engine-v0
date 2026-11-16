@@ -15,23 +15,26 @@
 //     ACTUAL outgoing request (method, canonical path, raw query string,
 //     exact content-type, SHA-256 of the exact body bytes, fresh nonce,
 //     signed timestamp)
-//   • Forwards the request with all 11 assertion headers plus the
-//     server-side management token
+//   • Forwards the request with the 11 assertion headers and NO management
+//     token: assertion-only authorization. The backend derives the tenant
+//     from the verified assertion, never from a forwarded shared secret.
 //
 // WHAT THIS FUNCTION DOES NOT DO:
 //   • Does NOT accept or forward a caller-supplied assertion, tenant, or
 //     operator identity — any such header from the request is discarded
-//   • Does NOT forward the management token that the caller supplied; only
-//     the server-side binding is ever sent upstream
+//   • Does NOT forward ANY management token upstream — neither the one the
+//     caller presented nor the server-side binding. The static token never
+//     leaves this edge function.
 //   • Does NOT proxy to arbitrary paths (allowlist below) and never to a
 //     different origin than API_BACKEND_URL
 //
-// REQUIREMENTS (configure externally):
+// REQUIREMENTS (configure externally, EDGE SIDE ONLY):
 //   • PLATRIXA_MANAGEMENT_ASSERTION_SECRET   — HMAC-SHA256 signing secret
 //   • PLATRIXA_MANAGEMENT_ASSERTION_ISSUER   — issuer id; MUST also appear in
 //                                              the backend's
 //                                              PLATRIXA_MANAGEMENT_TRUSTED_ISSUERS
-//   • PLATRIXA_KEY_MANAGEMENT_TOKEN          — static management token
+//   • PLATRIXA_KEY_MANAGEMENT_TOKEN          — static operator credential,
+//                                              verified here, NEVER forwarded
 //   • PLATRIXA_KEY_MANAGEMENT_TENANT_ID      — tenant the token is bound to
 //   • API_BACKEND_URL                        — backend origin
 //
@@ -257,9 +260,9 @@ export default {
         "PLATRIXA_MANAGEMENT_ASSERTION_ISSUER is missing or malformed"
       );
     }
-
-    // Caller authorization: operator identity is proven by the management
-    // token, compared in constant time against the server-side binding.
+    // Caller authorization happens HERE, at the edge, and only here. The
+    // operator credential is compared in constant time against the
+    // server-side binding; the presented value is never forwarded upstream.
     const presentedToken = String(request.headers.get("x-platrixa-management-token") || "").trim();
     if (!presentedToken) {
       return errorEnvelope(
@@ -355,10 +358,10 @@ export default {
     }
 
     // Only contract headers are forwarded. Caller-supplied assertion,
-    // tenant, operator and management-token headers are never copied.
+    // tenant and operator headers are never copied.
+    // The management token is never forwarded to the backend.
     const forwardHeaders = new Headers({
       "content-type": contentType,
-      "x-platrixa-management-token": expectedToken,
       "x-platrixa-tenant-id": tenantId,
       "x-request-id": request.headers.get("x-request-id") || crypto.randomUUID(),
     });
