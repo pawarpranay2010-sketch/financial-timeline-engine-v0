@@ -46,15 +46,20 @@ authority, and a VERIFIED result never means the model "decided".
 
 ## 3. Authentication
 
-All `/v1` processing endpoints authenticate with a tenant API key
-provisioned by the operator (no self-serve issuance yet):
+All `/v1` processing endpoints authenticate with a tenant-bound API key
+issued by the operator through the management API during the private beta
+(there is no self-serve signup):
 
 ```
 X-Platrixa-API-Key: YOUR_API_KEY
 ```
 
 - Keys are stored server-side as SHA-256 hashes only; the raw key is
-  shown exactly once at provisioning.
+  shown exactly once at issuance (`POST /v1/developer/api-keys`, 201).
+- Quota is enforced **per key**, not per tenant: each key owns its own
+  `platrixa_tenant_quotas` row (primary key = SHA-256 of the key) with its
+  own 100/month bucket, so keys of the same tenant are not pooled.
+- A second tenant's key never sees the first tenant's jobs or results.
 - Missing/unknown key → `401 UNAUTHORIZED` (externally indistinguishable).
 - Monthly quota exhausted → `429 QUOTA_EXHAUSTED` (one unit per admitted
   request; auth failures consume zero).
@@ -64,7 +69,9 @@ X-Platrixa-API-Key: YOUR_API_KEY
 ## 4. API base URL
 
 ```
-HOST = http://127.0.0.1:8000        # local: python -m uvicorn api.main:app --port 8000
+HOST = https://financial-timeline-engine-v0-production.up.railway.app
+# local: HOST = http://127.0.0.1:8000
+#        python -m uvicorn api.main:app --port 8000
 ```
 
 All developer endpoints live under `/v1`. `GET /v1/health` (liveness)
@@ -124,6 +131,49 @@ Response `202 Accepted`:
 Requires the durable store (`PLATRIXA_METERING_DATABASE_URL`); otherwise
 `400 ASYNC_NOT_CONFIGURED`.
 
+## 7b. POST /v1/inference-jobs — asynchronous text (outbound worker)
+
+This is the hosted path for text: the job enters the durable queue and
+waits for the outbound inference worker, which runs the model on a
+Termux/Android device (llama.cpp over loopback) and returns the candidate
+verbatim to the deterministic kernel. Nothing is hosted-inferred and no
+inbound port exists on the worker.
+
+```bash
+curl -s -X POST "$HOST/v1/inference-jobs" \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: YOUR_API_KEY" \
+  -H "Idempotency-Key: YOUR_IDEMPOTENCY_KEY" \
+  -d '{"raw_input": "Purchased furniture for cash Rs. 15,000"}'
+```
+
+Body: `raw_input`, 1–2000 chars. Headers: `X-Platrixa-API-Key`
+(required), `Idempotency-Key` (optional, 16–200 chars of
+`[A-Za-z0-9._~-]`).
+
+```json
+{
+  "api_version": "v1",
+  "request_id": "req-9",
+  "job_id": "job_…",
+  "result_id": "res_…",
+  "status": "PROCESSING",
+  "status_label": "Processing",
+  "status_url": "/v1/jobs/job_…",
+  "result_url": "/v1/results/res_…",
+  "created_at": "2026-11-16T12:00:00+00:00"
+}
+```
+
+`202` means admitted — one quota unit is reserved, no result exists yet.
+A job stays queued (`status: PROCESSING`) until a worker claims it, so
+this path does not guarantee latency; poll `GET /v1/jobs/{job_id}`. The
+same key + same `raw_input` returns the original job reference (no
+duplicate job, no extra quota); the same key + a different `raw_input` is
+`409`. Failures: `400 REQUEST_MALFORMED`, `401`, `409`, `413
+REQUEST_TOO_LARGE`, `429 QUOTA_EXHAUSTED`, `503 ASYNC_NOT_CONFIGURED` /
+`ASYNC_UNAVAILABLE`.
+
 ## 8. GET /v1/jobs/{job_id} — poll status
 
 ```bash
@@ -140,10 +190,12 @@ curl -s "$HOST/v1/jobs/job_…" -H "X-Platrixa-API-Key: YOUR_API_KEY"
 }
 ```
 
-`status` is `PROCESSING` while running, then the real engine outcome or
-`FAILED`. **Completion is not VERIFIED** — completion only means
-processing finished. Poll until `status != "PROCESSING"`, then fetch the
-result.
+`status` is `PROCESSING` while the job is queued **or** running, then the
+real engine outcome (`VERIFIED`, `REVIEW_REQUIRED`, `UNSUPPORTED`) or
+`FAILED`. `RETRY_WAIT` means the worker lease lapsed and the job will be
+re-claimed, so keep polling. **Completion is not VERIFIED** — completion
+only means processing finished. Poll until `status` is neither
+`PROCESSING` nor `RETRY_WAIT`, then fetch `result_url`.
 
 ## 9. GET /v1/results/{result_id} — fetch the result
 
@@ -169,8 +221,8 @@ Do not hardcode capability assumptions — discover them.
 
 ## 11. Idempotency-Key
 
-Optional on `POST /v1/process` and `POST /v1/documents` (16–200 chars of
-`[A-Za-z0-9._~-]`):
+Optional on `POST /v1/process`, `POST /v1/documents` and
+`POST /v1/inference-jobs` (16–200 chars of `[A-Za-z0-9._~-]`):
 
 - same key + same request → the original response is replayed
   (`Idempotent-Replayed: true`, original `request_id` and HTTP status)
@@ -253,6 +305,7 @@ them (plain-text documents never have them). Text-only results carry
 `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST` ·
 `IDEMPOTENCY_REQUEST_IN_PROGRESS` · `IDEMPOTENCY_NOT_CONFIGURED` ·
 `IDEMPOTENCY_UNAVAILABLE` · `ASYNC_NOT_CONFIGURED` · `ASYNC_UNAVAILABLE` ·
+`INPUT_MISSING` · `LEASE_LOST` · `INTERNAL_ERROR` ·
 `JOB_NOT_FOUND` · `RESULT_NOT_FOUND` · `RESULT_NOT_READY`.
 
 Raw exception messages are never the machine contract.
@@ -307,6 +360,20 @@ One unit per admitted request (sync and async alike). Monthly UTC
 application-level rate limiting — a 429 means the monthly quota is
 exhausted, not "slow down this second".
 
+Quota is enforced **per key**, not per tenant. `platrixa_tenant_quotas`
+is keyed by `api_key_hash`, and reservation is a single `UPDATE … WHERE
+api_key_hash = :hash AND is_active AND usage + 1 <= monthly_limit`, so two
+keys of the same tenant hold two independent buckets.
+
+Every key issued through the management API starts at **100 requests per
+UTC month**: the creation request has no limit field and no endpoint edits
+`monthly_limit` afterwards (`python -m backend.auth.dev_seed_tenant
+--limit N` can set it only on a locally seeded deployment). Rotation
+re-points the same quota row at the new key hash and preserves
+`monthly_limit`, `current_month_usage` and `usage_month` verbatim — it
+never grants a fresh allowance. `GET /v1/usage` returns the authenticated
+key's current bucket at zero quota cost.
+
 ## 19. Trust & Safety
 
 Platrixa is a financial semantic validation and developer infrastructure
@@ -320,7 +387,13 @@ REVIEW_REQUIRED outcomes and for its own posting/business workflow.
 
 ## 20. Known limitations
 
-- API keys are operator-provisioned; no self-serve issuance/rotation yet.
+- API keys are operator-issued through the management API (private
+  beta); there is no self-serve signup, and each key's quota is fixed at
+  100 requests/month — per key, not per tenant, and not adjustable via
+  the API.
+- Async inference jobs require a live outbound worker: with none online a
+  job remains queued and `GET /v1/jobs/{job_id}` keeps reporting
+  `PROCESSING`. This is a capacity limit, not an error.
 - Async documents and webhooks require the durable metering store;
   webhook delivery is best-effort single-attempt.
 - The evaluated transaction domain is school-level (FYJC) accounting

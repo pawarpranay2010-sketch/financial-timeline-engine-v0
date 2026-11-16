@@ -509,6 +509,166 @@ def section_e(c: TestClient, created: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# D2. rotation preserves the quota row — replacing a credential never grants
+#     a fresh monthly allowance
+# ---------------------------------------------------------------------------
+
+
+def _quota_row(uri: str, raw_key: str):
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(
+        uri.replace("postgresql://", "postgresql+psycopg2://", 1), future=True
+    )
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT monthly_limit, current_month_usage, usage_month, is_active "
+                "FROM platrixa_tenant_quotas WHERE api_key_hash = :h"
+            ),
+            {"h": hash_token(raw_key)},
+        ).first()
+
+
+def _set_usage(uri: str, raw_key: str, usage: int) -> None:
+    from sqlalchemy import create_engine, text
+
+    from backend.auth.models import current_usage_month
+
+    engine = create_engine(
+        uri.replace("postgresql://", "postgresql+psycopg2://", 1), future=True
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE platrixa_tenant_quotas SET current_month_usage = :u, "
+                "usage_month = :m WHERE api_key_hash = :h"
+            ),
+            {"u": usage, "m": current_usage_month(), "h": hash_token(raw_key)},
+        )
+
+
+def _drain(c: TestClient, raw_key: str, cap: int = 70) -> tuple[int, bool]:
+    """Issue real /v1/process calls until 429; return (successes, hit_limit)."""
+    ok = 0
+    for _ in range(cap):
+        r = c.post(
+            "/v1/process",
+            json={"raw_input": "Purchased furniture for cash Rs. 15,000"},
+            headers={"X-Platrixa-API-Key": raw_key},
+        )
+        if r.status_code == 200:
+            ok += 1
+            continue
+        return ok, r.status_code == 429
+    return ok, False
+
+
+def _new_quota_key(c: TestClient, name: str) -> dict:
+    r = c.post(
+        "/v1/developer/api-keys",
+        json={"name": name, "environment": "live"},
+        headers=mgmt_hdr(),
+    )
+    check(f"quota fixture key '{name}' created → 201", r.status_code == 201, str(r.status_code))
+    return r.json()
+
+
+def _rotate(c: TestClient, key_id: str) -> dict:
+    r = c.post(f"/v1/developer/api-keys/{key_id}/rotate", headers=mgmt_hdr())
+    check("rotate → 201 with new live key", r.status_code == 201 and r.json().get("key", "").startswith("plx_live_"), r.text[:80])
+    return r.json()
+
+
+def section_d2(c: TestClient, uri: str) -> None:
+    print("\nD2. rotation preserves quota (no fresh allowance)")
+
+    # --- 1. rotation at zero usage ---------------------------------------
+    key0 = _new_quota_key(c, "quota-zero")
+    raw0 = key0["key"]
+    before = _quota_row(uri, raw0)
+    check(
+        "fresh key starts at 0/100",
+        before is not None and before[0] == 100 and before[1] == 0,
+        str(before),
+    )
+    rotated0 = _rotate(c, key0["id"])
+    after = _quota_row(uri, rotated0["key"])
+    check(
+        "zero usage preserved (limit, usage, month identical)",
+        after is not None and (after[0], after[1], after[2]) == (before[0], before[1], before[2]),
+        f"{before} -> {after}",
+    )
+    check(
+        "quota row reassigned to the new hash, old hash has no row",
+        _quota_row(uri, raw0) is None and after is not None,
+    )
+    r = c.post(
+        "/v1/process",
+        json={"raw_input": "Purchased furniture for cash Rs. 15,000"},
+        headers={"X-Platrixa-API-Key": raw0},
+    )
+    check("old key rejected after rotation → 401", r.status_code == 401, str(r.status_code))
+
+    # --- 2. rotation after partial usage ---------------------------------
+    key1 = _new_quota_key(c, "quota-partial")
+    raw1 = key1["key"]
+    _set_usage(uri, raw1, 40)
+    before = _quota_row(uri, raw1)
+    rotated1 = _rotate(c, key1["id"])
+    raw1r = rotated1["key"]
+    after = _quota_row(uri, raw1r)
+    check(
+        "partial usage preserved across rotation (40/100, same month)",
+        after is not None
+        and (after[0], after[1], after[2]) == (before[0], before[1], before[2])
+        and after[1] == 40,
+        f"{before} -> {after}",
+    )
+    r = c.post(
+        "/v1/process",
+        json={"raw_input": "Purchased furniture for cash Rs. 15,000"},
+        headers={"X-Platrixa-API-Key": raw1},
+    )
+    check("previous key rejected after partial rotation → 401", r.status_code == 401, str(r.status_code))
+    ok, hit = _drain(c, raw1r)
+    check(
+        "rotated key gets exactly the remaining allowance (60, then 429)",
+        ok == 60 and hit,
+        f"successes={ok} hit_limit={hit}",
+    )
+    used = _quota_row(uri, raw1r)
+    check("bucket reads 100/100 afterwards (no reset)", used is not None and used[1] == 100, str(used))
+
+    # --- 3. rotation at exhausted quota ----------------------------------
+    key2 = _new_quota_key(c, "quota-exhausted")
+    raw2 = key2["key"]
+    _set_usage(uri, raw2, 100)
+    rotated2 = _rotate(c, key2["id"])
+    raw2r = rotated2["key"]
+    after = _quota_row(uri, raw2r)
+    check(
+        "exhausted 100/100 preserved across rotation",
+        after is not None and after[0] == 100 and after[1] == 100,
+        str(after),
+    )
+    r = c.post(
+        "/v1/process",
+        json={"raw_input": "Purchased furniture for cash Rs. 15,000"},
+        headers={"X-Platrixa-API-Key": raw2r},
+    )
+    check(
+        "rotated exhausted key → 429 QUOTA_EXHAUSTED (no fresh allowance)",
+        r.status_code == 429 and r.json().get("error", {}).get("code") == "QUOTA_EXHAUSTED",
+        f"{r.status_code} {r.text[:80]}",
+    )
+    check(
+        "spent units still 100/100 after the rejected call",
+        (_quota_row(uri, raw2r) or (None, None))[1] == 100,
+    )
+
+
+# ---------------------------------------------------------------------------
 # F. authorization boundary — the two planes never mix
 # ---------------------------------------------------------------------------
 
@@ -648,6 +808,7 @@ def main() -> int:
     section_c(c, created)
     section_d(c, created)
     section_e(c, created)
+    section_d2(c, uri)
     section_f(c)
     section_g(uri)
     section_h(c, created)

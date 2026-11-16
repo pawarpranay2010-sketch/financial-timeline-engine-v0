@@ -542,13 +542,15 @@ def rotate_api_key(tenant_id: str, key_id: str) -> Tuple[Optional[dict], str]:
     Single transaction: SELECT ... FOR UPDATE the tenant-scoped row →
     generate a fresh cryptographically random secret → replace
     ``key_hash``/``key_prefix`` → repoint the companion quota row at the
-    new hash (usage reset — a rotated credential starts a fresh month
-    bucket, the honest semantics of a new credential) → commit. The old
-    raw key stops authenticating at commit; the new raw key is returned
-    EXACTLY ONCE; the old secret is unrecoverable (only its hash ever
-    existed, and that hash row is gone).
+    new hash while PRESERVING ``monthly_limit``, ``current_month_usage``
+    and ``usage_month`` verbatim → commit. Rotation replaces a credential;
+    it never grants a fresh allowance, so a tenant at its limit stays at
+    its limit and a partially used bucket keeps its remaining units. The
+    old raw key stops authenticating at commit; the new raw key is
+    returned EXACTLY ONCE; the old secret is unrecoverable (only its hash
+    ever existed, and that hash row is gone).
     """
-    from backend.auth.models import TenantQuota, current_usage_month
+    from backend.auth.models import TenantQuota
     from sqlalchemy import update
 
     if not _looks_like_uuid(key_id):
@@ -570,14 +572,17 @@ def rotate_api_key(tenant_id: str, key_id: str) -> Tuple[Optional[dict], str]:
             row.status = "ACTIVE"
             row.revoked_at = None
 
+            # Reassign the SAME quota row to the new credential. Limit and
+            # consumption are deliberately untouched: rotation must not
+            # reset the month bucket or hand back spent units. The stale-
+            # bucket rollover stays owned by the reservation UPDATE in
+            # backend/auth/gate.py, exactly as for any other request.
             quota_result = session.execute(
                 update(TenantQuota)
                 .where(TenantQuota.api_key_hash == old_hash)
                 .values(
                     api_key_hash=key_hash,
                     is_active=True,
-                    current_month_usage=0,
-                    usage_month=current_usage_month(),
                 )
                 .execution_options(synchronize_session=False)
             )

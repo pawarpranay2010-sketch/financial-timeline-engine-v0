@@ -3,28 +3,59 @@
 From zero to a validated financial-semantic result in five calls.
 
 > All examples use placeholders (`YOUR_API_KEY`, `YOUR_IDEMPOTENCY_KEY`) —
-> never real secrets. Keys are provisioned by the operator (`python -m
-> backend.auth.dev_seed_tenant`); there is no self-serve signup yet.
+> never real secrets. Keys are issued by the operator; there is no
+> self-serve signup yet.
 
 ---
 
 ## 0. Base URL
 
 ```bash
-HOST=http://127.0.0.1:8000
-# local server: python -m uvicorn api.main:app --port 8000
+HOST=https://financial-timeline-engine-v0-production.up.railway.app
+# local server: HOST=http://127.0.0.1:8000
+#   python -m uvicorn api.main:app --port 8000
 ```
 
 ## 1. Obtain an API key
 
-Ask the operator (or provision locally):
+Ask the operator for a tenant key during the private beta. You receive a
+key of the form `plx_live_…` **exactly once** — Platrixa stores only its
+SHA-256 hash and cannot show it again. Each key belongs to one tenant, so
+two developers never share keys, jobs, or quota.
+
+Quota is enforced **per key**, not per tenant: every key is its own row in
+the quota store (`api_key_hash` is the primary key) and starts with **100
+admitted requests per UTC month**. Issuing a second key for the same
+tenant therefore adds a second, independent bucket — it does not raise the
+first key's limit, and no API changes a limit. Rotation
+(`POST /v1/developer/api-keys/{id}/rotate`) replaces the credential but
+**preserves the limit, the used count and the month bucket** — it never
+grants a fresh allowance.
+
+<details>
+<summary>Operator side (developers can skip this)</summary>
+
+```bash
+# management surface — requires the operator token and gateway assertion
+curl -s -X POST "$MGMT_HOST/v1/developer/api-keys" \
+  -H "X-Platrixa-Management-Token: $MGMT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "acme-dev", "environment": "live"}'
+# → 201 { "id": "…", "key": "plx_live_…", "key_prefix": "…", "status": "ACTIVE" }
+
+# revoke / rotate (raw key shown once on rotate)
+curl -s -X POST "$MGMT_HOST/v1/developer/api-keys/KEY_ID/revoke" -H "X-Platrixa-Management-Token: $MGMT_TOKEN"
+curl -s -X POST "$MGMT_HOST/v1/developer/api-keys/KEY_ID/rotate" -H "X-Platrixa-Management-Token: $MGMT_TOKEN"
+```
+
+For a purely local server the same credential can be seeded directly:
 
 ```bash
 PLATRIXA_METERING_DATABASE_URL=postgresql://… \
   python -m backend.auth.dev_seed_tenant --tenant acme-dev --limit 2000
 ```
 
-The raw key (`plx_…`) is printed **exactly once**. Store it securely.
+</details>
 
 ## 2. Send a transaction
 
@@ -107,6 +138,68 @@ remember `interpretation.amounts[].value_origin` is `EXTRACTED`
 
 ---
 
+## Async text jobs (the hosted inference path)
+
+Synchronous `/v1/process` needs the interpretation model inline. On the
+hosted deployment interpretation runs on an outbound worker (a Termux
+device running llama.cpp), so text jobs are queued and polled instead.
+
+```bash
+# 1. submit — 202 means ADMITTED, never VERIFIED
+curl -s -X POST "$HOST/v1/inference-jobs" \
+  -H "Content-Type: application/json" \
+  -H "X-Platrixa-API-Key: YOUR_API_KEY" \
+  -H "Idempotency-Key: YOUR_IDEMPOTENCY_KEY" \
+  -d '{"raw_input": "Purchased furniture for cash Rs. 15,000"}'
+```
+
+```json
+{
+  "api_version": "v1",
+  "request_id": "req-9",
+  "job_id": "job_…",
+  "result_id": "res_…",
+  "status": "PROCESSING",
+  "status_label": "Processing",
+  "status_url": "/v1/jobs/job_…",
+  "result_url": "/v1/results/res_…",
+  "created_at": "2026-11-16T12:00:00+00:00"
+}
+```
+
+```bash
+# 2. poll until the job leaves PROCESSING
+curl -s "$HOST/v1/jobs/job_…" -H "X-Platrixa-API-Key: YOUR_API_KEY"
+```
+
+```json
+{
+  "api_version": "v1",
+  "job_id": "job_…",
+  "request_id": "req-9",
+  "status": "VERIFIED",
+  "status_label": "Verified",
+  "retryable": false,
+  "reason_codes": [],
+  "result_url": "/v1/results/res_…",
+  "created_at": "2026-11-16T12:00:00+00:00",
+  "updated_at": "2026-11-16T12:00:24+00:00"
+}
+```
+
+`status` is `PROCESSING` while the job is queued **or** running, then the
+real engine outcome (`VERIFIED`, `REVIEW_REQUIRED`, `UNSUPPORTED`,
+`FAILED`). `RETRY_WAIT` means the worker lease lapsed and the job will be
+re-claimed. A `202` is an admission, never a promise of VERIFIED.
+
+```bash
+# 3. retrieve the stored result (same envelope as /v1/process)
+curl -s "$HOST/v1/results/res_…" -H "X-Platrixa-API-Key: YOUR_API_KEY"
+```
+
+Before completion this returns `404 RESULT_NOT_READY`; an id owned by
+another tenant returns `404 RESULT_NOT_FOUND` — never data.
+
 ## Async documents (optional)
 
 ```bash
@@ -132,6 +225,41 @@ curl -s "$HOST/v1/capabilities" -H "X-Platrixa-API-Key: YOUR_API_KEY"
 
 Deterministic, read-only listing of what the runtime can prove today —
 including `UNSUPPORTED`/`PLANNED` metadata. Do not hardcode assumptions.
+
+---
+
+## Errors and quota
+
+Every failure uses one envelope:
+
+```json
+{
+  "api_version": "v1",
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "missing or invalid API key",
+    "api_status": "INVALID_INPUT",
+    "api_status_label": "Invalid input",
+    "retryable": false
+  }
+}
+```
+
+| HTTP | Code | Do |
+|---|---|---|
+| 400 | `REQUEST_MALFORMED` | fix the JSON body |
+| 401 | `UNAUTHORIZED` | check `X-Platrixa-API-Key` — missing and unknown keys are indistinguishable |
+| 404 | `JOB_NOT_FOUND` / `RESULT_NOT_FOUND` | wrong id, or another tenant's id |
+| 404 | `RESULT_NOT_READY` | keep polling the job |
+| 409 | `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST` | use a new key per distinct request |
+| 413 | `REQUEST_TOO_LARGE` | shrink the input |
+| 422 | `INPUT_INVALID` | input outside the accepted domain — do not retry unchanged |
+| 429 | `QUOTA_EXHAUSTED` | monthly bucket empty; wait for the next UTC month |
+| 503 | `METERING_UNAVAILABLE` / `ASYNC_UNAVAILABLE` / `PROVIDER_UNAVAILABLE` | fail-closed outage; retry with backoff |
+
+Quota is consumed once per **admitted** request (sync and async alike);
+authentication failures cost nothing. With a 100/month key, `GET /v1/usage`
+returns the authenticated key's current bucket without spending quota.
 
 ---
 

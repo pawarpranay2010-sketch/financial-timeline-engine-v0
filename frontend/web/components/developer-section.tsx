@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 /**
  * Developer section switcher — four sections on one route (client-side
  * tabs; the page remains statically exportable). Honesty rules:
- *   - API key self-service: the backend exposes key VERIFICATION for its
- *     own gate but no issuance/rotation/revocation API, so this section
- *     shows the planned architecture and says so. No fake keys, ever.
+ *   - API key self-service: keys are issued by the operator through the
+ *     management API (private beta); end-user self-service is not enabled,
+ *     so this section shows the planned architecture and says so. No fake
+ *     keys, ever.
  *   - Requests: no request-history endpoint exists, so no history is shown.
  *     The planned table columns are documentation, not data.
  *   - Documentation (Phase 5D/5E): reflects the REAL contract — the
@@ -72,10 +73,12 @@ const ENDPOINTS: Array<[string, string]> = [
   ["POST /v1/process", "Process one financial narration — the canonical 5D result envelope"],
   ["POST /v1/process/document", "Text, PDF, or image — returns pages, evidence, lineage, timings"],
   ["POST /v1/documents", "Async document submission (202: job_id + result_id; admitted ≠ VERIFIED)"],
+  ["POST /v1/inference-jobs", "Async text submission to the outbound worker queue (202: job_id + result_id)"],
   ["GET /v1/jobs/{job_id}", "Poll an async job — completion is NOT VERIFIED; the status tells the truth"],
   ["GET /v1/results/{result_id}", "Fetch the finished result — the SAME 5D envelope as /v1/process"],
   ["POST /v1/webhook-endpoints", "Register signed webhook delivery (best-effort, single-attempt)"],
   ["GET /v1/capabilities", "Read-only projection of the live capability registry"],
+  ["GET /v1/usage", "Current quota bucket for the authenticated key — costs no quota"],
   ["GET /v1/health · /v1/ready", "Liveness and readiness probes"],
 ];
 
@@ -157,14 +160,16 @@ function ApiKeysSection() {
             <ComingSoon>NOT YET ENABLED</ComingSoon>
           </div>
           <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
-            The backend currently supports key <em>verification</em> for its own metering gate
-            (requests present <code className="font-mono text-xs">X-Platrixa-API-Key</code>), but it
-            does not yet expose key generation, rotation, or revocation to end users. Platrixa does
-            not fake this: no keys can be created from this page because no issuance API exists.
+            Keys are issued by the operator through the management API
+            (<code className="font-mono text-xs">POST /v1/developer/api-keys</code>) and delivered
+            once, during the private beta. Quota is enforced per key, not per tenant: each key owns
+            its own monthly bucket, so a second key for the same tenant adds a bucket rather than
+            raising the first. Platrixa does not fake this: this page cannot create, rotate, or
+            revoke keys because end-user self-service is not enabled yet.
           </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Keys are provisioned by the operator in the backend configuration. Contact the operator
-            if you need a tenant key for the hosted gate.
+            Contact the operator for a tenant key. The raw key is shown exactly once; only its
+            SHA-256 hash is stored.
           </p>
         </CardContent>
       </Card>
@@ -312,14 +317,14 @@ function DocumentationSection() {
 
       <Card>
         <CardContent className="pt-6">
-          <h2 className="text-sm font-semibold">Async documents — same contract, later arrival</h2>
+          <h2 className="text-sm font-semibold">Async work — same contract, later arrival</h2>
           <p className="mt-1 mb-3 text-sm leading-relaxed text-muted-foreground">
             Async changes <em>when</em> the result arrives, never <em>what</em> it means:
           </p>
           <ol className="space-y-2 text-sm text-muted-foreground">
             {[
-              "POST /v1/documents → 202 with job_id + result_url (admitted ≠ VERIFIED; one quota unit)",
-              "GET /v1/jobs/{job_id} → poll; status stays PROCESSING while running",
+              "POST /v1/inference-jobs (text) or /v1/documents → 202 with job_id + result_url (admitted ≠ VERIFIED; one quota unit)",
+              "Jobs wait in the durable queue until an outbound worker claims them — status stays PROCESSING while queued or running",
               "Completion means the pipeline finished — the final status can be REVIEW_REQUIRED, UNSUPPORTED, or FAILED",
               "GET /v1/results/{result_id} → the same canonical 5D envelope as the synchronous path",
               "Jobs live in the durable PostgreSQL store — a server restart never erases a submitted job",
@@ -341,8 +346,9 @@ function DocumentationSection() {
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             Send <code className="font-mono text-xs">Idempotency-Key</code> (16–200 chars of{" "}
             <code className="font-mono text-xs">[A-Za-z0-9._~-]</code>) on{" "}
-            <code className="font-mono text-xs">/v1/process</code> or{" "}
-            <code className="font-mono text-xs">/v1/documents</code>: the same key with the same
+            <code className="font-mono text-xs">/v1/process</code>,{" "}
+            <code className="font-mono text-xs">/v1/documents</code> or{" "}
+            <code className="font-mono text-xs">/v1/inference-jobs</code>: the same key with the same
             request replays the original result (<code className="font-mono text-xs">Idempotent-Replayed: true</code>)
             without consuming extra quota; the same key with a different request is a deterministic
             409. Deterministic failures are stored and replayed; transient failures release the

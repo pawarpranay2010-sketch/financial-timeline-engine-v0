@@ -682,8 +682,10 @@ header is a deterministic 403 `API_KEY_MANAGEMENT_UNAUTHORIZED`.
   authenticating the moment the revocation commits.
 - `POST /v1/developer/api-keys/{key_id}/rotate` — atomic credential switch in one
   transaction: the old secret stops authenticating at commit, the new raw key is
-  returned once, monthly usage resets (a new credential starts a fresh bucket).
-  Revoked keys cannot rotate (`API_KEY_REVOKED`).
+  returned once, and the same quota row is reassigned to the new hash with
+  `monthly_limit`, `current_month_usage` and `usage_month` preserved — rotation
+  never grants a fresh monthly allowance. Revoked keys cannot rotate
+  (`API_KEY_REVOKED`).
 
 ### Model
 
