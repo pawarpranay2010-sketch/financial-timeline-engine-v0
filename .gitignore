@@ -36,3 +36,6 @@ tests/test_fmp_key_sources.py
 tests/test_fmp_live.py
 tests/validate_providers.py
 tests/diagnose_*.py
+
+# Platrixa management authentication secrets - never commit
+.platrixa_management_secrets
