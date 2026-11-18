@@ -1,0 +1,207 @@
+{
+  "capacity_estimate": {
+    "assumptions": [
+      "one worker process running continuously (24/7)",
+      "100 admitted jobs per developer per month",
+      "512-token generation cap",
+      "device job time is NOT measured here; it is the scenario variable",
+      "per-tenant pending bound of 10 (default) is not exercised at volume"
+    ],
+    "basis": "measured local API+queue+commit overhead plus a SCENARIO table over assumed on-device job durations",
+    "measured_non_model_overhead_ms": 67.93,
+    "measured_simulated_end_to_end_ms": 87.93,
+    "scenarios": [
+      {
+        "assumed_device_job_s": 5.0,
+        "developers_at_100_jobs_per_month": 5114.5,
+        "duty_cycle_for_100_devs_at_100_jobs": 0.02,
+        "jobs_per_minute": 11.84,
+        "jobs_per_month_full_duty": 511451.0
+      },
+      {
+        "assumed_device_job_s": 15.0,
+        "developers_at_100_jobs_per_month": 1720.2,
+        "duty_cycle_for_100_devs_at_100_jobs": 0.058,
+        "jobs_per_minute": 3.98,
+        "jobs_per_month_full_duty": 172021.0
+      },
+      {
+        "assumed_device_job_s": 30.0,
+        "developers_at_100_jobs_per_month": 862.0,
+        "duty_cycle_for_100_devs_at_100_jobs": 0.116,
+        "jobs_per_minute": 2.0,
+        "jobs_per_month_full_duty": 86205.0
+      },
+      {
+        "assumed_device_job_s": 45.0,
+        "developers_at_100_jobs_per_month": 575.1,
+        "duty_cycle_for_100_devs_at_100_jobs": 0.174,
+        "jobs_per_minute": 1.33,
+        "jobs_per_month_full_duty": 57513.0
+      },
+      {
+        "assumed_device_job_s": 90.0,
+        "developers_at_100_jobs_per_month": 287.8,
+        "duty_cycle_for_100_devs_at_100_jobs": 0.347,
+        "jobs_per_minute": 0.67,
+        "jobs_per_month_full_duty": 28778.0
+      }
+    ],
+    "warning": "No device inference was measured. The table is arithmetic over assumed job durations, not evidence of 100-developer support. Burst latency, the per-tenant queue bound of 10, thermal throttling and model size are not modeled. Measure on the phone before promising capacity."
+  },
+  "environment": {
+    "api": "uvicorn on http://127.0.0.1:56903",
+    "database": "embedded PostgreSQL (disposable)",
+    "model": "FakeModel loopback stub (llama.cpp-compatible, SIMULATED)",
+    "model_latency_ms": 20.0,
+    "model_quantization": "n/a (simulated)",
+    "platform": "Linux-6.1.102-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "worker": "scripts/platrixa_outbound_inference_worker.py (real code path)"
+  },
+  "generated_at": "2026-11-18T09:46:56Z",
+  "limitations": [
+    "The model is a loopback stub with configured latency; no GGUF weights were loaded.",
+    "Token throughput is simulated (tokens = configured, latency = configured).",
+    "API and PostgreSQL are local; Railway network latency and cold starts are not included.",
+    "No Android device, Termux, battery, or thermal behaviour was measured.",
+    "Scenario D simulates model unavailability only, not a database outage."
+  ],
+  "resources": {
+    "cpu_time_s": 1.747,
+    "max_rss_kb": 103960
+  },
+  "scenarios": {
+    "A_readiness": {
+      "latency": {
+        "count": 10,
+        "max_ms": 44.11,
+        "mean_ms": 39.8,
+        "median_ms": 43.98,
+        "min_ms": 3.24,
+        "p95_ms": 44.11,
+        "p99_ms": 44.11
+      }
+    },
+    "B_single_worker_single_tenant": {
+      "accepted": 20,
+      "elapsed_s": 1.759,
+      "jobs": 20,
+      "jobs_per_minute": 682.29,
+      "model_server": {
+        "busy_s": 0.403,
+        "requests": 20,
+        "simulated_tokens_per_second": 3200.0,
+        "tokens_per_request": 64
+      },
+      "stage_latency": {
+        "claim": {
+          "count": 20,
+          "max_ms": 13.36,
+          "mean_ms": 10.67,
+          "median_ms": 10.46,
+          "min_ms": 8.95,
+          "p95_ms": 13.11,
+          "p99_ms": 13.36
+        },
+        "commit": {
+          "count": 20,
+          "max_ms": 171.58,
+          "mean_ms": 25.01,
+          "median_ms": 17.13,
+          "min_ms": 14.74,
+          "p95_ms": 22.06,
+          "p99_ms": 171.58
+        },
+        "end_to_end": {
+          "count": 20,
+          "max_ms": 313.43,
+          "mean_ms": 87.93,
+          "median_ms": 75.17,
+          "min_ms": 68.6,
+          "p95_ms": 85.97,
+          "p99_ms": 313.43
+        },
+        "model": {
+          "count": 20,
+          "max_ms": 22.81,
+          "mean_ms": 22.33,
+          "median_ms": 22.26,
+          "min_ms": 21.95,
+          "p95_ms": 22.81,
+          "p99_ms": 22.81
+        },
+        "queue_wait": {
+          "count": 20,
+          "max_ms": 13.36,
+          "mean_ms": 10.67,
+          "median_ms": 10.46,
+          "min_ms": 8.95,
+          "p95_ms": 13.11,
+          "p99_ms": 13.36
+        },
+        "submit": {
+          "count": 20,
+          "max_ms": 92.73,
+          "mean_ms": 20.11,
+          "median_ms": 16.13,
+          "min_ms": 13.24,
+          "p95_ms": 21.79,
+          "p99_ms": 92.73
+        }
+      },
+      "terminal_statuses": {
+        "VERIFIED": 20
+      }
+    },
+    "C_empty_queue": {
+      "latency": {
+        "count": 5,
+        "max_ms": 22.71,
+        "mean_ms": 13.59,
+        "median_ms": 11.71,
+        "min_ms": 9.79,
+        "p95_ms": 22.71,
+        "p99_ms": 22.71
+      }
+    },
+    "D_model_unavailable_and_recovery": {
+      "claims_while_unready": 0,
+      "readiness_waits_while_unready": 2,
+      "recovered_status": "VERIFIED",
+      "time_to_complete_after_recovery_s": 0.328,
+      "unready_detected": true
+    },
+    "E_queue_saturation": {
+      "accepted": 2,
+      "rejected_code": "TENANT_QUEUE_FULL",
+      "rejected_status": 503,
+      "retryable": false
+    },
+    "F_two_concurrent_workers": {
+      "accepted_per_worker": {
+        "w1": 2,
+        "w2": 2
+      },
+      "completed_rows_in_db": 4,
+      "elapsed_s": 0.69,
+      "jobs": 4,
+      "terminal_statuses": {
+        "VERIFIED": 4
+      }
+    },
+    "G_restart_during_processing": {
+      "commit_accepted": true,
+      "final_status": "VERIFIED",
+      "first_owner_generation": 1,
+      "generation_advanced": true,
+      "recovery_s": 0.063,
+      "second_owner_generation": 2
+    },
+    "H_api_unreachable": {
+      "failure_kind": "TransportError",
+      "latency_s": 0.001
+    }
+  },
+  "simulated": true
+}

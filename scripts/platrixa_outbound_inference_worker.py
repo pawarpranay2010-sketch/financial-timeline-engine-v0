@@ -152,6 +152,35 @@ STATUS_RETRY_WAIT = "RETRY_WAIT"
 STATUS_FAILED = "FAILED"
 FAILURE_OUTCOMES = (STATUS_RETRY_WAIT, STATUS_FAILED)
 
+# ---------------------------------------------------------------------------
+# Worker-local lifecycle states (S3 observability).
+#
+# These describe THIS process, not the server's job states. Liveness (is the
+# process running?) is kept separate from readiness (can it serve right now?):
+# a worker waiting on the model is alive and healthy but NOT ready.
+# ---------------------------------------------------------------------------
+STATE_STARTING = "STARTING"
+STATE_WAITING_FOR_MODEL = "WAITING_FOR_MODEL"
+STATE_READY = "READY"
+STATE_PROCESSING = "PROCESSING"
+STATE_REPORTING = "REPORTING"
+STATE_BACKING_OFF = "BACKING_OFF"
+STATE_STOPPED = "STOPPED"
+STATE_FAILED = "FAILED"
+
+WORKER_STATES = (
+    STATE_STARTING,
+    STATE_WAITING_FOR_MODEL,
+    STATE_READY,
+    STATE_PROCESSING,
+    STATE_REPORTING,
+    STATE_BACKING_OFF,
+    STATE_STOPPED,
+    STATE_FAILED,
+)
+
+STATUS_FILE_ENV = "PLATRIXA_WORKER_STATUS_FILE"
+
 # Reportable failure codes. Every one of these already exists in the server's
 # ``PERMANENT_ERROR_CODES`` / ``RETRYABLE_ERROR_CODES`` vocabulary, so the
 # server's own ``classify_failure`` decides retryability — the worker never
@@ -217,6 +246,9 @@ UNKNOWN_PROVIDER_ALIASES = ("unknown", "provenance_unknown", "unset")
 
 DEFAULT_MODEL_ID = "default"
 DEFAULT_MODEL_TIMEOUT_S = 120.0
+# Readiness probes are cheap local GETs; they must not inherit a long inference
+# timeout, or an unresponsive server would stall the poll loop.
+DEFAULT_READINESS_TIMEOUT_S = 10.0
 MODEL_DIALECT_CHAT = "chat"
 MODEL_DIALECT_COMPLETION = "completion"
 MODEL_DIALECTS = (MODEL_DIALECT_CHAT, MODEL_DIALECT_COMPLETION)
@@ -648,6 +680,17 @@ def _generation(value: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _iso(timestamp: Optional[float]) -> Optional[str]:
+    """ISO-8601 UTC for a wall-clock timestamp, or None when unknown."""
+    if not timestamp:
+        return None
+    return (
+        datetime.datetime.fromtimestamp(float(timestamp), tz=datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
 def error_code_of(response: Any) -> str:
     """Extract ``error.code`` from a documented error envelope, else ""."""
     try:
@@ -730,6 +773,11 @@ class WorkerConfig:
     rate_limit_max_retries: int = 2
     rate_limit_max_wait_s: float = 60.0
     rate_limit_fallback_s: float = DEFAULT_RATE_LIMIT_FALLBACK_S
+    # Optional local status file (S3). When set, a secret-free JSON snapshot is
+    # atomically rewritten on every state change. No network listener is ever
+    # opened: this is the "equivalent local status mechanism" the worker's
+    # no-inbound-surface rule allows.
+    status_file: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -973,6 +1021,23 @@ class ClaimResult:
     job: Optional[ClaimedJob] = None
 
 
+@dataclass(frozen=True)
+class ModelReadiness:
+    """The result of ONE local model-readiness probe (S1).
+
+    ``configured`` is False in device-bridge mode, where the worker does not
+    own the model call and therefore cannot (and must not pretend to) probe it.
+    ``ready`` is the only thing the claim gate acts on; ``reason`` is a bounded,
+    secret-free diagnostic for the operator and for the health snapshot (S3).
+    """
+
+    configured: bool
+    ready: bool
+    reason: str
+    model_ids: Tuple[str, ...] = ()
+    checked_at: float = 0.0
+
+
 class SubmitOutcome(dict):
     """What the result endpoint actually did with a candidate (Stage 2 O2).
 
@@ -1021,6 +1086,7 @@ RUN_REPORT_KEYS: Tuple[str, ...] = (
     "lease_lost",       # fenced out / lapsed before committing
     "bridge_failures",  # bridge unreachable or response refused (never submitted)
     "unknown",          # submission response unusable or transport-ambiguous
+    "readiness_waits",  # polls skipped because the local model was not ready
     "failures_reported",       # failures the server acknowledged (RETRY_WAIT/FAILED)
     "failure_report_failures", # failure reports the server/store did not accept
 )
@@ -1044,10 +1110,16 @@ def format_run_report(report: Dict[str, int]) -> str:
     lease_lost = int(report.get("lease_lost", 0))
     bridge = int(report.get("bridge_failures", 0))
     unknown = int(report.get("unknown", 0))
+    readiness_waits = int(report.get("readiness_waits", 0))
     reported = int(report.get("failures_reported", 0))
     report_failed = int(report.get("failure_report_failures", 0))
 
-    if claims == 0:
+    if claims == 0 and readiness_waits > 0:
+        outcome = (
+            f"model not ready — {readiness_waits} readiness wait(s); "
+            "no job was claimed"
+        )
+    elif claims == 0:
         outcome = "no claim was attempted (poll budget 0, or a stop was already requested)"
     elif claimed == 0 and failures == claims:
         outcome = (
@@ -1069,6 +1141,7 @@ def format_run_report(report: Dict[str, int]) -> str:
         f"claims={claims} claim-failures={failures} no-work={no_work} claimed={claimed} "
         f"accepted={accepted} replayed={replayed} rejected={rejected} "
         f"lease-lost={lease_lost} bridge-failures={bridge} unknown={unknown} "
+        f"readiness-waits={readiness_waits} "
         f"failures-reported={reported} failure-report-failures={report_failed} "
         f"— outcome: {outcome}"
     )
@@ -1238,6 +1311,19 @@ class OutboundInferenceWorker:
         # Claim-stage diagnostics: distinguishes an idle queue from a run that
         # never got a claim answer at all (see ``format_run_report``).
         self._last_run_report: Dict[str, int] = {key: 0 for key in RUN_REPORT_KEYS}
+        # S1/S3: the most recent readiness probe (None until the first probe).
+        self._last_readiness: Optional[ModelReadiness] = None
+        # S3: observable lifecycle. Wall-clock timestamps are for humans and for
+        # the status file; lease timing still uses the injected monotonic clock.
+        self._state: str = STATE_STARTING
+        self._state_since: float = time.time()
+        self._started_at: float = time.time()
+        self._liveness_at: float = self._started_at
+        self._last_claim_at: Optional[float] = None
+        self._last_claim_job_id: Optional[str] = None
+        self._last_completed_job_id: Optional[str] = None
+        self._last_completed_at: Optional[float] = None
+        self._last_failure_category: Optional[str] = None
 
     # -- introspection ----------------------------------------------------
 
@@ -1268,6 +1354,99 @@ class OutboundInferenceWorker:
         claims failed, and what happened to the jobs it did claim.
         """
         return dict(self._last_run_report)
+
+    @property
+    def last_readiness(self) -> Optional[ModelReadiness]:
+        """The most recent local-model readiness probe, or None before the first."""
+        return self._last_readiness
+
+    @property
+    def state(self) -> str:
+        """The worker-local lifecycle state (one of :data:`WORKER_STATES`)."""
+        return self._state
+
+    # -- observability (S3) ------------------------------------------------
+
+    def set_state(self, state: str, *, detail: str = "") -> None:
+        """Record a lifecycle transition, log it, and refresh the status file.
+
+        Logging only on a CHANGE keeps the log readable; the status file is
+        refreshed on every call so a reader sees the latest counters.
+        """
+        if state not in WORKER_STATES:
+            raise ValueError(f"unknown worker state: {state!r}")
+        changed = state != self._state
+        self._state = state
+        if changed:
+            self._state_since = time.time()
+            if detail:
+                logger.info("worker state → %s (%s)", state, detail)
+            else:
+                logger.info("worker state → %s", state)
+        self._write_status_file()
+
+    def _touch_liveness(self) -> None:
+        self._liveness_at = time.time()
+
+    def health_snapshot(self) -> Dict[str, Any]:
+        """A secret-free, operator-facing view of this worker (S3).
+
+        Contains NO tenant key, NO model key, NO authorization header, and NO
+        transaction text: the model ids and bounded reason strings are the only
+        free-form values. ``liveness`` says whether the process is running;
+        ``readiness`` says whether it can serve a job right now — a worker
+        blocked on a cold model is live but not ready.
+        """
+        now = time.time()
+        readiness = self._last_readiness
+        return {
+            "worker_id": self._worker_id,
+            "model_id": self._model_id,
+            "model_endpoint": self._model_base_url,
+            "state": self._state,
+            "state_since": _iso(self._state_since),
+            "started_at": _iso(self._started_at),
+            "uptime_seconds": round(max(0.0, now - self._started_at), 1),
+            "liveness": {
+                "alive": not self._stop_event.is_set(),
+                "last_heartbeat_at": _iso(self._liveness_at),
+            },
+            "readiness": {
+                "probe_configured": bool(readiness.configured) if readiness else False,
+                "ready": bool(readiness.ready) if readiness else False,
+                "reason": readiness.reason if readiness else "not probed yet",
+                "model_ids": list(readiness.model_ids) if readiness else [],
+                "checked_at": _iso(readiness.checked_at) if readiness and readiness.checked_at else None,
+            },
+            "last_claim_at": _iso(self._last_claim_at),
+            "last_claim_job_id": self._last_claim_job_id,
+            "last_completed_job_id": self._last_completed_job_id,
+            "last_completed_at": _iso(self._last_completed_at),
+            "last_failure_category": self._last_failure_category,
+            "counters": dict(self._last_run_report),
+        }
+
+    def _write_status_file(self) -> None:
+        """Atomically replace the status file, if one is configured.
+
+        Written to a sibling temp file and renamed, so a reader never sees a
+        half-written snapshot. A write failure is logged once and never affects
+        job processing: observability must not take the worker down.
+        """
+        path = (self._config.status_file or "").strip()
+        if not path:
+            return
+        try:
+            directory = os.path.dirname(path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            payload = json.dumps(self.health_snapshot(), indent=2, sort_keys=True)
+            tmp_path = f"{path}.tmp.{os.getpid()}"
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                handle.write(payload + "\n")
+            os.replace(tmp_path, path)
+        except OSError as exc:  # pragma: no cover - filesystem failure path
+            logger.warning("status file write failed (non-fatal): %s", exc)
 
     # -- secret hygiene ---------------------------------------------------
 
@@ -1362,9 +1541,8 @@ class OutboundInferenceWorker:
 
         url = f"{self._model_base_url}{MODEL_LIST_PATH}"
         try:
-            response = self._post(
+            response = self._get(
                 url,
-                None,
                 headers=self._model_headers(),
                 timeout=min(30.0, float(self._model_timeout_s)),
                 session=self._model_session,
@@ -1493,6 +1671,161 @@ class OutboundInferenceWorker:
             return client.post(url, json=payload, headers=headers, timeout=timeout)
         except requests.RequestException as exc:
             raise TransportError(self._redact(f"POST {url} failed: {exc}")) from exc
+
+    def _get(
+        self,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        timeout: float,
+        session: Optional[Any] = None,
+    ) -> Any:
+        """GET a read-only endpoint (model discovery / readiness).
+
+        Discovery-style probes are GETs by contract. Sending a POST instead —
+        the pre-S1 behaviour — asks a llama.cpp server to interpret a body it
+        never received, so a healthy endpoint can look broken. This helper
+        keeps the probe on the documented verb.
+        """
+        client = session if session is not None else self._session
+        try:
+            return client.get(url, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            raise TransportError(self._redact(f"GET {url} failed: {exc}")) from exc
+
+    # -- readiness gate ---------------------------------------------------
+
+    def model_ready(self) -> ModelReadiness:
+        """Probe whether the local model can serve a job RIGHT NOW (S1).
+
+        The worker calls its own device's llama.cpp-compatible server, whose
+        documented discovery contract is ``GET /v1/models``. A job is claimed
+        only when that probe succeeds, advertises a model id, and includes the
+        configured id (or resolves a single id when ``--model-id auto`` is in
+        effect).
+
+        Fail-closed cases (all read as NOT ready, and none of them claim):
+        unreachable endpoint, timeout, non-200 status, invalid JSON, an empty
+        model list, an ambiguous list under ``auto``, and a configured id the
+        server does not advertise.
+
+        Device-bridge mode is deliberately reported as ``configured=False,``
+        ``ready=True``: the bridge process owns its model lifecycle and there is
+        no documented bridge health route to probe, so inventing one would be a
+        false claim. Existing bridge behaviour is therefore unchanged.
+
+        Every call performs a FRESH probe (no caching), so a model that goes
+        down between polls is noticed before the next claim rather than
+        discovered by burning a claimed job.
+        """
+        if self._model_base_url is None:
+            return self._record_readiness(
+                configured=False,
+                ready=True,
+                reason="device-bridge mode: the bridge owns model readiness",
+            )
+
+        url = f"{self._model_base_url}{MODEL_LIST_PATH}"
+        try:
+            response = self._get(
+                url,
+                headers=self._model_headers(),
+                timeout=min(DEFAULT_READINESS_TIMEOUT_S, float(self._model_timeout_s)),
+                session=self._model_session,
+            )
+        except TransportError:
+            return self._record_readiness(
+                configured=True,
+                ready=False,
+                reason="model endpoint unreachable",
+            )
+
+        status = int(getattr(response, "status_code", 0) or 0)
+        if status != 200:
+            return self._record_readiness(
+                configured=True,
+                ready=False,
+                reason=f"model endpoint returned HTTP {status}",
+            )
+        try:
+            body = response.json()
+        except Exception:
+            return self._record_readiness(
+                configured=True,
+                ready=False,
+                reason=f"GET {MODEL_LIST_PATH} is not valid JSON",
+            )
+
+        ids = self._advertised_model_ids(body)
+        if not ids:
+            return self._record_readiness(
+                configured=True,
+                ready=False,
+                reason=f"GET {MODEL_LIST_PATH} advertised no model id",
+            )
+        if self._model_id == MODEL_ID_AUTO:
+            if len(ids) > 1:
+                return self._record_readiness(
+                    configured=True,
+                    ready=False,
+                    reason=f"model discovery is ambiguous ({len(ids)} ids)",
+                    model_ids=tuple(ids),
+                )
+            self._model_id = ids[0]
+        elif self._model_id not in ids:
+            return self._record_readiness(
+                configured=True,
+                ready=False,
+                reason=(
+                    f"configured model id {self._model_id!r} is not advertised "
+                    "by the model endpoint"
+                ),
+                model_ids=tuple(ids),
+            )
+        return self._record_readiness(
+            configured=True,
+            ready=True,
+            reason="model ready",
+            model_ids=tuple(ids),
+        )
+
+    @staticmethod
+    def _advertised_model_ids(body: Any) -> List[str]:
+        """The bounded model ids in a ``GET /v1/models`` body.
+
+        Anything malformed is simply not an id: a readiness probe must never
+        invent one from a partial response.
+        """
+        ids: List[str] = []
+        if isinstance(body, dict) and isinstance(body.get("data"), list):
+            for item in body["data"]:
+                if not isinstance(item, dict):
+                    continue
+                candidate = item.get("id")
+                if not isinstance(candidate, str):
+                    continue
+                trimmed = candidate.strip()
+                if trimmed and BOUNDED_IDENTIFIER_RE.match(trimmed):
+                    ids.append(trimmed)
+        return sorted(set(ids))
+
+    def _record_readiness(
+        self,
+        *,
+        configured: bool,
+        ready: bool,
+        reason: str,
+        model_ids: Tuple[str, ...] = (),
+    ) -> ModelReadiness:
+        readiness = ModelReadiness(
+            configured=bool(configured),
+            ready=bool(ready),
+            reason=reason,
+            model_ids=tuple(model_ids),
+            checked_at=time.time(),
+        )
+        self._last_readiness = readiness
+        return readiness
 
     def _api_post(self, url: str, payload: Optional[Dict[str, Any]]) -> Any:
         return self._post(
@@ -2195,6 +2528,9 @@ class OutboundInferenceWorker:
         self._active_lease = job.state
         try:
             bridge_body = self.call_bridge(job.raw_input)
+            # S3: the model phase is over; the submission phase is observable on
+            # its own so "slow model" and "slow API" are distinguishable.
+            self.set_state(STATE_REPORTING, detail=f"job {job.job_id}")
             return self.submit_result(job, bridge_body)
         finally:
             self._active_lease = None
@@ -2222,9 +2558,39 @@ class OutboundInferenceWorker:
         # reports exactly how far the run got. Mutated in place.
         report = self._last_run_report = {key: 0 for key in RUN_REPORT_KEYS}
         backoff = float(self._config.poll_interval_s)
+        self._started_at = time.time()
+        self.set_state(STATE_STARTING)
         while not self._stop_event.is_set():
             if max_polls is not None and polls >= max_polls:
                 break
+            self._touch_liveness()
+            # S1 readiness gate: NEVER claim while the local model cannot serve.
+            # Checking before the claim is what keeps an offline model from
+            # burning a job's retry budget: no claim, so no attempt is spent
+            # server-side. The probe is fresh on every iteration, so a model
+            # that recovered is picked up on the next poll.
+            if self._model_base_url is not None:
+                readiness = self.model_ready()
+                if not readiness.ready:
+                    report["readiness_waits"] += 1
+                    self.set_state(
+                        STATE_WAITING_FOR_MODEL,
+                        detail=f"{readiness.reason} (wait {report['readiness_waits']})",
+                    )
+                    logger.warning(
+                        "model not ready (%s); no job claimed (wait %d)",
+                        readiness.reason, report["readiness_waits"],
+                    )
+                    # A bounded run (--once / --max-polls) must terminate even
+                    # when the model never becomes ready; a continuous run keeps
+                    # waiting, which is what a supervised service wants.
+                    if max_polls is not None and report["readiness_waits"] >= max_polls:
+                        break
+                    # Stay in WAITING_FOR_MODEL while sleeping: a model wait is
+                    # not the same condition as queue/claim backoff.
+                    self._sleep(float(self._config.poll_interval_s))
+                    continue
+            self.set_state(STATE_READY)
             polls += 1
             report["claims"] += 1
             try:
@@ -2238,14 +2604,20 @@ class OutboundInferenceWorker:
                 # unchanged: a fatal error still leaves the loop immediately.
                 report["claim_failures"] += 1
                 if not exc.retryable:
+                    # S3: a fatal rejection is terminal and must be observable
+                    # both in the status file and in the log.
+                    self._last_failure_category = exc.code
+                    self.set_state(STATE_FAILED, detail=f"fatal claim error: {exc.code}")
                     raise
                 logger.warning("claim attempt %d failed (retryable): %s", report["claims"], exc)
+                self.set_state(STATE_BACKING_OFF, detail="claim retry")
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
             except TransportError as exc:
                 report["claim_failures"] += 1
                 logger.warning("claim attempt %d transport failure: %s", report["claims"], exc)
+                self.set_state(STATE_BACKING_OFF, detail="claim transport failure")
                 self._sleep(backoff)
                 backoff = min(backoff * 2, float(self._config.max_backoff_s))
                 continue
@@ -2260,17 +2632,24 @@ class OutboundInferenceWorker:
                     "claim %d: NO_WORK (no runnable job for this tenant); next poll in %.2fs",
                     report["claims"], claim.retry_after_seconds,
                 )
+                self.set_state(STATE_BACKING_OFF, detail="idle queue")
                 self._sleep(claim.retry_after_seconds)
                 continue
 
             job = claim.job
             report["claimed"] += 1
+            # S3: claim and completion are recorded separately so an operator can
+            # tell "claimed but never finished" from "just finished".
+            self._last_claim_at = time.time()
+            self._last_claim_job_id = job.job_id
+            self.set_state(STATE_PROCESSING, detail=f"job {job.job_id}")
             try:
                 envelope = self.process_job(job)
             except LeaseLost as exc:
                 # Expected under contention: the job will be reclaimed by
                 # whoever holds the lease now. Nothing was committed here.
                 report["lease_lost"] += 1
+                self._last_failure_category = "LEASE_LOST"
                 logger.info("job %s: lease lost, discarding candidate (%s)", job.job_id, exc)
                 continue
             except (BridgeUnavailableError, BridgeResponseError) as exc:
@@ -2281,6 +2660,7 @@ class OutboundInferenceWorker:
                 # RETRY_WAIT (budget left) or FAILED instead of leaving it in
                 # PROCESSING until the lease lapses.
                 report["bridge_failures"] += 1
+                self._last_failure_category = classify_processing_failure(exc)[0]
                 self._report_processing_failure(job, exc, report)
                 continue
             except ApiError as exc:
@@ -2292,6 +2672,7 @@ class OutboundInferenceWorker:
                 # is not established: that is ambiguous (unknown), never a
                 # terminal rejection. Neither is a reason to stop serving; only the
                 # CLAIM stage treats a non-retryable ApiError as fatal.
+                self._last_failure_category = exc.code
                 if exc.retryable:
                     report["unknown"] += 1
                     logger.warning(
@@ -2310,6 +2691,7 @@ class OutboundInferenceWorker:
                 # job is COMPLETED and any later observation replays it; if it
                 # did not, the lease expires and the job is reclaimed. Nothing
                 # is inferred from the silence.
+                self._last_failure_category = "TRANSPORT_ERROR"
                 logger.warning(
                     "job %s: submission outcome UNKNOWN (transport failure); "
                     "not counted as accepted (%s)", job.job_id, exc,
@@ -2321,6 +2703,7 @@ class OutboundInferenceWorker:
                 # marker) is not evidence of acceptance either. The candidate is
                 # never resubmitted at this generation.
                 report["unknown"] += 1
+                self._last_failure_category = "MALFORMED_RESPONSE"
                 logger.warning(
                     "job %s: submission response unusable; outcome not claimed (%s)",
                     job.job_id, exc,
@@ -2339,6 +2722,8 @@ class OutboundInferenceWorker:
             else:
                 completed += 1
                 report["accepted"] += 1
+                self._last_completed_job_id = job.job_id
+                self._last_completed_at = time.time()
                 self._last_run_stats = {"accepted": completed, "replayed": replayed}
                 logger.info("job %s: result ACCEPTED (fresh fenced commit)", job.job_id)
             # Record the confirmed submission outcome BEFORE invoking the callback:
@@ -2348,6 +2733,7 @@ class OutboundInferenceWorker:
             if on_result is not None:
                 on_result(job, envelope)
         self._last_run_stats = {"accepted": completed, "replayed": replayed}
+        self.set_state(STATE_STOPPED)
         return completed
 
     def stop(self) -> None:
@@ -2355,9 +2741,10 @@ class OutboundInferenceWorker:
 
         This is the ONLY place the worker-wide shutdown signal is set, so it
         always means "the operator wants this worker to stop" and never "a job
-        finished".
+        finished". The state transition makes the shutdown observable (S3).
         """
         self._stop_event.set()
+        self.set_state(STATE_STOPPED, detail="stop requested")
 
     # -- helpers ----------------------------------------------------------
 
@@ -2432,6 +2819,9 @@ def build_config(args: argparse.Namespace) -> WorkerConfig:
         model_provider=args.model_provider or os.environ.get(MODEL_PROVIDER_ENV, "") or None,
         rate_limit_max_retries=rate_limit_max_retries,
         rate_limit_max_wait_s=rate_limit_max_wait_s,
+        # getattr: build_config is also used by tests/harnesses that construct a
+        # Namespace before the S3 flag existed.
+        status_file=getattr(args, "status_file", None) or os.environ.get(STATUS_FILE_ENV, "") or None,
     )
 
 
@@ -2506,6 +2896,11 @@ def main(argv: Optional[list] = None) -> int:
                              f"env {RATE_LIMIT_MAX_WAIT_ENV} (default 60)")
     parser.add_argument("--once", action="store_true", help="claim and process at most one job, then exit")
     parser.add_argument("--max-polls", type=int, default=None, help="stop after this many claim attempts")
+    parser.add_argument("--status-file", default=None,
+                        help="write a secret-free JSON health snapshot here after every state change; "
+                             f"env {STATUS_FILE_ENV}")
+    parser.add_argument("--print-status", action="store_true",
+                        help="print the JSON at --status-file and exit (no network, no worker)")
     parser.add_argument("--verbose", action="store_true", help="log at INFO")
     args = parser.parse_args(argv)
 
@@ -2513,6 +2908,26 @@ def main(argv: Optional[list] = None) -> int:
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # S3: local status reader. Deliberately BEFORE config validation: an operator
+    # asking "what is this worker doing?" must not need a key or a reachable API.
+    if args.print_status:
+        status_path = args.status_file or os.environ.get(STATUS_FILE_ENV, "")
+        if not status_path:
+            print(
+                "worker configuration error: --print-status requires --status-file "
+                f"or {STATUS_FILE_ENV}",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            with open(status_path, "r", encoding="utf-8") as handle:
+                snapshot = json.load(handle)
+        except (OSError, ValueError) as exc:
+            print(f"worker status unavailable: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(snapshot, indent=2, sort_keys=True))
+        return 0
 
     try:
         config = build_config(args)

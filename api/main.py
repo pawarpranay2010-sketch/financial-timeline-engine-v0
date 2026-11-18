@@ -42,6 +42,13 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # Phase 1B: pending-queue limits are validated at STARTUP. An invalid,
+    # negative, or zero limit raises here instead of silently disabling
+    # protection for the whole deployment (the pre-correction behaviour).
+    from backend.auth import queue_capacity
+
+    queue_capacity.validate_config()
+
     app = FastAPI(
         title="Platrixa API",
         version=__version__,

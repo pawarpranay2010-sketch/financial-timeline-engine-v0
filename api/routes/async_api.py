@@ -72,6 +72,7 @@ from api.routes.developer import (
 from backend.auth import async_jobs
 from backend.auth import gate as metered_gate
 from backend.auth import idempotency as idempotency_store
+from backend.auth import queue_capacity
 
 # Phase 5I: the ONE authoritative admission path (audit C1). Reservation
 # is owned by the admission boundary, never by a per-route call.
@@ -1225,6 +1226,13 @@ async def create_document_job(request: Request) -> JSONResponse:
     # (audit: request-history finding M3).
     try:
         record = async_jobs.create_job(tenant, stored_payload, request_id=rid or None)
+    except queue_capacity.QueueCapacityExceeded as exc:
+        # Pending queue full — the admission transaction rolled back, so no job
+        # row and no reservation exist. Release the idempotency claim so the
+        # client may retry the same key once capacity frees up.
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        return _async_not_ready(exc.code, rid, "pending queue capacity exhausted; retry later")
     except async_jobs.AsyncStoreUnavailableError:
         if idem_key:
             idempotency_store.release(idem_key, tenant)

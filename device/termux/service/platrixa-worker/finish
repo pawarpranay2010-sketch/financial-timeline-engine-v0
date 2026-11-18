@@ -1,0 +1,43 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Platrixa — runit `finish` script for the Termux worker (S2).
+#
+# Installed to: $PREFIX/var/service/platrixa-worker/finish
+#
+# runit calls this after the run script exits, with the exit status as $1 and
+# the signal as $2. It does two jobs:
+#
+#   * BOUNDED RESTART: a clean stop (0) or Ctrl-C (130) restarts immediately;
+#     a configuration error (78) waits longer; anything else waits a short
+#     backoff. A fast-crashing worker therefore cannot become a hot loop.
+#   * LOG ROTATION: keeps worker.log from growing without bound.
+
+set -u
+
+HOME_DIR="${HOME:?HOME must be set}"
+LOG_DIR="${PLATRIXA_LOG_DIR:-$HOME_DIR/.platrixa/logs}"
+LOG_FILE="$LOG_DIR/worker.log"
+MAX_BYTES="${PLATRIXA_LOG_MAX_BYTES:-5242880}"
+
+code="${1:-0}"
+
+if [ -f "$LOG_FILE" ]; then
+    size="$(wc -c < "$LOG_FILE" | tr -d ' ')"
+    if [ -n "$size" ] && [ "$size" -gt "$MAX_BYTES" ]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
+    fi
+fi
+
+case "$code" in
+    0|130)
+        # Deliberate stop or clean exit: restart promptly.
+        ;;
+    78)
+        # Bad configuration: do not hammer; give the operator time to fix it.
+        sleep "${PLATRIXA_CONFIG_BACKOFF_S:-60}"
+        ;;
+    *)
+        sleep "${PLATRIXA_RESTART_BACKOFF_S:-10}"
+        ;;
+esac
+
+exit 0
