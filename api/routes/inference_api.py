@@ -83,6 +83,7 @@ from api.schemas import DeveloperJobAcceptedResponse, KernelProcessRequest
 from backend.auth import admission as admission_boundary
 from backend.auth import async_jobs
 from backend.auth import idempotency as idempotency_store
+from backend.auth import queue_capacity
 
 # NOTE: `backend.model_provider.local_bridge` (and therefore
 # `backend.model_provider.remote_hf`, `requests`, …) is imported INSIDE the
@@ -257,6 +258,11 @@ async def create_inference_job(request: Request) -> JSONResponse:
             "this deployment has no durable async store configured; use POST /v1/process",
         )
 
+    # NOTE: pending-queue capacity is enforced ATOMICALLY inside
+    # async_jobs.create_job (advisory lock + durable count + INSERT in one
+    # transaction). A pre-flight check here could only race the insert and
+    # would under-count jobs still waiting for a worker.
+
     # ---- parse + validate with the canonical request schema ---------------
     # KernelProcessRequest is the SAME schema POST /v1/process uses, so the
     # raw-input length constraints (1..2000) cannot drift between the two.
@@ -369,6 +375,15 @@ async def create_inference_job(request: Request) -> JSONResponse:
             request_id=rid or None,
             kind=async_jobs.JOB_KIND_INFERENCE,
         )
+    except queue_capacity.QueueCapacityExceeded as exc:
+        # Queue full: the admission transaction rolled back, so no job row and
+        # no capacity reservation exist. Release the idempotency claim so the
+        # client can retry the same key once capacity frees up.
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        _log("/v1/inference-jobs", request_id=rid, status=None,
+             duration_ms=int((time.perf_counter() - started) * 1000), error=exc.code)
+        return _async_not_ready(exc.code, rid, "pending queue capacity exhausted; retry later")
     except async_jobs.AsyncStoreUnavailableError:
         if idem_key:
             idempotency_store.release(idem_key, tenant)

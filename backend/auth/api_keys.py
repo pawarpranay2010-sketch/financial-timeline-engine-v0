@@ -278,13 +278,19 @@ def _ensure_schema(engine) -> None:
     from pathlib import Path
     from sqlalchemy import text
 
-    ddl_path = (
-        Path(__file__).resolve().parent.parent
-        / "database"
-        / "platrixa_api_keys_schema.sql"
-    )
+    # The registry DDL alone is NOT enough: create_api_key inserts into the
+    # companion quota table in the same transaction, and that table was
+    # previously created only lazily at the first METERED request. On a fresh
+    # database the first key creation therefore failed with
+    # UndefinedTable: relation "platrixa_tenant_quotas" does not exist.
+    # Both idempotent files are applied here, quota first.
+    ddl_dir = Path(__file__).resolve().parent.parent / "database"
     with engine.begin() as conn:
-        conn.execute(text(ddl_path.read_text(encoding="utf-8")))
+        for ddl_name in (
+            "platrixa_tenant_quota_schema.sql",
+            "platrixa_api_keys_schema.sql",
+        ):
+            conn.execute(text((ddl_dir / ddl_name).read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------

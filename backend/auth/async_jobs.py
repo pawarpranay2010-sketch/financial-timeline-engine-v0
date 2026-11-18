@@ -51,6 +51,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from backend.auth import queue_capacity
+
 logger = logging.getLogger("platrixa.api")
 
 # ---------------------------------------------------------------------------
@@ -526,6 +528,30 @@ JOB_KIND_DOCUMENT = "document"
 JOB_KIND_INFERENCE = "inference"
 JOB_KINDS = (JOB_KIND_DOCUMENT, JOB_KIND_INFERENCE)
 
+# Durable pending-capacity migration (Phase 1B correction).
+#
+#   capacity_held — TRUE from INSERT until the job reaches a TERMINAL state.
+#                   Pending capacity is DERIVED from this column
+#                   (SELECT count(*) ... WHERE capacity_held = TRUE), so the
+#                   job table stays the single source of truth: there is no
+#                   second counter to drift, and a process restart cannot
+#                   lose accounting.
+#
+# The backfill is required for stores created before this column existed:
+# ADD COLUMN ... DEFAULT TRUE marks EVERY historical row as holding capacity,
+# including COMPLETED/FAILED rows, which would permanently shrink the queue.
+# The UPDATE is idempotent and converges an upgraded store to the same shape
+# a fresh install has.
+
+_MIGRATION_QUEUE_CAPACITY = [
+    "ALTER TABLE platrixa_async_jobs ADD COLUMN IF NOT EXISTS "
+    "capacity_held BOOLEAN NOT NULL DEFAULT TRUE",
+    "UPDATE platrixa_async_jobs SET capacity_held = FALSE "
+    "WHERE capacity_held = TRUE AND status IN ('COMPLETED', 'FAILED')",
+    "CREATE INDEX IF NOT EXISTS idx_async_jobs_capacity_held ON "
+    "platrixa_async_jobs (capacity_held, tenant_id) WHERE capacity_held",
+]
+
 def async_configured() -> bool:
     """Async documents require the durable store (the metering store)."""
     from backend.auth.gate import METERING_ENV_VAR
@@ -568,6 +594,8 @@ def _session_factory():
                 for stmt in _MIGRATION_5K:
                     conn.execute(text(stmt))
                 for stmt in _MIGRATION_INFERENCE:
+                    conn.execute(text(stmt))
+                for stmt in _MIGRATION_QUEUE_CAPACITY:
                     conn.execute(text(stmt))
                 _ensure_result_uniqueness(conn)
         except Exception as exc:
@@ -1012,15 +1040,23 @@ def create_job(
     # proxy) owns the row; every other caller is a developer/legacy client.
     owner_visitor = visitor_id if visitor_id is not None else current_visitor_scope()
     owner_type = "website_visitor" if owner_visitor else "developer_client"
+    # ---- ATOMIC ADMISSION + PERSIST (Phase 1B durable capacity) -----------
+    # One transaction: take the cluster-wide advisory admission lock, count
+    # durable pending capacity, and insert the QUEUED job with its slot held.
+    # Either both the reservation and the row commit, or neither does — so a
+    # rejected admission leaves no orphaned job and no held capacity, and two
+    # concurrent admissions cannot both consume the same remaining slot.
     try:
         SessionLocal = _session_factory()
         with SessionLocal() as session:
             with session.begin():
+                queue_capacity.acquire_admission_lock(session)
+                queue_capacity.check_admission(session, tenant_id)
                 session.execute(
                     text(
                         "INSERT INTO platrixa_async_jobs "
-                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at, visitor_id, owner_type) "
-                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now(), :v, :o)"
+                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at, visitor_id, owner_type, capacity_held) "
+                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now(), :v, :o, TRUE)"
                     ),
                     {
                         "j": job_id,
@@ -1034,6 +1070,11 @@ def create_job(
                         "o": owner_type,
                     },
                 )
+    except queue_capacity.QueueCapacityExceeded:
+        # A capacity rejection is a first-class admission outcome, not a store
+        # failure: propagate it unchanged so the route can answer 503 with the
+        # precise QUEUE_FULL code.
+        raise
     except AsyncStoreUnavailableError:
         raise
     except Exception as exc:
@@ -1267,6 +1308,9 @@ def claim_next_job(
                 ).mappings().fetchall()
                 if not rows:
                     return None
+                # No capacity bookkeeping here: the pending slot is held on the
+                # job row itself from INSERT until a TERMINAL state, so a claim
+                # (QUEUED -> PROCESSING) neither adds nor releases capacity.
                 return _row_to_record(rows[0])
     except AsyncStoreUnavailableError:
         raise
@@ -1346,6 +1390,7 @@ def complete_job(
                         "UPDATE platrixa_async_jobs SET status = 'COMPLETED', "
                         "result_json = :res, http_status = :st, request_id = :rid, "
                         "lease_expires_at = NULL, lease_owner = NULL, "
+                        "capacity_held = FALSE, "
                         "next_attempt_at = NULL, updated_at = now() "
                         "WHERE job_id = :j AND status = 'PROCESSING' "
                         "  AND lease_owner = :owner AND lease_generation = :gen "
@@ -1362,6 +1407,10 @@ def complete_job(
                         "async job complete REJECTED (fenced out or lease expired) job=%s",
                         job_id[:14],
                     )
+                # Capacity was released by the same UPDATE that made the job
+                # terminal (capacity_held = FALSE). It is NOT released from a
+                # worker identifier: lease_owner is a WORKER id, not a tenant
+                # id, and the row itself carries the authoritative ownership.
                 return accepted
     except AsyncStoreUnavailableError:
         raise
@@ -1474,6 +1523,8 @@ def fail_job(
                         "UPDATE platrixa_async_jobs SET "
                         "status = CASE WHEN :rt AND attempt_count < max_attempts "
                         "             THEN 'RETRY_WAIT' ELSE 'FAILED' END, "
+                        "capacity_held = CASE WHEN :rt AND attempt_count < max_attempts "
+                        "             THEN capacity_held ELSE FALSE END, "
                         "error_json = :res, http_status = :st, retryable = :rt, "
                         "next_attempt_at = CASE WHEN :rt AND attempt_count < max_attempts "
                         "             THEN now() + make_interval(secs => :delay) "
@@ -1555,6 +1606,7 @@ def fail_exhausted_leases(*, tenant_id: str, kind: str) -> int:
                         "UPDATE platrixa_async_jobs SET "
                         "status = 'FAILED', error_json = :res, http_status = 400, "
                         "retryable = false, next_attempt_at = NULL, "
+                        "capacity_held = FALSE, "
                         "lease_expires_at = NULL, lease_owner = NULL, updated_at = now() "
                         "WHERE tenant_id = :t AND kind = :k AND status = 'PROCESSING' "
                         "  AND attempt_count >= max_attempts "

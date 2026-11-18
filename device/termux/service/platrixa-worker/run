@@ -1,0 +1,183 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Platrixa — runit run script for the Termux outbound inference worker (S2).
+#
+# Installed to: $PREFIX/var/service/platrixa-worker/run
+#
+# Responsibilities, in order:
+#   1. prevent a DUPLICATE worker (an flock held for the life of the process);
+#   2. load the operator's env file and the protected key file;
+#   3. refuse to start on missing/insecure configuration (exit 78);
+#   4. WAIT, bounded, for the phone's local model endpoint to answer;
+#   5. hand over to the worker with `exec`, so runit supervises the worker
+#      itself (one PID, no wrapper parent left behind).
+#
+# It never prints a secret: the API key is read by the worker from the key
+# FILE, and only paths/ids/model names appear in logs.
+
+set -eu
+
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+HOME_DIR="${HOME:?HOME must be set}"
+
+ENV_FILE="${PLATRIXA_WORKER_ENV_FILE:-$HOME_DIR/.platrixa/worker.env}"
+KEY_FILE="${PLATRIXA_WORKER_KEY_FILE:-$HOME_DIR/.platrixa/worker.key}"
+REPO_DIR="${PLATRIXA_REPO_DIR:-$HOME_DIR/platrixa}"
+PYTHON="${PLATRIXA_PYTHON:-$PREFIX/bin/python}"
+LOG_DIR="${PLATRIXA_LOG_DIR:-$HOME_DIR/.platrixa/logs}"
+LOCK_DIR="${PLATRIXA_LOCK_FILE:-$HOME_DIR/.platrixa/worker.lock}.d"
+MODEL_HEALTH_URL="${PLATRIXA_MODEL_HEALTH_URL:-http://127.0.0.1:11434/v1/models}"
+READINESS_ATTEMPTS="${PLATRIXA_READINESS_ATTEMPTS:-60}"
+READINESS_INTERVAL="${PLATRIXA_READINESS_INTERVAL:-2}"
+
+log() {
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) platrixa-worker: $*"
+}
+
+mkdir -p "$LOG_DIR"
+
+# ---------------------------------------------------------------------------
+# 1. Duplicate protection. A PID-aware mkdir lock is used instead of flock so
+#    the service needs no extra package on the phone. `exec` below keeps the
+#    same PID, so the recorded PID stays the worker's for its whole life. A
+#    second start is a no-op that exits 0 (runit must not treat a duplicate as
+#    a crash); a STALE lock from a crashed worker is reclaimed.
+# ---------------------------------------------------------------------------
+acquire_lock() {
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo $$ >"$LOCK_DIR/pid"
+        return 0
+    fi
+    existing_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '')"
+    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+        return 1
+    fi
+    # No live owner: the previous worker died without cleaning up.
+    rm -rf "$LOCK_DIR"
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo $$ >"$LOCK_DIR/pid"
+        return 0
+    fi
+    return 1
+}
+
+if ! acquire_lock; then
+    log "another instance already holds $LOCK_DIR; not starting a duplicate"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Configuration. A configuration problem is the operator's to fix: say
+#    exactly what is wrong and exit 78 (EX_CONFIG), which `finish` backs off.
+# ---------------------------------------------------------------------------
+if [ ! -r "$ENV_FILE" ]; then
+    echo "platrixa-worker: missing env file: $ENV_FILE (copy worker.env.example)" >&2
+    exit 78
+fi
+
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+if [ ! -r "$KEY_FILE" ]; then
+    echo "platrixa-worker: missing API key file: $KEY_FILE" >&2
+    exit 78
+fi
+
+# The key file carries the tenant credential: refuse group/other-readable.
+KEY_PERMS="$(stat -c '%a' "$KEY_FILE" 2>/dev/null || echo '')"
+case "$KEY_PERMS" in
+    600|400) : ;;
+    *)
+        echo "platrixa-worker: refusing a key file with permissions '${KEY_PERMS:-unknown}' (run: chmod 600 \"$KEY_FILE\")" >&2
+        exit 78
+        ;;
+esac
+
+for required_var in \
+    PLATRIXA_API_BASE_URL \
+    PLATRIXA_WORKER_ID \
+    PLATRIXA_WORKER_MODEL_URL \
+    PLATRIXA_WORKER_MODEL_ID
+do
+    eval "required_value=\${$required_var:-}"
+    if [ -z "$required_value" ]; then
+        echo "platrixa-worker: $required_var is not set in $ENV_FILE" >&2
+        exit 78
+    fi
+done
+
+if [ ! -x "$PYTHON" ]; then
+    echo "platrixa-worker: python not found at $PYTHON (pkg install python)" >&2
+    exit 78
+fi
+if [ ! -f "$REPO_DIR/scripts/platrixa_outbound_inference_worker.py" ]; then
+    echo "platrixa-worker: worker not found under $REPO_DIR/scripts" >&2
+    exit 78
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Model readiness. The Android model app hosts the server on loopback and
+#    may start AFTER Termux, so wait (bounded) instead of claiming jobs the
+#    model cannot serve. The worker also gates every claim itself (S1); this
+#    wait keeps a cold boot from spamming reconnects.
+# ---------------------------------------------------------------------------
+attempt=1
+while [ "$attempt" -le "$READINESS_ATTEMPTS" ]; do
+    if curl -fsS --max-time 5 "$MODEL_HEALTH_URL" >/dev/null 2>&1; then
+        break
+    fi
+    log "model endpoint not ready at $MODEL_HEALTH_URL (attempt $attempt/$READINESS_ATTEMPTS); waiting ${READINESS_INTERVAL}s"
+    sleep "$READINESS_INTERVAL"
+    attempt=$((attempt + 1))
+done
+
+if [ "$attempt" -gt "$READINESS_ATTEMPTS" ]; then
+    # EX_TEMPFAIL: infrastructure is not up yet. `finish` applies a backoff,
+    # so this cannot become a busy restart loop.
+    log "model endpoint never became ready; no job will be claimed"
+    exit 75
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Hand over. Modes exist for testing without a device:
+#      PLATRIXA_WORKER_DRY_RUN=1         validate everything, start nothing
+#      PLATRIXA_WORKER_PRINT_COMMAND=1   print the exact argv, start nothing
+# ---------------------------------------------------------------------------
+MODEL_DIALECT="${PLATRIXA_WORKER_MODEL_DIALECT:-chat}"
+MODEL_TIMEOUT="${PLATRIXA_WORKER_MODEL_TIMEOUT_S:-120}"
+
+if [ "${PLATRIXA_WORKER_DRY_RUN:-0}" = "1" ]; then
+    log "dry run OK: configuration valid and model endpoint reachable"
+    exit 0
+fi
+
+if [ "${PLATRIXA_WORKER_PRINT_COMMAND:-0}" = "1" ]; then
+    # Paths only — never the key value.
+    printf '%s\n' \
+        "$PYTHON $REPO_DIR/scripts/platrixa_outbound_inference_worker.py" \
+        "--api-base-url $PLATRIXA_API_BASE_URL" \
+        "--api-key-file $KEY_FILE" \
+        "--worker-id $PLATRIXA_WORKER_ID" \
+        "--model-url $PLATRIXA_WORKER_MODEL_URL" \
+        "--model-id $PLATRIXA_WORKER_MODEL_ID" \
+        "--model-dialect $MODEL_DIALECT" \
+        "--model-timeout $MODEL_TIMEOUT" \
+        "--verbose"
+    exit 0
+fi
+
+log "starting worker (id=$PLATRIXA_WORKER_ID, model=$PLATRIXA_WORKER_MODEL_ID)"
+
+# runit captures nothing by itself; append both streams to the rotating log.
+exec >>"$LOG_DIR/worker.log" 2>&1
+
+exec "$PYTHON" "$REPO_DIR/scripts/platrixa_outbound_inference_worker.py" \
+    --api-base-url "$PLATRIXA_API_BASE_URL" \
+    --api-key-file "$KEY_FILE" \
+    --worker-id "$PLATRIXA_WORKER_ID" \
+    --model-url "$PLATRIXA_WORKER_MODEL_URL" \
+    --model-id "$PLATRIXA_WORKER_MODEL_ID" \
+    --model-dialect "$MODEL_DIALECT" \
+    --model-timeout "$MODEL_TIMEOUT" \
+    --verbose
