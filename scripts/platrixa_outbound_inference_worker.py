@@ -142,6 +142,19 @@ RESULT_SUFFIX = "/result"
 # PLATRIXA_WORKER_RELIABILITY_REPAIR_REPORT.md §9.
 FAILURE_SUFFIX = "/failure"
 
+# Multi-transaction batch modes (server vocabulary, mirrored here).
+MODE_SINGLE = "single"
+MODE_INDEPENDENT = "independent"
+MODE_ORDERED = "ordered"
+
+#: A batch transaction id, exactly as the server validates it.
+TRANSACTION_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+#: Bound on the approved-prior-state context a prompt may carry. The state is
+#: server-generated kernel output, but the prompt is still bounded so one
+#: accounting sequence cannot grow the model input without limit.
+MAX_PRIOR_STATE_CHARS = 1200
+
 STATUS_NO_WORK = "NO_WORK"
 STATUS_CLAIMED = "CLAIMED"
 CODE_LEASE_LOST = "LEASE_LOST"
@@ -362,6 +375,15 @@ class MalformedResponseError(WorkerError):
 
 class TransportError(WorkerError):
     """A network-level failure (timeout, connection refused, DNS, TLS)."""
+
+
+class SlotUnavailableError(WorkerError):
+    """The device-wide inference slot stayed busy for the whole wait budget.
+
+    Distinct from a bridge failure on purpose: nothing was generated, so the
+    job must be RELEASED back to the queue (attempt budget refunded) rather
+    than reported as a failed generation. A busy phone is not a bad job.
+    """
 
 
 class BridgeUnavailableError(WorkerError):
@@ -611,6 +633,35 @@ def build_model_prompt(text: str) -> str:
         f"### Instruction:\n{ALPACA_INSTRUCTION}\n\n"
         f"### Input:\n{text}\n\n"
         f"### Response:\n"
+    )
+
+
+def build_contextual_input(
+    text: str, prior_state: Optional[Dict[str, Any]] = None
+) -> str:
+    """The Input section for one transaction, optionally after approved state.
+
+    In ordered mode the next transaction is shown the PREVIOUS transaction's
+    kernel-approved accounting and its state hash. The framing never changes
+    (``build_model_prompt`` is untouched, so its byte-exact contract and the
+    test that enforces it stay valid); only the Input TEXT grows, and it is
+    bounded. This is context for the model's proposal — never authority: the
+    server re-validates every candidate from scratch.
+    """
+    if not prior_state:
+        return text
+    try:
+        summary = json.dumps(
+            prior_state, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        )
+    except Exception:
+        return text
+    if len(summary) > MAX_PRIOR_STATE_CHARS:
+        summary = summary[:MAX_PRIOR_STATE_CHARS]
+    return (
+        "Approved prior accounting state (deterministic kernel output; context "
+        "only, do not restate or re-derive it):\n"
+        f"{summary}\n\nCurrent transaction:\n{text}"
     )
 
 
@@ -998,6 +1049,15 @@ class LeaseHeartbeat(threading.Thread):
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class BatchTransactionSpec:
+    """One transaction of a claimed batch, as the SERVER described it."""
+
+    transaction_id: str
+    index: int
+    input: str
+
+
 @dataclass
 class ClaimedJob:
     """One claimed inference job, with its live lease state."""
@@ -1006,10 +1066,21 @@ class ClaimedJob:
     request_id: Optional[str]
     raw_input: str
     state: LeaseState
+    # Batch shape. Defaults keep every pre-batch construction site (and the
+    # existing test fixtures) a single-transaction job.
+    mode: str = MODE_SINGLE
+    transactions: Tuple[BatchTransactionSpec, ...] = ()
+    batch_budget_seconds: float = 0.0
+    transaction_result_url: Optional[str] = None
+    prior_state: Optional[Dict[str, Any]] = None
 
     @property
     def lease(self) -> LeaseState:
         return self.state
+
+    @property
+    def is_batch(self) -> bool:
+        return self.mode in (MODE_INDEPENDENT, MODE_ORDERED)
 
 
 @dataclass
@@ -1089,6 +1160,7 @@ RUN_REPORT_KEYS: Tuple[str, ...] = (
     "readiness_waits",  # polls skipped because the local model was not ready
     "failures_reported",       # failures the server acknowledged (RETRY_WAIT/FAILED)
     "failure_report_failures", # failure reports the server/store did not accept
+    "slot_waits",             # claims released because the device slot was busy
 )
 
 
@@ -1902,9 +1974,70 @@ class OutboundInferenceWorker:
         id, the raw input, the lease proof, the timings, and both URLs.
         """
         job_id = _bounded_identifier(job.get("job_id"), what="job_id")
+
+        mode = job.get("mode") or MODE_SINGLE
+        if not isinstance(mode, str) or mode not in (MODE_SINGLE, MODE_INDEPENDENT, MODE_ORDERED):
+            raise MalformedResponseError(f"claimed job has an unknown mode: {mode!r}")
+
+        transactions: Tuple[BatchTransactionSpec, ...] = ()
         raw_input = job.get("raw_input")
-        if not isinstance(raw_input, str) or not raw_input.strip():
-            raise MalformedResponseError("claimed job has no usable raw_input")
+        if mode == MODE_SINGLE:
+            if not isinstance(raw_input, str) or not raw_input.strip():
+                raise MalformedResponseError("claimed job has no usable raw_input")
+        else:
+            raw_items = job.get("transactions")
+            if not isinstance(raw_items, list) or not raw_items:
+                raise MalformedResponseError("claimed batch job has no transactions")
+            parsed_transactions = []
+            seen_ids: set = set()
+            for position, item in enumerate(raw_items):
+                if not isinstance(item, dict):
+                    raise MalformedResponseError("claimed batch transaction is not an object")
+                tx_id = item.get("transaction_id")
+                if not isinstance(tx_id, str) or not TRANSACTION_ID_RE.match(tx_id):
+                    raise MalformedResponseError("claimed batch transaction has an unusable id")
+                if tx_id in seen_ids:
+                    raise MalformedResponseError("claimed batch repeats a transaction id")
+                seen_ids.add(tx_id)
+                tx_input = item.get("input")
+                if not isinstance(tx_input, str) or not tx_input.strip():
+                    raise MalformedResponseError("claimed batch transaction has no input")
+                batch_index = item.get("batch_index", position)
+                if (
+                    isinstance(batch_index, bool)
+                    or not isinstance(batch_index, int)
+                    or batch_index < 0
+                ):
+                    raise MalformedResponseError("claimed batch transaction has an unusable index")
+                parsed_transactions.append(
+                    BatchTransactionSpec(
+                        transaction_id=tx_id, index=batch_index, input=tx_input
+                    )
+                )
+            transactions = tuple(parsed_transactions)
+            # Batch mode never uses raw_input; the first input keeps the field
+            # non-optional without inventing transaction text.
+            raw_input = transactions[0].input
+
+        budget_raw = job.get("batch_budget_seconds")
+        try:
+            batch_budget_seconds = float(budget_raw) if budget_raw is not None else 0.0
+        except (TypeError, ValueError):
+            batch_budget_seconds = 0.0
+        if batch_budget_seconds != batch_budget_seconds or batch_budget_seconds < 0:
+            batch_budget_seconds = 0.0
+
+        prior_state = job.get("prior_state")
+        if not isinstance(prior_state, dict):
+            prior_state = None
+
+        transaction_result_url = job.get("transaction_result_url")
+        if not isinstance(transaction_result_url, str) or not transaction_result_url.strip():
+            transaction_result_url = None
+        elif "{transaction_id}" not in transaction_result_url:
+            # A template without the placeholder cannot address a transaction;
+            # discard it and use the canonical derived path below.
+            transaction_result_url = None
 
         request_id = job.get("request_id")
         if request_id is not None and not isinstance(request_id, str):
@@ -1940,6 +2073,11 @@ class OutboundInferenceWorker:
             request_id=request_id if isinstance(request_id, str) and request_id else None,
             raw_input=raw_input,
             state=state,
+            mode=mode,
+            transactions=transactions,
+            batch_budget_seconds=batch_budget_seconds,
+            transaction_result_url=transaction_result_url,
+            prior_state=prior_state,
         )
 
     # -- renewal ----------------------------------------------------------
@@ -2020,7 +2158,11 @@ class OutboundInferenceWorker:
 
     # -- bridge -----------------------------------------------------------
 
-    def call_bridge(self, raw_input: str) -> Dict[str, Any]:
+    def call_bridge(
+        self,
+        raw_input: str,
+        prior_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """POST the raw input to the LOCAL model bridge; return its FULL body.
 
         Nothing is parsed, extracted, repaired, or rewritten: the body is passed
@@ -2034,8 +2176,9 @@ class OutboundInferenceWorker:
 
         # Direct model mode: when a loopback model endpoint is configured the
         # worker calls the model itself; otherwise the device bridge.
+        text = build_contextual_input(raw_input, prior_state)
         if self._model_base_url is not None:
-            return self.call_model(raw_input)
+            return self.call_model(raw_input, prior_state=prior_state)
 
         connection_error: Optional[str] = None
         for path in self._bridge_paths:
@@ -2043,7 +2186,7 @@ class OutboundInferenceWorker:
             try:
                 response = self._post(
                     url,
-                    {"text": raw_input},
+                    {"text": text},
                     headers=self._bridge_headers(),
                     timeout=float(self._config.bridge_timeout_s),
                     session=self._bridge_session,
@@ -2077,7 +2220,11 @@ class OutboundInferenceWorker:
 
     # -- direct model endpoint (the phone adapter) ------------------------
 
-    def call_model(self, raw_input: str) -> Dict[str, Any]:
+    def call_model(
+        self,
+        raw_input: str,
+        prior_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """POST the raw input to the phone's OpenAI-compatible llama-server.
 
         The model server runs on the same device as this worker, so the
@@ -2104,7 +2251,7 @@ class OutboundInferenceWorker:
         No field is added, defaulted, or repaired here; a truncated or
         malformed candidate surfaces as BridgeResponseError and is discarded.
         """
-        prompt = build_model_prompt(raw_input)
+        prompt = build_model_prompt(build_contextual_input(raw_input, prior_state))
         if not is_alpaca_prompt(prompt):
             # Cannot happen with the mirrored constants; fail closed anyway so
             # a future edit cannot silently substitute a different prompt.
@@ -2355,13 +2502,26 @@ class OutboundInferenceWorker:
         payload: Dict[str, Any] = {"lease": state.proof.to_wire(), "bridge_body": bridge_body}
         if job.request_id:
             payload["request_id"] = job.request_id
+        return self._submit_payload(state.result_url, payload, state)
+
+    def _submit_payload(
+        self, url: str, payload: Dict[str, Any], state: LeaseState
+    ) -> SubmitOutcome:
+        """POST one fenced submission and translate its transport outcome.
+
+        Shared by the single-transaction result path, the independent batch
+        submission and the ordered per-transaction submission, so all three
+        interpret a 409/404/4xx/503 identically. A 409 always means the server
+        fence refused us: the payload is discarded, never retried at the same
+        generation.
+        """
         encoded = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
         if len(encoded) > int(self._config.max_result_bytes):
             raise BridgeResponseError(
                 f"refusing to submit a {len(encoded)}-byte result; the limit is {self._config.max_result_bytes}"
             )
 
-        response = self._api_post(state.result_url, payload)
+        response = self._api_post(url, payload)
         status = int(response.status_code)
         if status == 409:
             code = error_code_of(response) or CODE_LEASE_LOST
@@ -2387,6 +2547,91 @@ class OutboundInferenceWorker:
 
         envelope = self._decode_json_object(response, what="result response")
         return SubmitOutcome(envelope, self._replay_flag(response))
+
+    # -- batch submission --------------------------------------------------
+
+    def submit_batch_results(
+        self, job: ClaimedJob, results: list
+    ) -> SubmitOutcome:
+        """Submit an INDEPENDENT batch: every candidate in ONE fenced call.
+
+        Each entry is ``{transaction_id, bridge_body}`` or, when this
+        generation produced nothing usable for that transaction,
+        ``{transaction_id, error: {code, message}}``. Transactions omitted from
+        the list are DEFERRED by the server (budget exhausted), which is a
+        partial outcome rather than a failure verdict.
+        """
+        state = job.state
+        state.ensure_held(self._now())
+        payload: Dict[str, Any] = {
+            "lease": state.proof.to_wire(),
+            "transactions": results,
+        }
+        if job.request_id:
+            payload["request_id"] = job.request_id
+        return self._submit_payload(state.result_url, payload, state)
+
+    def submit_transaction_result(
+        self,
+        job: ClaimedJob,
+        tx: BatchTransactionSpec,
+        *,
+        bridge_body: Optional[Dict[str, Any]] = None,
+        error: Optional[Dict[str, str]] = None,
+        deferred: bool = False,
+    ) -> SubmitOutcome:
+        """Submit ONE transaction of an ORDERED batch (lease-fenced).
+
+        The response is either the next link's approved prior state
+        (``next``) or the finalized batch envelope.
+        """
+        state = job.state
+        state.ensure_held(self._now())
+        payload: Dict[str, Any] = {"lease": state.proof.to_wire()}
+        if bridge_body is not None:
+            payload["bridge_body"] = bridge_body
+        if error is not None:
+            payload["error"] = error
+        if deferred:
+            payload["deferred"] = True
+        if job.request_id:
+            payload["request_id"] = job.request_id
+        # The path is VALIDATED, not trusted verbatim: an absolute URL, a
+        # query/fragment, traversal, a different job id or a wrong suffix is
+        # refused by the same rule the renewal/result URLs already use, so a
+        # hijacked claim cannot redirect this tenant's credential or candidate.
+        suffix = f"/transactions/{tx.transaction_id}/result"
+        candidate = (
+            (job.transaction_result_url or "").replace(
+                "{transaction_id}", tx.transaction_id
+            )
+            or f"/v1/worker/jobs/{job.job_id}{suffix}"
+        )
+        url = resolve_lease_endpoint(self._api_base_url, candidate, job.job_id, suffix)
+        return self._submit_payload(url, payload, state)
+
+    def release_claim(self, job: ClaimedJob, reason: str = "SLOT_BUSY") -> bool:
+        """Return a claim to the queue because the DEVICE could not run it.
+
+        Used only when the device-wide slot stayed busy: the server clears the
+        lease and refunds the attempt, so a shared phone never fails a job
+        another tenant's generation happened to be occupying.
+        """
+        state = job.state
+        payload: Dict[str, Any] = {"lease": state.proof.to_wire(), "reason": reason}
+        try:
+            response = self._api_post(
+                f"{self._api_base_url}/v1/worker/jobs/{job.job_id}/release", payload
+            )
+        except TransportError:
+            return False
+        if int(response.status_code) != 200:
+            return False
+        try:
+            body = self._decode_json_object(response, what="release response")
+        except MalformedResponseError:
+            return False
+        return bool(body.get("released"))
 
     # -- failure reporting ------------------------------------------------
 
@@ -2523,7 +2768,9 @@ class OutboundInferenceWorker:
         """Bridge, then submit, while the heartbeat keeps the lease alive.
 
         On ANY exit path the heartbeat is stopped and joined, so no renewal
-        thread outlives the job it was serving.
+        thread outlives the job it was serving. A batch job is handed to
+        :meth:`process_batch`, which keeps the SAME lease/heartbeat/slot
+        discipline and processes its transactions strictly sequentially.
         """
         # Check BEFORE spending model time: a lease already known lost is not
         # worth a bridge call. (The server fence, not this check, is authority.)
@@ -2542,12 +2789,19 @@ class OutboundInferenceWorker:
             # the normal fenced failure path, so the job goes to RETRY_WAIT with
             # its capacity held and no job is ever lost.
             if self._slot_limiter is not None:
-                slot_token = self._slot_limiter.acquire(self._slot_wait_s)
+                # The worker id is the queue label: it is what the operator sees
+                # in `platrixa_slot_limiter.py status`, and it is NEVER an
+                # authorization input (the tenant always comes from the key).
+                slot_token = self._slot_limiter.acquire(
+                    self._slot_wait_s, tenant=self._worker_id
+                )
                 if slot_token is None:
-                    raise BridgeUnavailableError(
+                    raise SlotUnavailableError(
                         "device inference slot unavailable within the wait budget; "
                         "generation not started"
                     )
+            if job.is_batch:
+                return self._process_batch_locked(job, deadline=self._batch_deadline(job))
             bridge_body = self.call_bridge(job.raw_input)
             # S3: the model phase is over; the submission phase is observable on
             # its own so "slow model" and "slow API" are distinguishable.
@@ -2561,6 +2815,142 @@ class OutboundInferenceWorker:
                     logger.warning("slot release failed; the limiter will recover it")
             self._active_lease = None
             self.stop_heartbeat(heartbeat)
+
+    # -- batch execution ---------------------------------------------------
+
+    def _batch_deadline(self, job: ClaimedJob) -> Optional[float]:
+        """The wall-clock budget for this batch, or None when unbounded.
+
+        The server owns the bound (``batch_budget_seconds``); a device never
+        invents one. The deadline uses the worker's injected monotonic clock,
+        the same clock lease timing uses.
+        """
+        budget = float(job.batch_budget_seconds or 0.0)
+        if budget <= 0:
+            return None
+        return self._now() + budget
+
+    def _batch_budget_spent(self, deadline: Optional[float]) -> bool:
+        return deadline is not None and self._now() >= deadline
+
+    def _process_batch_locked(
+        self, job: ClaimedJob, *, deadline: Optional[float]
+    ) -> SubmitOutcome:
+        """Run the batch's transactions SEQUENTIALLY under the held slot.
+
+        Transactions inside a job are never parallelised: an ordered sequence
+        must be applied in order, and even an independent batch is one unit of
+        device work. The device-wide slot was already acquired by
+        :meth:`process_job`, so exactly one generation runs at a time per slot.
+        """
+        if job.mode == MODE_ORDERED:
+            return self._process_ordered_batch(job, deadline)
+        return self._process_independent_batch(job, deadline)
+
+    def _process_independent_batch(
+        self, job: ClaimedJob, deadline: Optional[float]
+    ) -> SubmitOutcome:
+        """Generate every transaction independently, then submit once.
+
+        A generation that fails for ONE transaction is reported for THAT
+        transaction only, so the others keep their real outcomes. When the
+        budget runs out the untouched remainder is simply not submitted and the
+        server records it as DEFERRED — never as a failure.
+        """
+        results: list = []
+        for tx in job.transactions:
+            if self._batch_budget_spent(deadline):
+                logger.info(
+                    "job %s: batch budget exhausted after %d transaction(s); "
+                    "remaining transactions are deferred",
+                    job.job_id, len(results),
+                )
+                break
+            self.set_state(
+                STATE_PROCESSING, detail=f"job {job.job_id} tx {tx.transaction_id}"
+            )
+            try:
+                body = self.call_bridge(tx.input)
+            except (BridgeUnavailableError, BridgeResponseError) as exc:
+                code, reason = classify_processing_failure(exc)
+                logger.warning(
+                    "job %s: transaction %s produced no candidate (%s); "
+                    "other transactions are unaffected",
+                    job.job_id, tx.transaction_id, code,
+                )
+                results.append(
+                    {
+                        "transaction_id": tx.transaction_id,
+                        "error": {
+                            "code": code,
+                            "message": bounded_failure_message(reason),
+                        },
+                    }
+                )
+                continue
+            results.append(
+                {"transaction_id": tx.transaction_id, "bridge_body": body}
+            )
+        self.set_state(
+            STATE_REPORTING,
+            detail=f"job {job.job_id} ({len(results)} transaction(s))",
+        )
+        return self.submit_batch_results(job, results)
+
+    def _process_ordered_batch(
+        self, job: ClaimedJob, deadline: Optional[float]
+    ) -> SubmitOutcome:
+        """Submit an ordered sequence link by link, using only APPROVED state.
+
+        Each answer carries the previous transaction's kernel-approved state and
+        hash, which becomes the next prompt's context. When a link is not
+        VERIFIED the server halts the chain itself and returns the finalized
+        batch envelope, so this loop never decides that a later transaction may
+        proceed on an unapproved state.
+        """
+        prior_state = job.prior_state
+        outcome: Optional[SubmitOutcome] = None
+        for tx in job.transactions:
+            if self._batch_budget_spent(deadline):
+                logger.info(
+                    "job %s: batch budget exhausted before transaction %s; "
+                    "the remainder is deferred",
+                    job.job_id, tx.transaction_id,
+                )
+                return self.submit_transaction_result(job, tx, deferred=True)
+            self.set_state(
+                STATE_PROCESSING, detail=f"job {job.job_id} tx {tx.transaction_id}"
+            )
+            try:
+                body = self.call_bridge(tx.input, prior_state=prior_state)
+            except (BridgeUnavailableError, BridgeResponseError) as exc:
+                code, reason = classify_processing_failure(exc)
+                logger.warning(
+                    "job %s: transaction %s produced no candidate (%s); "
+                    "the ordered chain cannot continue",
+                    job.job_id, tx.transaction_id, code,
+                )
+                return self.submit_transaction_result(
+                    job,
+                    tx,
+                    error={"code": code, "message": bounded_failure_message(reason)},
+                )
+            self.set_state(
+                STATE_REPORTING, detail=f"job {job.job_id} tx {tx.transaction_id}"
+            )
+            outcome = self.submit_transaction_result(job, tx, bridge_body=body)
+            nxt = outcome.get("next")
+            if not isinstance(nxt, dict):
+                # The server finalized the batch (complete, halted, or deferred).
+                return outcome
+            next_prior = nxt.get("prior_state")
+            prior_state = next_prior if isinstance(next_prior, dict) else None
+            job.prior_state = prior_state
+        if outcome is not None:
+            return outcome
+        # Unreachable with a non-empty claimed transaction list; refuse to
+        # invent an outcome rather than report one.
+        raise MalformedResponseError("ordered batch had no transaction to submit")
 
     def run_forever(
         self,
@@ -2677,6 +3067,22 @@ class OutboundInferenceWorker:
                 report["lease_lost"] += 1
                 self._last_failure_category = "LEASE_LOST"
                 logger.info("job %s: lease lost, discarding candidate (%s)", job.job_id, exc)
+                continue
+            except SlotUnavailableError as exc:
+                # A busy phone is NOT a bad job: hand the claim back so its
+                # attempt budget is refunded and another worker can take it.
+                report["slot_waits"] += 1
+                self._last_failure_category = "SLOT_BUSY"
+                logger.info(
+                    "job %s: device inference slot busy; claim released (%s)",
+                    job.job_id, exc,
+                )
+                if not self.release_claim(job):
+                    logger.warning(
+                        "job %s: the claim could not be released; its lease will expire and "
+                        "the queue will reclaim it",
+                        job.job_id,
+                    )
                 continue
             except (BridgeUnavailableError, BridgeResponseError) as exc:
                 # Fail closed: an unavailable model, a rate limit that outlived

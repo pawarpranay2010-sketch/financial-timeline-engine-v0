@@ -471,6 +471,28 @@ CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending
     ON platrixa_webhook_deliveries (status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_job
     ON platrixa_webhook_deliveries (job_id);
+CREATE TABLE IF NOT EXISTS platrixa_batch_transactions (
+    job_id            VARCHAR(64)  NOT NULL,
+    tenant_id         VARCHAR(64)  NOT NULL,
+    batch_index       INTEGER      NOT NULL,
+    transaction_id    VARCHAR(64)  NOT NULL,
+    status            VARCHAR(24)  NOT NULL DEFAULT 'PENDING',
+    api_status        VARCHAR(24),
+    engine_status     VARCHAR(32),
+    error_code        VARCHAR(64),
+    prior_state_hash  VARCHAR(64),
+    state_hash        VARCHAR(64),
+    state_summary     TEXT,
+    result_json       TEXT,
+    http_status       INTEGER,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (job_id, transaction_id)
+);
+CREATE INDEX IF NOT EXISTS idx_batch_transactions_tenant
+    ON platrixa_batch_transactions (tenant_id, job_id);
+CREATE INDEX IF NOT EXISTS idx_batch_transactions_status
+    ON platrixa_batch_transactions (job_id, status);
 """
 
 # Phase 5K additive migration. The _DDL above is the fresh-install shape;
@@ -564,6 +586,38 @@ _MIGRATION_VISITOR_SCOPE = [
     "ON platrixa_async_jobs (tenant_id, visitor_id, status) WHERE visitor_id IS NOT NULL",
 ]
 
+# Multi-transaction batch migration (additive, idempotent — same mechanism as
+# every migration above, so an upgraded store converges to the fresh shape).
+#
+#   batch_mode        — 'single' (every pre-existing row), 'independent' or
+#                       'ordered'. The DEFAULT keeps every historical job
+#                       byte-for-byte a single-transaction job.
+#   transaction_count — 1 for every pre-existing row.
+#
+# The batch transaction table itself is created by _DDL above (CREATE TABLE IF
+# NOT EXISTS is safe on an existing store because it is a NEW table, not a new
+# column on an existing one).
+_MIGRATION_BATCH = [
+    "ALTER TABLE platrixa_async_jobs ADD COLUMN IF NOT EXISTS "
+    "batch_mode VARCHAR(16) NOT NULL DEFAULT 'single'",
+    "ALTER TABLE platrixa_async_jobs ADD COLUMN IF NOT EXISTS "
+    "transaction_count INTEGER NOT NULL DEFAULT 1",
+    "CREATE TABLE IF NOT EXISTS platrixa_batch_transactions ("
+    " job_id VARCHAR(64) NOT NULL, tenant_id VARCHAR(64) NOT NULL, "
+    " batch_index INTEGER NOT NULL, transaction_id VARCHAR(64) NOT NULL, "
+    " status VARCHAR(24) NOT NULL DEFAULT 'PENDING', api_status VARCHAR(24), "
+    " engine_status VARCHAR(32), error_code VARCHAR(64), "
+    " prior_state_hash VARCHAR(64), state_hash VARCHAR(64), state_summary TEXT, "
+    " result_json TEXT, http_status INTEGER, "
+    " created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+    " updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+    " PRIMARY KEY (job_id, transaction_id))",
+    "CREATE INDEX IF NOT EXISTS idx_batch_transactions_tenant "
+    "ON platrixa_batch_transactions (tenant_id, job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_batch_transactions_status "
+    "ON platrixa_batch_transactions (job_id, status)",
+]
+
 _MIGRATION_QUEUE_CAPACITY = [
     "ALTER TABLE platrixa_async_jobs ADD COLUMN IF NOT EXISTS "
     "capacity_held BOOLEAN NOT NULL DEFAULT TRUE",
@@ -619,6 +673,8 @@ def _session_factory():
                 for stmt in _MIGRATION_INFERENCE:
                     conn.execute(text(stmt))
                 for stmt in _MIGRATION_QUEUE_CAPACITY:
+                    conn.execute(text(stmt))
+                for stmt in _MIGRATION_BATCH:
                     conn.execute(text(stmt))
                 _ensure_result_uniqueness(conn)
         except Exception as exc:
@@ -919,6 +975,10 @@ class JobRecord:
     # after claiming).
     kind: str = JOB_KIND_DOCUMENT
     request_json: Optional[str] = None
+    # Multi-transaction batch shape. Defaults keep every pre-batch
+    # construction site and fixture a single-transaction job.
+    batch_mode: str = "single"
+    transaction_count: int = 1
 
 
 # Phase 5K job state machine. QUEUED/PROCESSING/COMPLETED/FAILED are the
@@ -1017,6 +1077,8 @@ def _row_to_record(row: Any) -> JobRecord:
         next_attempt_at=_get("next_attempt_at"),
         kind=str(_get("kind") or JOB_KIND_DOCUMENT),
         request_json=_get("request_json"),
+        batch_mode=str(_get("batch_mode") or "single"),
+        transaction_count=int(_get("transaction_count") or 1),
     )
 
 
@@ -1032,7 +1094,7 @@ _JOB_COLUMNS = (
     "job_id, tenant_id, result_id, status, http_status, result_json, "
     "error_json, retryable, request_id, created_at, updated_at, "
     "lease_owner, lease_expires_at, lease_generation, attempt_count, "
-    "max_attempts, next_attempt_at, kind"
+    "max_attempts, next_attempt_at, kind, batch_mode, transaction_count"
 )
 
 
@@ -1043,6 +1105,7 @@ def create_job(
     request_id: Optional[str] = None,
     kind: str = JOB_KIND_DOCUMENT,
     visitor_id: Optional[str] = None,
+    batch: Optional[Dict[str, Any]] = None,
 ) -> JobRecord:
     """Insert one QUEUED job. Raises AsyncStoreUnavailableError if down.
 
@@ -1051,11 +1114,47 @@ def create_job(
     outbound inference bridge passes ``kind=JOB_KIND_INFERENCE``. An unknown
     kind is rejected here (fail closed) rather than creating a row no worker
     would ever claim.
+
+    ``batch`` (optional) makes this ONE job carry a bounded list of accounting
+    transactions::
+
+        {"mode": "independent"|"ordered",
+         "transactions": [{"transaction_id": str, "input": str}, ...]}
+
+    The job row and EVERY transaction row are inserted in the SAME
+    transaction as the capacity admission, so a job can never exist without
+    its transactions and a rejected admission leaves neither behind. Without
+    ``batch`` this function behaves exactly as before (one transaction,
+    ``raw_input``).
     """
     from sqlalchemy import text
 
     if kind not in JOB_KINDS:
         raise ValueError(f"unknown job kind: {kind!r}")
+
+    batch_mode = "single"
+    transactions: list = []
+    if batch is not None:
+        batch_mode = str(batch.get("mode") or "").strip().lower()
+        if batch_mode not in ("independent", "ordered"):
+            raise ValueError(f"unknown batch mode: {batch_mode!r}")
+        raw_transactions = batch.get("transactions")
+        if not isinstance(raw_transactions, list) or not raw_transactions:
+            raise ValueError("batch requires a non-empty transaction list")
+        seen: set = set()
+        for index, item in enumerate(raw_transactions):
+            if not isinstance(item, dict):
+                raise ValueError("batch transaction must be an object")
+            tx_id = item.get("transaction_id")
+            tx_input = item.get("input")
+            if not isinstance(tx_id, str) or not tx_id:
+                raise ValueError("batch transaction requires a transaction_id")
+            if tx_id in seen:
+                raise ValueError("duplicate transaction_id in batch")
+            if not isinstance(tx_input, str) or not tx_input:
+                raise ValueError("batch transaction requires an input")
+            seen.add(tx_id)
+            transactions.append((index, tx_id, tx_input))
 
     job_id = new_job_id()
     result_id = new_result_id()
@@ -1078,8 +1177,8 @@ def create_job(
                 session.execute(
                     text(
                         "INSERT INTO platrixa_async_jobs "
-                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at, visitor_id, owner_type, capacity_held) "
-                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now(), :v, :o, TRUE)"
+                        "(job_id, tenant_id, result_id, request_hash, status, kind, request_json, request_id, created_at, updated_at, visitor_id, owner_type, capacity_held, batch_mode, transaction_count) "
+                        "VALUES (:j, :t, :r, :rh, 'QUEUED', :k, :req, :rid, now(), now(), :v, :o, TRUE, :bm, :tc)"
                     ),
                     {
                         "j": job_id,
@@ -1091,8 +1190,19 @@ def create_job(
                         "rid": request_id,
                         "v": owner_visitor,
                         "o": owner_type,
+                        "bm": batch_mode,
+                        "tc": len(transactions) if transactions else 1,
                     },
                 )
+                for index, tx_id, tx_input in transactions:
+                    session.execute(
+                        text(
+                            "INSERT INTO platrixa_batch_transactions "
+                            "(job_id, tenant_id, batch_index, transaction_id, status, created_at, updated_at) "
+                            "VALUES (:j, :t, :i, :tx, 'PENDING', now(), now())"
+                        ),
+                        {"j": job_id, "t": tenant_id, "i": index, "tx": tx_id},
+                    )
     except queue_capacity.QueueCapacityExceeded:
         # A capacity rejection is a first-class admission outcome, not a store
         # failure: propagate it unchanged so the route can answer 503 with the
@@ -1325,7 +1435,8 @@ def claim_next_job(
                         ") RETURNING j.job_id, j.tenant_id, j.result_id, j.status, j.http_status, "
                         "j.result_json, j.error_json, j.retryable, j.request_id, j.created_at, "
                         "j.updated_at, j.lease_owner, j.lease_expires_at, j.lease_generation, "
-                        "j.attempt_count, j.max_attempts, j.next_attempt_at, j.kind, j.request_json"
+                        "j.attempt_count, j.max_attempts, j.next_attempt_at, j.kind, j.request_json, "
+                        "j.batch_mode, j.transaction_count"
                     ),
                     params,
                 ).mappings().fetchall()
@@ -1703,6 +1814,66 @@ def release_job(
                         job_id[:14],
                     )
                 return released
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("async job release failed: %s", type(exc).__name__)
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+
+def release_claim(
+    job_id: str,
+    *,
+    lease_owner: str,
+    lease_generation: int,
+) -> bool:
+    """Hand a claimed job back to the queue WITHOUT spending its attempt budget.
+
+    Why this exists: the device-wide inference slot is a scarce, shared
+    resource. A worker that claimed a job and then could not get the slot must
+    not (a) sit on the lease while it waits, nor (b) burn one of the job's few
+    attempts on a collision another tenant caused. This transition returns the
+    row to ``QUEUED`` and REFUNDS the attempt that the claim consumed, so a
+    busy phone can never fail a valid job.
+
+    It is fully fenced (owner + generation + an unexpired lease, judged by the
+    server's clock) and only applies to a job that is still PROCESSING, so a
+    stale worker cannot requeue work it no longer owns, and a job that already
+    reached a terminal state is untouched.
+    """
+    from sqlalchemy import text
+
+    if not lease_owner or lease_generation is None:
+        logger.warning("release_claim refused: no lease ownership proof (job=%s)", job_id[:14])
+        return False
+    try:
+        SessionLocal = _session_factory()
+        with SessionLocal() as session:
+            with session.begin():
+                result = session.execute(
+                    text(
+                        "UPDATE platrixa_async_jobs SET status = 'QUEUED', "
+                        "lease_owner = NULL, lease_expires_at = NULL, "
+                        "attempt_count = GREATEST(0, attempt_count - 1), "
+                        "next_attempt_at = NULL, updated_at = now() "
+                        "WHERE job_id = :j AND status = 'PROCESSING' "
+                        "  AND lease_owner = :owner AND lease_generation = :gen "
+                        "  AND lease_expires_at IS NOT NULL "
+                        "  AND lease_expires_at > clock_timestamp()"
+                    ),
+                    {
+                        "j": job_id,
+                        "owner": lease_owner,
+                        "gen": int(lease_generation),
+                    },
+                )
+                accepted = (result.rowcount or 0) == 1
+                if not accepted:
+                    logger.info(
+                        "release_claim refused (fenced out or already final) job=%s",
+                        job_id[:14],
+                    )
+                return accepted
     except AsyncStoreUnavailableError:
         raise
     except Exception as exc:

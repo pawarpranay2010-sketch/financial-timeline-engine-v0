@@ -45,9 +45,14 @@ def create_app() -> FastAPI:
     # Phase 1B: pending-queue limits are validated at STARTUP. An invalid,
     # negative, or zero limit raises here instead of silently disabling
     # protection for the whole deployment (the pre-correction behaviour).
-    from backend.auth import queue_capacity, tenant_rate_limit
+    from backend.auth import batch_jobs, queue_capacity, tenant_rate_limit, transaction_quota
 
     queue_capacity.validate_config()
+    # Batch bounds and the separate accounting-transaction quota are validated
+    # here too: a malformed value must stop the deployment rather than silently
+    # admitting a batch larger than the operator intended.
+    batch_jobs.validate_config()
+    transaction_quota.validate_config()
     # Durable per-tenant request-rate limits are validated at startup too: a
     # non-integer or negative value must stop the deployment, not silently
     # disable the control (PLATRIXA_TENANT_RATE_LIMIT=0 disables it on purpose).

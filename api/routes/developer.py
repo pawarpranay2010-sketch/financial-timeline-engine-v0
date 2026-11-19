@@ -337,6 +337,7 @@ def _error_response(
     code: str,
     message: str,
     request_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
     """Machine-readable error envelope: no stack traces, no internals.
 
@@ -344,8 +345,16 @@ def _error_response(
     status (``api_status``), its label, and retryability — derived from
     the error code by the deterministic mapping in ``api.status``. The
     code itself is unchanged, preserving the documented contract.
+
+    ``details`` (batch contract) adds optional STRUCTURAL diagnostics — a
+    rejected batch's own transaction ids, the limit that was exceeded, an
+    offending index. It is never populated with another tenant's data, with
+    stored transaction text, or with credential material.
     """
-    return JSONResponse(status_code=status_code, content=_error_envelope(code, message, request_id))
+    content = _error_envelope(code, message, request_id)
+    if details:
+        content["error"]["details"] = details
+    return JSONResponse(status_code=status_code, content=content)
 
 
 # ---------------------------------------------------------------------------

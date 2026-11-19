@@ -126,3 +126,206 @@ def queue_status(
             },
         },
     )
+
+
+@router.get(
+    "/usage",
+    responses={
+        403: {"description": "Management authorization failed"},
+        503: {"description": "Store unavailable (fail closed)"},
+    },
+)
+def usage_report(
+    request: Request,
+    x_platrixa_management_token: Optional[str] = Header(default=None),
+):
+    """Owner-only per-tenant usage report for the private beta.
+
+    Answers, for every provisioned tenant: which keys are active/revoked, how
+    many jobs and accounting transactions were submitted, how deep their backlog
+    is, the oldest pending instant, processing/retry counts, failed and
+    review-required outcomes, blocked/deferred batch transactions, both quotas
+    (jobs and transactions) and durable throttling events.
+
+    Developer-facing routes never expose this; it requires the SAME management
+    credential as key management and contains no transaction text, candidate
+    payload, prompt or key material — only counts and timestamps.
+    """
+    from sqlalchemy import text
+
+    from backend.auth import (
+        async_jobs,
+        batch_jobs,
+        queue_capacity,
+        tenant_rate_limit,
+        transaction_quota,
+    )
+    from backend.auth import api_keys as key_store
+
+    _authorize(request)
+
+    try:
+        SessionLocal = async_jobs._session_factory()
+        keys_table = key_store.api_key_model().__tablename__
+        with SessionLocal() as session:
+            job_rows = session.execute(
+                text(
+                    """SELECT tenant_id,
+                       count(*) FILTER (WHERE kind = 'inference') AS jobs,
+                       coalesce(sum(transaction_count) FILTER (WHERE kind = 'inference'), 0) AS transactions,
+                       count(*) FILTER (WHERE kind = 'inference' AND status = 'COMPLETED') AS completed,
+                       count(*) FILTER (WHERE kind = 'inference' AND status = 'FAILED') AS failed,
+                       count(*) FILTER (WHERE status = 'PROCESSING') AS processing,
+                       count(*) FILTER (WHERE status = 'RETRY_WAIT') AS retry_wait,
+                       count(*) FILTER (WHERE status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS pending,
+                       min(created_at) FILTER (WHERE status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS oldest_pending_at
+                    FROM platrixa_async_jobs GROUP BY tenant_id ORDER BY tenant_id"""
+                )
+            ).mappings().all()
+            batch_rows = session.execute(
+                text(
+                    """SELECT tenant_id,
+                       count(*) FILTER (WHERE status = 'VERIFIED') AS verified,
+                       count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review_required,
+                       count(*) FILTER (WHERE status = 'UNSUPPORTED') AS unsupported,
+                       count(*) FILTER (WHERE status = 'FAILED') AS failed,
+                       count(*) FILTER (WHERE status = 'BLOCKED') AS blocked,
+                       count(*) FILTER (WHERE status = 'DEFERRED') AS deferred,
+                       count(*) FILTER (WHERE status = 'PENDING') AS pending
+                    FROM platrixa_batch_transactions GROUP BY tenant_id ORDER BY tenant_id"""
+                )
+            ).mappings().all()
+            key_rows = session.execute(
+                text(
+                    "SELECT tenant_id, "
+                    " count(*) FILTER (WHERE status = 'ACTIVE') AS active, "
+                    " count(*) FILTER (WHERE status = 'REVOKED') AS revoked "
+                    f"FROM {keys_table} GROUP BY tenant_id ORDER BY tenant_id"
+                )
+            ).mappings().all()
+            job_quota_rows = session.execute(
+                text(
+                    "SELECT tenant_id, monthly_limit, current_month_usage, usage_month, is_active "
+                    "FROM platrixa_tenant_quotas ORDER BY tenant_id"
+                )
+            ).mappings().all()
+        rate_events = tenant_rate_limit.event_counts()
+        tx_quotas = {row["tenant_id"]: row for row in transaction_quota.usage_all()}
+        summary = queue_capacity.pending_summary()
+    except Exception as exc:
+        logger.warning("owner usage report unavailable: %s", type(exc).__name__)
+        return _store_error_response(request)
+
+    rate_limit, rate_window = tenant_rate_limit.limits()
+    bounds = batch_jobs.limits()
+
+    tenants: Dict[str, Dict[str, Any]] = {}
+
+    def _slot(tenant_id: str) -> Dict[str, Any]:
+        return tenants.setdefault(
+            tenant_id,
+            {
+                "tenant_id": tenant_id,
+                "keys": {"active": 0, "revoked": 0},
+                "jobs": {
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "processing": 0,
+                    "retry_wait": 0,
+                    "pending": 0,
+                    "oldest_pending_at": None,
+                },
+                "transactions": {
+                    "admitted_by_jobs": 0,
+                    "verified": 0,
+                    "review_required": 0,
+                    "unsupported": 0,
+                    "failed": 0,
+                    "blocked": 0,
+                    "deferred": 0,
+                    "pending": 0,
+                },
+                "quota": {"jobs": None, "transactions": None},
+                "rate_limit": {
+                    "rejected": 0,
+                    "last_rejected_at": None,
+                    "limit": rate_limit,
+                    "window_seconds": rate_window,
+                },
+            },
+        )
+
+    for row in job_rows:
+        slot = _slot(str(row["tenant_id"]))
+        slot["jobs"] = {
+            "total": int(row["jobs"]),
+            "completed": int(row["completed"]),
+            "failed": int(row["failed"]),
+            "processing": int(row["processing"]),
+            "retry_wait": int(row["retry_wait"]),
+            "pending": int(row["pending"]),
+            "oldest_pending_at": row["oldest_pending_at"].isoformat()
+            if row["oldest_pending_at"]
+            else None,
+        }
+        slot["transactions"]["admitted_by_jobs"] = int(row["transactions"])
+
+    for row in batch_rows:
+        slot = _slot(str(row["tenant_id"]))
+        for key in (
+            "verified",
+            "review_required",
+            "unsupported",
+            "failed",
+            "blocked",
+            "deferred",
+            "pending",
+        ):
+            slot["transactions"][key] = int(row[key])
+
+    for row in key_rows:
+        slot = _slot(str(row["tenant_id"]))
+        slot["keys"] = {"active": int(row["active"]), "revoked": int(row["revoked"])}
+
+    for row in job_quota_rows:
+        slot = _slot(str(row["tenant_id"]))
+        slot["quota"]["jobs"] = {
+            "monthly_limit": int(row["monthly_limit"]),
+            "used": int(row["current_month_usage"]),
+            "usage_month": row["usage_month"],
+            "active": bool(row["is_active"]),
+        }
+
+    for tenant_id, quota in tx_quotas.items():
+        _slot(tenant_id)["quota"]["transactions"] = {
+            "monthly_limit": int(quota["monthly_limit"]),
+            "used": int(quota["used"]),
+            "remaining": int(quota["remaining"]),
+            "usage_month": quota.get("usage_month"),
+        }
+
+    for tenant_id, events in rate_events.items():
+        slot = _slot(tenant_id)
+        slot["rate_limit"]["rejected"] = int(events["rejected"])
+        slot["rate_limit"]["last_rejected_at"] = events["last_rejected_at"]
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "tenants": [tenants[key] for key in sorted(tenants)],
+            "tenant_count": len(tenants),
+            "batch": {
+                "max_transactions": bounds["max_transactions"],
+                "max_bytes": bounds["max_bytes"],
+                "max_input_chars": bounds["max_input_chars"],
+                "budget_seconds": bounds["budget_seconds"],
+            },
+            "quota_units": {
+                "jobs": "admitted API jobs",
+                "transactions": "admitted accounting transactions",
+            },
+            "queue": summary,
+        },
+    )

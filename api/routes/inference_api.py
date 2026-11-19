@@ -58,7 +58,7 @@ import logging
 import re
 import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -81,7 +81,7 @@ from api.routes.developer import (
 )
 from api.schemas import DeveloperJobAcceptedResponse, KernelProcessRequest
 from backend.auth import admission as admission_boundary
-from backend.auth import async_jobs
+from backend.auth import async_jobs, batch_jobs, transaction_quota
 from backend.auth import idempotency as idempotency_store
 from backend.auth import queue_capacity
 
@@ -302,7 +302,8 @@ async def create_inference_job(request: Request) -> JSONResponse:
     # KernelProcessRequest is the SAME schema POST /v1/process uses, so the
     # raw-input length constraints (1..2000) cannot drift between the two.
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        body = json.loads(raw_body)
     except Exception:
         return _error_response(400, "REQUEST_MALFORMED", "request body could not be parsed as JSON", request_id=rid)
     if not isinstance(body, dict):
@@ -310,17 +311,36 @@ async def create_inference_job(request: Request) -> JSONResponse:
 
     from pydantic import ValidationError
 
-    try:
-        validated = KernelProcessRequest(**body)
-    except ValidationError:
-        # Field paths/types only — never the caller's raw values.
-        return _error_response(
-            400,
-            "REQUEST_MALFORMED",
-            "request body could not be parsed as a valid inference request (raw_input is required, 1-2000 characters)",
-            request_id=rid,
-        )
-    raw_input = validated.raw_input
+    # ---- contract selection: one transaction OR a bounded batch -----------
+    # The presence of "transactions" is the switch. The single-transaction
+    # body keeps its exact pre-batch meaning and constraints, so no existing
+    # client has to change.
+    mode = batch_jobs.MODE_SINGLE
+    transactions: List[batch_jobs.BatchTransaction] = []
+    if batch_jobs.is_batch_request(body):
+        try:
+            mode, transactions = batch_jobs.validate_request(
+                body, body_bytes=len(raw_body)
+            )
+        except batch_jobs.BatchValidationError as exc:
+            return _error_response(
+                400, exc.code, exc.message, request_id=rid, details=exc.details
+            )
+        # Not used by the batch path (each transaction keeps its own input);
+        # assigned so the type stays non-optional below.
+        raw_input = transactions[0].input
+    else:
+        try:
+            validated = KernelProcessRequest(**body)
+        except ValidationError:
+            # Field paths/types only — never the caller's raw values.
+            return _error_response(
+                400,
+                "REQUEST_MALFORMED",
+                "request body could not be parsed as a valid inference request (raw_input is required, 1-2000 characters)",
+                request_id=rid,
+            )
+        raw_input = validated.raw_input
 
     # ---- tenant scope (server-derived; authenticate-only, never charges) --
     tenant = _resolve_idempotency_tenant(request)
@@ -335,7 +355,15 @@ async def create_inference_job(request: Request) -> JSONResponse:
     # a conflicting reuse is rejected before any unit is spent.
     idem_key_raw = request.headers.get("idempotency-key")
     idem_key: Optional[str] = None
-    fingerprint = {"raw_input": raw_input}
+    # Batch idempotency is per BATCH: the fingerprint covers the mode and every
+    # (transaction_id, input) pair, so the same key with a changed batch is a
+    # 409 (never a silently different job) and an identical replay returns the
+    # original job reference without charging either quota again.
+    fingerprint = (
+        {"raw_input": raw_input}
+        if mode == batch_jobs.MODE_SINGLE
+        else batch_jobs.job_payload(mode, transactions)
+    )
     if idem_key_raw is not None:
         ok, key_code = idempotency_store.validate_key(idem_key_raw)
         if not ok:
@@ -365,6 +393,11 @@ async def create_inference_job(request: Request) -> JSONResponse:
                     "status_url": status_url,
                     "result_url": result_url,
                     "created_at": data_part.get("created_at") or "",
+                    **{
+                        key: data_part[key]
+                        for key in ("mode", "transaction_count", "batch_url")
+                        if key in data_part
+                    },
                 },
                 headers={
                     "Idempotent-Replayed": "true",
@@ -405,13 +438,53 @@ async def create_inference_job(request: Request) -> JSONResponse:
         raise _gate_http_exception(reason)
     admitted_ctx = (adm.tenant_id, adm.key_prefix)
 
+    # ---- ACCOUNTING-TRANSACTION quota (a SEPARATE, deterministic unit) ----
+    # One job admits N transactions, so charging only the per-job quota would
+    # let a developer buy N units of device inference for one unit of quota.
+    # Charged exactly once here, after the idempotency claim (a replay never
+    # reaches this line) and before the job row exists.
+    transaction_units = len(transactions) if mode != batch_jobs.MODE_SINGLE else 1
+    try:
+        transaction_quota.reserve(tenant, transaction_units)
+    except transaction_quota.TransactionQuotaExceeded as exc:
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        response = _error_response(
+            429,
+            transaction_quota.TRANSACTION_QUOTA_EXCEEDED,
+            "this tenant's monthly accounting-transaction allowance is exhausted",
+            request_id=rid,
+            details={"limit": exc.limit, "used": exc.used, "requested": exc.requested},
+        )
+        response.headers["X-Transaction-Quota-Limit"] = str(exc.limit)
+        response.headers["X-Transaction-Quota-Remaining"] = str(exc.remaining)
+        return response
+    except async_jobs.AsyncStoreUnavailableError:
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; request not admitted")
+
     # ---- durable inference job (BEFORE any inference happens) -------------
+    create_kwargs: Dict[str, Any] = {}
+    if mode != batch_jobs.MODE_SINGLE:
+        create_kwargs["batch"] = {
+            "mode": mode,
+            "transactions": [
+                {"transaction_id": tx.transaction_id, "input": tx.input}
+                for tx in transactions
+            ],
+        }
     try:
         record = async_jobs.create_job(
             tenant,
-            {"raw_input": raw_input},
+            (
+                {"raw_input": raw_input}
+                if mode == batch_jobs.MODE_SINGLE
+                else batch_jobs.job_payload(mode, transactions)
+            ),
             request_id=rid or None,
             kind=async_jobs.JOB_KIND_INFERENCE,
+            **create_kwargs,
         )
     except queue_capacity.QueueCapacityExceeded as exc:
         # Queue full: the admission transaction rolled back, so no job row and
@@ -419,12 +492,14 @@ async def create_inference_job(request: Request) -> JSONResponse:
         # client can retry the same key once capacity frees up.
         if idem_key:
             idempotency_store.release(idem_key, tenant)
+        _release_transaction_units(tenant, transaction_units)
         _log("/v1/inference-jobs", request_id=rid, status=None,
              duration_ms=int((time.perf_counter() - started) * 1000), error=exc.code)
         return _async_not_ready(exc.code, rid, "pending queue capacity exhausted; retry later")
     except async_jobs.AsyncStoreUnavailableError:
         if idem_key:
             idempotency_store.release(idem_key, tenant)
+        _release_transaction_units(tenant, transaction_units)
         return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; request not admitted")
 
     # NOTE: the in-process document worker is deliberately NOT started here.
@@ -445,6 +520,10 @@ async def create_inference_job(request: Request) -> JSONResponse:
         "result_url": result_url,
         "created_at": created_at,
     }
+    if mode != batch_jobs.MODE_SINGLE:
+        accepted["mode"] = mode
+        accepted["transaction_count"] = len(transactions)
+        accepted["batch_url"] = f"/v1/results/{record.result_id}/transactions"
 
     if idem_key:
         try:
@@ -577,6 +656,91 @@ async def claim_inference_job(request: Request) -> JSONResponse:
         except Exception:
             payload = {}
 
+    lease_block = {
+        "owner": record.lease_owner,
+        "generation": int(record.lease_generation),
+        "lease_seconds": lease_seconds,
+        # Renew this often (the documented renew cadence); do not
+        # wait for the lease to approach expiry.
+        "renew_every_seconds": max(
+            1, int(lease_seconds / async_jobs.LEASE_RENEW_FRACTION)
+        ),
+        "renew_url": f"/v1/worker/jobs/{record.job_id}/lease",
+        "result_url": f"/v1/worker/jobs/{record.job_id}/result",
+    }
+
+    mode = str(
+        getattr(record, "batch_mode", batch_jobs.MODE_SINGLE) or batch_jobs.MODE_SINGLE
+    )
+
+    if mode != batch_jobs.MODE_SINGLE:
+        # Batch claim: only the transactions that are still PENDING are
+        # returned, so a reclaimed job resumes instead of re-running work whose
+        # outcome is already committed. Inputs come from the SERVER's stored
+        # payload, never from the claim request.
+        try:
+            rows = batch_jobs.rows_for_job(tenant, record.job_id)
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", None, "async store unavailable")
+        stored = batch_jobs.stored_transactions(payload)
+        pending = batch_jobs.pending_rows(rows)
+        claimed: List[Dict[str, Any]] = []
+        for row in pending:
+            item = stored.get(row.transaction_id) or {}
+            tx_input = item.get("input")
+            if not isinstance(tx_input, str) or not tx_input.strip():
+                _fail_inference_job(
+                    record, "INPUT_MISSING", "stored batch transaction has no input"
+                )
+                return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=None)
+            claimed.append(
+                {
+                    "transaction_id": row.transaction_id,
+                    "batch_index": row.batch_index,
+                    "input": tx_input,
+                }
+            )
+        if not claimed:
+            # Every transaction is already final; the next submission will
+            # finalize the job. Never hand back an empty work unit silently.
+            _fail_inference_job(
+                record, "INPUT_MISSING", "batch has no pending transaction"
+            )
+            return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=None)
+
+        prior_state: Optional[Dict[str, Any]] = None
+        for row in rows:
+            if not row.state_summary:
+                continue
+            try:
+                parsed_summary = json.loads(row.state_summary)
+            except Exception:
+                parsed_summary = None
+            if isinstance(parsed_summary, dict):
+                prior_state = parsed_summary
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "api_version": API_VERSION,
+                "status": "CLAIMED",
+                "job": {
+                    "job_id": record.job_id,
+                    "request_id": record.request_id,
+                    "mode": mode,
+                    "transaction_count": int(getattr(record, "transaction_count", len(claimed)) or len(claimed)),
+                    "transactions": claimed,
+                    "batch_budget_seconds": float(batch_jobs.limits()["budget_seconds"]),
+                    "transaction_result_url": (
+                        f"/v1/worker/jobs/{record.job_id}/transactions/{{transaction_id}}/result"
+                    ),
+                    "prior_state": prior_state,
+                    "prior_state_hash": batch_jobs.last_state_hash(rows),
+                    "lease": lease_block,
+                },
+            },
+        )
+
     raw_input = payload.get("raw_input")
     if not isinstance(raw_input, str) or not raw_input.strip():
         # Defensive: a stored inference job without raw_input cannot be
@@ -594,18 +758,7 @@ async def claim_inference_job(request: Request) -> JSONResponse:
                 "job_id": record.job_id,
                 "request_id": record.request_id,
                 "raw_input": raw_input,
-                "lease": {
-                    "owner": record.lease_owner,
-                    "generation": int(record.lease_generation),
-                    "lease_seconds": lease_seconds,
-                    # Renew this often (the documented renew cadence); do not
-                    # wait for the lease to approach expiry.
-                    "renew_every_seconds": max(
-                        1, int(lease_seconds / async_jobs.LEASE_RENEW_FRACTION)
-                    ),
-                    "renew_url": f"/v1/worker/jobs/{record.job_id}/lease",
-                    "result_url": f"/v1/worker/jobs/{record.job_id}/result",
-                },
+                "lease": lease_block,
             },
         },
     )
@@ -818,10 +971,6 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
         return _error_response(400, "REQUEST_MALFORMED", "lease proof requires owner and generation", request_id=rid)
     owner, generation = proof
 
-    if "bridge_body" not in body:
-        return _error_response(400, "REQUEST_MALFORMED", "bridge_body is required", request_id=rid)
-    bridge_body = body.get("bridge_body")
-
     tenant = _resolve_idempotency_tenant(request)
     if tenant is None:
         return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
@@ -834,6 +983,16 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
     # job are all the same non-disclosing 404.
     if record is None or record.kind != async_jobs.JOB_KIND_INFERENCE:
         return _error_response(404, "JOB_NOT_FOUND", "no such job for this tenant", request_id=rid)
+
+    # ---- batch jobs use the batch submission contract ---------------------
+    if str(
+        getattr(record, "batch_mode", batch_jobs.MODE_SINGLE) or batch_jobs.MODE_SINGLE
+    ) != batch_jobs.MODE_SINGLE:
+        return await _submit_batch_job(record, request, body, owner, generation, rid)
+
+    if "bridge_body" not in body:
+        return _error_response(400, "REQUEST_MALFORMED", "bridge_body is required", request_id=rid)
+    bridge_body = body.get("bridge_body")
 
     # ---- duplicate submission: the STORED result, no kernel, no overwrite --
     if record.status == async_jobs.STATUS_COMPLETED and record.result_json:
@@ -880,54 +1039,16 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
         _fail_inference_job(record, "INPUT_MISSING", "stored inference job has no raw_input")
         return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=rid)
 
-    # ---- device-reported identity (labelled untrusted downstream) ---------
-    # Lazy import: keeps the model/provider import graph out of the API
-    # process unless a device result is actually submitted (see module note).
-    from backend.model_provider.local_bridge import (
-        device_reported_model_identity,
-        interpretation_from_bridge_body,
-    )
-
-    model_id, provider_revision = device_reported_model_identity(bridge_body)
-
-    def _interpret():
-        """Parse the device candidate through the SHARED bridge contract.
-
-        Raising here is intentional: the Kernel's existing exception mapping
-        turns MalformedOutputError into VALIDATION_FAILED and
-        ForbiddenAccountingFieldError into FORBIDDEN_OUTPUT, so a bad device
-        candidate keeps the engine's real terminal state instead of a
-        transport-invented one.
-        """
-        return interpretation_from_bridge_body(
-            bridge_body,
-            raw_input,
-            model_id=model_id,
-            provider_revision=provider_revision,
-            generated_profile={
-                "source": "device-bridge-submission",
-                "artifact_identity": provider_revision,
-                "lease_owner": owner,
-                "lease_generation": generation,
-            },
-        )
-
-    try:
-        client = _get_client(request)
-        kernel = client.kernel()
-    except Exception:
-        logger.warning("inference result: service configuration invalid")
-        return _error_response(503, "PROVIDER_UNAVAILABLE", "service configuration invalid", request_id=rid)
-
-    # process_from_source performs NO provider resolution and NO inference: the
-    # in-process model is never loaded or called on this path.
-    kernel_result = kernel.process_from_source(
+    content, transport_status, failure = _run_kernel_candidate(
+        request,
+        record,
         raw_input,
-        _interpret,
-        request_id=rid or record.request_id or None,
+        bridge_body,
+        rid,
+        owner=owner,
+        generation=generation,
+        started=started,
     )
-
-    engine_status = kernel_result.status
 
     # MODEL_UNAVAILABLE on THIS path means the server could not validate the
     # submission at all: the device candidate parsed and entered the pipeline,
@@ -937,7 +1058,7 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
     # (async_jobs.classify_failure), recorded with the fenced fail path and
     # bounded by the job's attempt budget — never committed as a terminal
     # result, and never presented to the client as an authoritative outcome.
-    if engine_status == "MODEL_UNAVAILABLE":
+    if failure == "MODEL_UNAVAILABLE":
         _fail_inference_job(
             record, "MODEL_UNAVAILABLE", "the submission could not be validated on the server"
         )
@@ -947,31 +1068,9 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
             "the submission could not be validated; retry later",
             request_id=rid,
         )
-
-    transport_status = _transport_status_for(engine_status)
-    content = build_process_result(
-        request_id=getattr(kernel_result, "request_id", None),
-        engine_status=engine_status,
-        engine_status_label=getattr(kernel_result, "status_label", "") or engine_status,
-        next_action=getattr(kernel_result, "next_action", None),
-        issues=list(getattr(kernel_result, "issues", None) or []),
-        grounding_issues=list(getattr(kernel_result, "grounding_issues", None) or []),
-        rule_evidence=list(getattr(kernel_result, "rule_evidence", None) or []),
-        # KernelResult owns ``interpretation_candidate`` (the 18-field dict) and
-        # ``accounting_result``; the projections are taken from THOSE fields so
-        # the envelope carries the same substance the synchronous path does.
-        interpretation=_safe_candidate(getattr(kernel_result, "interpretation_candidate", None)),
-        accounting=_safe_accounting(getattr(kernel_result, "accounting_result", None)),
-        duration_ms=int((time.perf_counter() - started) * 1000),
-    )
-    # ADDITIVE provenance for this route only: the kernel's execution-evidence
-    # chain (recorded == actually executed). No existing 5D field is changed —
-    # the envelope's own ``evidence`` key keeps its document-evidence contract.
-    evidence = getattr(kernel_result, "evidence", None)
-    if isinstance(content.get("metadata"), dict):
-        content["metadata"]["execution_evidence"] = (
-            evidence.to_dict() if evidence is not None and hasattr(evidence, "to_dict") else None
-        )
+    if content is None or transport_status is None:
+        logger.warning("inference result: service configuration invalid")
+        return _error_response(503, "PROVIDER_UNAVAILABLE", "service configuration invalid", request_id=rid)
 
     # ---- fenced commit: result + terminal status in ONE statement ---------
     try:
@@ -1054,6 +1153,11 @@ async def submit_inference_result(job_id: str, request: Request) -> JSONResponse
 # server's vocabulary (backend/auth/async_jobs.py PERMANENT/RETRYABLE sets), so
 # `classify_failure` — not the caller — decides retryability. An unknown code is
 # a malformed request, never an invented failure class.
+#: The only release reasons a worker may report. A closed vocabulary keeps the
+#: release path from becoming a free-text channel, and none of these can affect
+#: a result: the transition only returns the row to QUEUED.
+WORKER_RELEASE_REASONS = frozenset({"SLOT_BUSY", "SHUTDOWN", "LEASE_YIELD"})
+
 WORKER_REPORTABLE_FAILURE_CODES = frozenset({
     "MODEL_UNAVAILABLE",
     "PROVIDER_UNAVAILABLE",
@@ -1274,6 +1378,113 @@ async def report_inference_failure(job_id: str, request: Request) -> JSONRespons
     )
 
 
+@router.post(
+    "/v1/worker/jobs/{job_id}/release",
+    dependencies=[Depends(_tenant_api_key_guard)],
+    responses={
+        200: {"description": "The claim was returned to the queue (attempt budget refunded), or the job was already final."},
+        400: {"description": "Malformed release request (missing lease proof or unsupported reason)."},
+        404: {"description": "JOB_NOT_FOUND — no such inference job for this tenant (non-disclosing)."},
+        409: {"description": "LEASE_LOST — the caller no longer owns the lease; nothing was changed."},
+        503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
+    },
+)
+async def release_inference_claim(job_id: str, request: Request) -> JSONResponse:
+    """Return a claimed job to the queue because the DEVICE could not run it.
+
+    The device-wide slot limiter is shared by every tenant worker, so a claim
+    can legitimately arrive while the phone is busy. This endpoint exists so
+    that situation costs NOTHING: the job goes back to ``QUEUED``, its lease is
+    cleared, and the attempt the claim consumed is refunded. Without it a busy
+    phone would burn a job's retry budget on another tenant's generation.
+
+    It can never write a result, change a status to a terminal one, or act on a
+    job it no longer owns (the write is fenced on owner + generation + an
+    unexpired lease).
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    if not async_jobs.async_configured():
+        return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "this deployment has no durable async store configured")
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response(400, "REQUEST_MALFORMED", "request body could not be parsed as JSON", request_id=rid)
+    if not isinstance(body, dict):
+        return _error_response(400, "REQUEST_MALFORMED", "request body must be a JSON object", request_id=rid)
+
+    proof = _lease_proof(body)
+    if proof is None:
+        return _error_response(400, "REQUEST_MALFORMED", "lease proof requires owner and generation", request_id=rid)
+    owner, generation = proof
+    reason = body.get("reason")
+    if reason is not None and reason not in WORKER_RELEASE_REASONS:
+        return _error_response(
+            400,
+            "REQUEST_MALFORMED",
+            "reason must be one of the supported release reasons",
+            request_id=rid,
+        )
+
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    try:
+        record = async_jobs.get_job(tenant, job_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    if record is None or record.kind != async_jobs.JOB_KIND_INFERENCE:
+        return _error_response(404, "JOB_NOT_FOUND", "no such job for this tenant", request_id=rid)
+
+    if record.status != async_jobs.STATUS_PROCESSING:
+        # Idempotent: the job already left PROCESSING (maybe another attempt is
+        # running). Report the stored state instead of rewriting it.
+        return JSONResponse(
+            status_code=200,
+            content={
+                "api_version": API_VERSION,
+                "job_id": job_id,
+                "status": record.status,
+                "released": False,
+                "attempts": int(record.attempt_count or 0),
+                "max_attempts": int(record.max_attempts or 0),
+            },
+        )
+    if (record.lease_owner or "") != owner or int(record.lease_generation or 0) != generation:
+        return _error_response(
+            409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=rid
+        )
+
+    try:
+        released = async_jobs.release_claim(
+            job_id, lease_owner=owner, lease_generation=generation
+        )
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; claim not released")
+    if not released:
+        return _batch_lease_refusal(record, rid, owner, generation)
+
+    _log(
+        "/v1/inference-jobs(worker-release)",
+        request_id=rid,
+        status="QUEUED",
+        duration_ms=0,
+        error=None,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "job_id": job_id,
+            "status": async_jobs.STATUS_QUEUED,
+            "released": True,
+            "reason": reason,
+            "attempts": int(record.attempt_count or 0),
+            "max_attempts": int(record.max_attempts or 0),
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -1313,3 +1524,958 @@ def _fail_inference_job(record: async_jobs.JobRecord, code: str, message: str) -
         )
     except async_jobs.AsyncStoreUnavailableError:
         logger.warning("inference job %s failure store write failed", record.job_id[:14])
+
+
+# ---------------------------------------------------------------------------
+# Multi-transaction batch pipeline
+# ---------------------------------------------------------------------------
+
+#: The per-transaction states the kernel can produce. Anything else (a
+#: transport-level error) is recorded as FAILED with its own error code, so an
+#: unexpected value can never masquerade as a good outcome.
+_TX_VOCAB = frozenset(
+    {
+        batch_jobs.TX_VERIFIED,
+        batch_jobs.TX_REVIEW_REQUIRED,
+        batch_jobs.TX_UNSUPPORTED,
+        batch_jobs.TX_INVALID_INPUT,
+        batch_jobs.TX_FAILED,
+    }
+)
+
+
+def _tx_status(api_status: Optional[str]) -> str:
+    return api_status if api_status in _TX_VOCAB else batch_jobs.TX_FAILED
+
+
+def _release_transaction_units(tenant: str, units: int) -> None:
+    """Best-effort refund for a job that was never created.
+
+    The charge and the job row are separate statements (the quota lives in its
+    own table), so this is the ONE path that gives units back: the create failed,
+    therefore no job exists to spend them. A refund failure is logged and left
+    charged — never silently swallowed into "the job exists".
+    """
+    if int(units) <= 0:
+        return
+    try:
+        transaction_quota.release(tenant, int(units))
+    except Exception as exc:
+        logger.warning(
+            "transaction quota release failed (%s); the units stay charged",
+            type(exc).__name__,
+        )
+
+
+def _run_kernel_candidate(
+    request: Request,
+    record: async_jobs.JobRecord,
+    raw_input: str,
+    bridge_body: Any,
+    rid: Optional[str],
+    *,
+    owner: str,
+    generation: int,
+    started: float,
+) -> Tuple[Optional[Dict[str, Any]], Optional[int], Optional[str]]:
+    """Validate ONE device candidate through the shared deterministic pipeline.
+
+    Returns ``(envelope, transport_status, failure)`` where ``failure`` is
+    ``None`` on success, ``"MODEL_UNAVAILABLE"`` when the server could not
+    validate the submission at all (outcome UNKNOWN, retryable) and
+    ``"PROVIDER_UNAVAILABLE"`` when the service is misconfigured.
+
+    This is the SAME pipeline the single-transaction route uses, extracted so a
+    batch transaction cannot get a different (weaker) validator. The model's
+    suggestion is never authority: ``process_from_source`` clamps a
+    model-suggested VERIFIED, applies grounding and capability rules, and only
+    the kernel decides the terminal state.
+    """
+    # Lazy import: keeps the model/provider import graph out of the API process
+    # unless a device result is actually submitted (see module note).
+    from backend.model_provider.local_bridge import (
+        device_reported_model_identity,
+        interpretation_from_bridge_body,
+    )
+
+    model_id, provider_revision = device_reported_model_identity(bridge_body)
+
+    def _interpret():
+        """Parse the device candidate through the SHARED bridge contract.
+
+        Raising here is intentional: the Kernel's existing exception mapping
+        turns MalformedOutputError into VALIDATION_FAILED and
+        ForbiddenAccountingFieldError into FORBIDDEN_OUTPUT, so a bad device
+        candidate keeps the engine's real terminal state instead of a
+        transport-invented one.
+        """
+        return interpretation_from_bridge_body(
+            bridge_body,
+            raw_input,
+            model_id=model_id,
+            provider_revision=provider_revision,
+            generated_profile={
+                "source": "device-bridge-submission",
+                "artifact_identity": provider_revision,
+                "lease_owner": owner,
+                "lease_generation": generation,
+            },
+        )
+
+    try:
+        client = _get_client(request)
+        kernel = client.kernel()
+    except Exception:
+        logger.warning("inference result: service configuration invalid")
+        return None, None, "PROVIDER_UNAVAILABLE"
+
+    # process_from_source performs NO provider resolution and NO inference: the
+    # in-process model is never loaded or called on this path.
+    kernel_result = kernel.process_from_source(
+        raw_input,
+        _interpret,
+        request_id=rid or record.request_id or None,
+    )
+
+    engine_status = kernel_result.status
+    if engine_status == "MODEL_UNAVAILABLE":
+        return None, None, "MODEL_UNAVAILABLE"
+
+    transport_status = _transport_status_for(engine_status)
+    content = build_process_result(
+        request_id=getattr(kernel_result, "request_id", None),
+        engine_status=engine_status,
+        engine_status_label=getattr(kernel_result, "status_label", "") or engine_status,
+        next_action=getattr(kernel_result, "next_action", None),
+        issues=list(getattr(kernel_result, "issues", None) or []),
+        grounding_issues=list(getattr(kernel_result, "grounding_issues", None) or []),
+        rule_evidence=list(getattr(kernel_result, "rule_evidence", None) or []),
+        # KernelResult owns ``interpretation_candidate`` (the 18-field dict) and
+        # ``accounting_result``; the projections are taken from THOSE fields so
+        # the envelope carries the same substance the synchronous path does.
+        interpretation=_safe_candidate(getattr(kernel_result, "interpretation_candidate", None)),
+        accounting=_safe_accounting(getattr(kernel_result, "accounting_result", None)),
+        duration_ms=int((time.perf_counter() - started) * 1000),
+    )
+    # ADDITIVE provenance: the kernel's execution-evidence chain (recorded ==
+    # actually executed). No existing 5D field is changed.
+    evidence = getattr(kernel_result, "evidence", None)
+    if isinstance(content.get("metadata"), dict):
+        content["metadata"]["execution_evidence"] = (
+            evidence.to_dict()
+            if evidence is not None and hasattr(evidence, "to_dict")
+            else None
+        )
+    return content, transport_status, None
+
+
+def _worker_failure_envelope(
+    record: async_jobs.JobRecord, transaction_id: str, code: str, message: str
+) -> Tuple[str, Dict[str, Any]]:
+    """The stored per-transaction envelope for a worker-reported failure.
+
+    It records a DIAGNOSTIC, never an accounting outcome: no accounting, no
+    interpretation, no authoritative result. Retryability comes from the
+    server's existing ``classify_failure`` vocabulary, never from the worker.
+    """
+    from api.status import LABEL_BY_PUBLIC_STATUS, public_status_for_error_code
+
+    api_status = public_status_for_error_code(code)
+    retryable = async_jobs.classify_failure(error_code=code, api_status=api_status)
+    return api_status, {
+        "api_version": API_VERSION,
+        "request_id": record.request_id,
+        "status": api_status,
+        "api_status": api_status,
+        "api_status_label": LABEL_BY_PUBLIC_STATUS.get(api_status, ""),
+        "engine_status": None,
+        "success": False,
+        "retryable": retryable,
+        "reason_codes": [code],
+        "issues": [],
+        "grounding_issues": [],
+        "interpretation": None,
+        "accounting": None,
+        "error": {"code": code, "message": message, "request_id": record.request_id},
+        "metadata": {
+            "authority": "worker-reported-failure",
+            "transaction_id": transaction_id,
+        },
+    }
+
+
+def _batch_lease_refusal(
+    record: async_jobs.JobRecord, rid: Optional[str], owner: str, generation: int
+) -> JSONResponse:
+    """Name WHY a batch write was refused; nothing was stored."""
+    try:
+        reason = async_jobs.lease_commit_refusal_reason(
+            record.job_id, lease_owner=owner, lease_generation=generation
+        )
+    except async_jobs.AsyncStoreUnavailableError:
+        reason = None
+    if reason == "EXPIRED":
+        return _error_response(
+            409,
+            "LEASE_EXPIRED",
+            "this worker's lease expired before the batch commit point; nothing was stored",
+            request_id=rid,
+        )
+    return _error_response(
+        409,
+        "LEASE_LOST",
+        "the lease was lost before the batch commit point; nothing was stored",
+        request_id=rid,
+    )
+
+
+def _load_batch_context(
+    tenant: str, record: async_jobs.JobRecord
+) -> Tuple[Dict[str, Dict[str, Any]], List[batch_jobs.BatchTransactionRecord]]:
+    """The SERVER's stored inputs plus the current transaction rows."""
+    payload_json = async_jobs.get_job_request_json(tenant, record.job_id)
+    stored: Dict[str, Dict[str, Any]] = {}
+    if payload_json:
+        try:
+            parsed = json.loads(payload_json)
+            if isinstance(parsed, dict):
+                stored = batch_jobs.stored_transactions(parsed)
+        except Exception:
+            stored = {}
+    return stored, batch_jobs.rows_for_job(tenant, record.job_id)
+
+
+async def _submit_batch_job(
+    record: async_jobs.JobRecord,
+    request: Request,
+    body: Dict[str, Any],
+    owner: str,
+    generation: int,
+    rid: Optional[str],
+) -> JSONResponse:
+    """INDEPENDENT batch submission: every candidate in ONE fenced call.
+
+    Partial outcomes are explicit: each transaction is validated on its own and
+    stored on its own row, so one failure never rewrites another's outcome.
+    Transactions the worker did not submit (budget exhausted, or an explicit
+    ``deferred: true``) are recorded as DEFERRED with ``BATCH_BUDGET_EXHAUSTED``
+    — a partial outcome, not a failure verdict.
+    """
+    tenant = record.tenant_id
+    mode = str(
+        getattr(record, "batch_mode", batch_jobs.MODE_SINGLE) or batch_jobs.MODE_SINGLE
+    )
+    if mode == batch_jobs.MODE_ORDERED:
+        return _error_response(
+            400,
+            "BATCH_MODE_ORDERED_REQUIRES_TRANSACTION_SUBMISSION",
+            "an ordered batch submits one transaction at a time to "
+            "/v1/worker/jobs/{job_id}/transactions/{transaction_id}/result",
+            request_id=rid,
+        )
+
+    # ---- replay: the stored authoritative envelope, no kernel -------------
+    if record.status == async_jobs.STATUS_COMPLETED and record.result_json:
+        try:
+            stored_envelope = json.loads(record.result_json)
+        except Exception:
+            stored_envelope = None
+        if isinstance(stored_envelope, dict):
+            return JSONResponse(
+                status_code=record.http_status or 200,
+                content=stored_envelope,
+                headers={"Idempotent-Replayed": "true"},
+            )
+
+    if record.status != async_jobs.STATUS_PROCESSING:
+        return _error_response(
+            409, "LEASE_LOST", "the job is not currently leased for processing", request_id=rid
+        )
+    if (record.lease_owner or "") != owner or int(record.lease_generation or 0) != generation:
+        return _error_response(
+            409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=rid
+        )
+
+    submitted = body.get("transactions")
+    if not isinstance(submitted, list) or not submitted:
+        return _error_response(
+            400, "REQUEST_MALFORMED", "transactions must be a non-empty list", request_id=rid
+        )
+
+    try:
+        stored, rows = _load_batch_context(tenant, record)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    by_id = {row.transaction_id: row for row in rows}
+
+    # ---- validate the WHOLE submission before running any kernel ---------
+    normalized: List[Tuple[str, Dict[str, Any]]] = []
+    seen: set = set()
+    for index, item in enumerate(submitted):
+        if not isinstance(item, dict):
+            return _error_response(
+                400,
+                "BATCH_TRANSACTION_INVALID",
+                f"transactions[{index}] must be an object",
+                request_id=rid,
+                details={"index": index},
+            )
+        tx_id = item.get("transaction_id")
+        if not isinstance(tx_id, str) or tx_id not in by_id:
+            return _error_response(
+                400,
+                batch_jobs.BATCH_UNKNOWN_TRANSACTION,
+                f"transactions[{index}].transaction_id is not part of this batch",
+                request_id=rid,
+                details={"index": index},
+            )
+        if tx_id in seen:
+            return _error_response(
+                400,
+                "BATCH_DUPLICATE_TRANSACTION_ID",
+                "a transaction may be submitted at most once per batch",
+                request_id=rid,
+                details={"duplicate_transaction_ids": [tx_id]},
+            )
+        seen.add(tx_id)
+        normalized.append((tx_id, item))
+
+    # ---- per-transaction validation + fenced write -----------------------
+    for tx_id, item in normalized:
+        row = by_id[tx_id]
+        if row.status != batch_jobs.TX_PENDING:
+            # Already final: a processed outcome is NEVER overwritten (this is
+            # what makes a reclaimed job resume instead of re-deciding).
+            continue
+        if item.get("deferred") is True:
+            continue
+
+        error = item.get("error")
+        if error is not None:
+            code = error.get("code") if isinstance(error, dict) else None
+            if not isinstance(code, str) or code not in WORKER_REPORTABLE_FAILURE_CODES:
+                return _error_response(
+                    400,
+                    "REQUEST_MALFORMED",
+                    "error.code must be one of the supported worker failure codes",
+                    request_id=rid,
+                    details={"transaction_id": tx_id},
+                )
+            message = " ".join(str(error.get("message") or "").split())[
+                :MAX_FAILURE_MESSAGE_CHARS
+            ]
+            api_status, failure_envelope = _worker_failure_envelope(
+                record, tx_id, code, message
+            )
+            accepted_row = batch_jobs.record_transaction(
+                tenant_id=tenant,
+                job_id=record.job_id,
+                transaction_id=tx_id,
+                status=_tx_status(api_status),
+                api_status=api_status,
+                engine_status=None,
+                error_code=code,
+                envelope=failure_envelope,
+                http_status=503 if failure_envelope.get("retryable") else 400,
+                lease_owner=owner,
+                lease_generation=generation,
+            )
+            if not accepted_row:
+                return _batch_lease_refusal(record, rid, owner, generation)
+            continue
+
+        bridge_body = item.get("bridge_body")
+        if not isinstance(bridge_body, dict):
+            return _error_response(
+                400,
+                "REQUEST_MALFORMED",
+                "each transaction needs bridge_body or error",
+                request_id=rid,
+                details={"transaction_id": tx_id},
+            )
+
+        tx_input = (stored.get(tx_id) or {}).get("input")
+        if not isinstance(tx_input, str) or not tx_input.strip():
+            _fail_inference_job(
+                record, "INPUT_MISSING", "stored batch transaction has no input"
+            )
+            return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=rid)
+
+        content, transport_status, failure = _run_kernel_candidate(
+            request,
+            record,
+            tx_input,
+            bridge_body,
+            rid,
+            owner=owner,
+            generation=generation,
+            started=time.perf_counter(),
+        )
+        if failure == "MODEL_UNAVAILABLE":
+            # Outcome UNKNOWN for this submission: record NO per-transaction
+            # verdict, fail the job through the existing bounded retry path.
+            _fail_inference_job(
+                record,
+                "MODEL_UNAVAILABLE",
+                "a batch transaction could not be validated on the server",
+            )
+            return _error_response(
+                503,
+                "MODEL_UNAVAILABLE",
+                "the submission could not be validated; retry later",
+                request_id=rid,
+            )
+        if content is None or transport_status is None:
+            logger.warning("inference result: service configuration invalid")
+            return _error_response(
+                503, "PROVIDER_UNAVAILABLE", "service configuration invalid", request_id=rid
+            )
+
+        api_status = content.get("api_status")
+        reason_codes = content.get("reason_codes") or []
+        error_code = reason_codes[0] if isinstance(reason_codes, list) and reason_codes else None
+        # INDEPENDENT mode has no accounting sequence, so no state chain is
+        # recorded: a hash fed to no one would imply an ordering guarantee the
+        # mode does not make.
+        accepted_row = batch_jobs.record_transaction(
+            tenant_id=tenant,
+            job_id=record.job_id,
+            transaction_id=tx_id,
+            status=_tx_status(api_status),
+            api_status=api_status,
+            engine_status=content.get("status"),
+            error_code=None if _tx_status(api_status) == batch_jobs.TX_VERIFIED else error_code,
+            envelope=content,
+            http_status=transport_status,
+            prior_state_hash=None,
+            state_hash=None,
+            state_summary=None,
+            lease_owner=owner,
+            lease_generation=generation,
+        )
+        if not accepted_row:
+            return _batch_lease_refusal(record, rid, owner, generation)
+
+    # ---- anything the worker did not submit is DEFERRED, explicitly ------
+    try:
+        remaining = batch_jobs.pending_rows(batch_jobs.rows_for_job(tenant, record.job_id))
+        if remaining:
+            batch_jobs.mark_pending(
+                tenant_id=tenant,
+                job_id=record.job_id,
+                from_index=remaining[0].batch_index,
+                status=batch_jobs.TX_DEFERRED,
+                error_code=batch_jobs.DEFERRED_CODE,
+                lease_owner=owner,
+                lease_generation=generation,
+            )
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    try:
+        accepted, envelope = batch_jobs.finalize(
+            record, lease_owner=owner, lease_generation=generation
+        )
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
+    if not accepted or envelope is None:
+        return _batch_lease_refusal(record, rid, owner, generation)
+
+    _log(
+        "/v1/inference-jobs(worker-batch)",
+        request_id=rid,
+        status=envelope.get("api_status"),
+        duration_ms=0,
+        error=None,
+    )
+    return JSONResponse(status_code=200, content=envelope)
+
+
+def _ordered_state_response(
+    record: async_jobs.JobRecord,
+    rows: List[batch_jobs.BatchTransactionRecord],
+    current: batch_jobs.BatchTransactionRecord,
+    rid: Optional[str],
+) -> JSONResponse:
+    """The interim answer for an ordered chain that has more work to do."""
+    nxt = batch_jobs.next_pending(rows)
+    prior_state: Optional[Dict[str, Any]] = None
+    if current.state_summary:
+        try:
+            parsed = json.loads(current.state_summary)
+            if isinstance(parsed, dict):
+                prior_state = parsed
+        except Exception:
+            prior_state = None
+    processed = len([row for row in rows if row.status in batch_jobs.TX_PROCESSED])
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "job_id": record.job_id,
+            "mode": batch_jobs.MODE_ORDERED,
+            "transaction": batch_jobs.transaction_summary(current, record.result_id),
+            "next": None
+            if nxt is None
+            else {
+                "transaction_id": nxt.transaction_id,
+                "batch_index": nxt.batch_index,
+                "prior_state_hash": current.state_hash,
+                "prior_state": prior_state,
+            },
+            "batch": {
+                "total_transactions": len(rows),
+                "processed_transactions": processed,
+                "remaining_transactions": len(rows) - processed,
+            },
+        },
+    )
+
+
+@router.post(
+    "/v1/worker/jobs/{job_id}/transactions/{transaction_id}/result",
+    dependencies=[Depends(_tenant_api_key_guard)],
+    responses={
+        200: {"description": "The transaction's outcome, plus the approved state for the next transaction (or the finalized batch envelope)."},
+        400: {"description": "Malformed submission, unknown transaction, or an ordered batch used the wrong route."},
+        404: {"description": "JOB_NOT_FOUND / BATCH_TRANSACTION_NOT_FOUND (non-disclosing)."},
+        409: {"description": "LEASE_LOST / LEASE_EXPIRED / BATCH_ORDER_VIOLATION — nothing was stored."},
+        503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
+    },
+)
+async def submit_batch_transaction_result(
+    job_id: str, transaction_id: str, request: Request
+) -> JSONResponse:
+    """Submit ONE transaction of an ORDERED batch, in order.
+
+    The body is ``{"lease": {...}, "bridge_body": {...}}`` normally, or
+    ``{"lease": {...}, "error": {"code", "message"}}`` when this generation
+    produced nothing submittable, or ``{"lease": {...}, "deferred": true}``
+    when the device budget ran out. The server validates the candidate with the
+    SAME kernel pipeline and returns the APPROVED prior state for the next
+    transaction. A transaction that is not VERIFIED halts the chain: every later
+    transaction becomes BLOCKED (``BLOCKED_BY_PRIOR_UNVERIFIED_STATE``) and never
+    receives device inference.
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    started = time.perf_counter()
+
+    if not async_jobs.async_configured():
+        return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "this deployment has no durable async store configured")
+
+    ctype = (request.headers.get("content-type", "") or "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        return _error_response(
+            415, "CONTENT_TYPE_UNSUPPORTED", "result submissions must be application/json", request_id=rid
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_response(400, "REQUEST_MALFORMED", "request body could not be parsed as JSON", request_id=rid)
+    if not isinstance(body, dict):
+        return _error_response(400, "REQUEST_MALFORMED", "request body must be a JSON object", request_id=rid)
+
+    proof = _lease_proof(body)
+    if proof is None:
+        return _error_response(400, "REQUEST_MALFORMED", "lease proof requires owner and generation", request_id=rid)
+    owner, generation = proof
+
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    try:
+        record = async_jobs.get_job(tenant, job_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    if record is None or record.kind != async_jobs.JOB_KIND_INFERENCE:
+        return _error_response(404, "JOB_NOT_FOUND", "no such job for this tenant", request_id=rid)
+
+    mode = str(
+        getattr(record, "batch_mode", batch_jobs.MODE_SINGLE) or batch_jobs.MODE_SINGLE
+    )
+    if mode != batch_jobs.MODE_ORDERED:
+        return _error_response(
+            400,
+            "BATCH_MODE_NOT_ORDERED",
+            "this job is not an ordered batch; independent batches submit all transactions to "
+            "/v1/worker/jobs/{job_id}/result",
+            request_id=rid,
+        )
+
+    if record.status == async_jobs.STATUS_COMPLETED and record.result_json:
+        try:
+            stored_envelope = json.loads(record.result_json)
+        except Exception:
+            stored_envelope = None
+        if isinstance(stored_envelope, dict):
+            return JSONResponse(
+                status_code=record.http_status or 200,
+                content=stored_envelope,
+                headers={"Idempotent-Replayed": "true"},
+            )
+
+    if record.status != async_jobs.STATUS_PROCESSING:
+        return _error_response(
+            409, "LEASE_LOST", "the job is not currently leased for processing", request_id=rid
+        )
+    if (record.lease_owner or "") != owner or int(record.lease_generation or 0) != generation:
+        return _error_response(
+            409, "LEASE_LOST", "the lease is no longer held at that owner/generation", request_id=rid
+        )
+
+    try:
+        stored, rows = _load_batch_context(tenant, record)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    by_id = {row.transaction_id: row for row in rows}
+    row = by_id.get(transaction_id)
+    if row is None:
+        return _error_response(
+            404,
+            batch_jobs.BATCH_UNKNOWN_TRANSACTION,
+            "no such transaction in this batch",
+            request_id=rid,
+        )
+
+    if row.status != batch_jobs.TX_PENDING:
+        # Idempotent replay of an already-recorded transaction: report it and
+        # the next step. Nothing is rewritten.
+        return _ordered_state_response(record, rows, row, rid)
+
+    pending = batch_jobs.next_pending(rows)
+    if pending is None or pending.transaction_id != transaction_id:
+        return _error_response(
+            409,
+            batch_jobs.ORDER_VIOLATION_CODE,
+            "an ordered batch must be submitted in batch order",
+            request_id=rid,
+            details={
+                "expected_transaction_id": pending.transaction_id if pending else None
+            },
+        )
+
+    # ---- budget exhausted: defer this and every later transaction --------
+    if body.get("deferred") is True:
+        try:
+            batch_jobs.mark_pending(
+                tenant_id=tenant,
+                job_id=record.job_id,
+                from_index=row.batch_index,
+                status=batch_jobs.TX_DEFERRED,
+                error_code=batch_jobs.DEFERRED_CODE,
+                lease_owner=owner,
+                lease_generation=generation,
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+        try:
+            accepted, envelope = batch_jobs.finalize(
+                record, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
+        if not accepted or envelope is None:
+            return _batch_lease_refusal(record, rid, owner, generation)
+        return JSONResponse(status_code=200, content=envelope)
+
+    # ---- this generation produced no candidate ---------------------------
+    error = body.get("error")
+    if error is not None:
+        code = error.get("code") if isinstance(error, dict) else None
+        if not isinstance(code, str) or code not in WORKER_REPORTABLE_FAILURE_CODES:
+            return _error_response(
+                400,
+                "REQUEST_MALFORMED",
+                "error.code must be one of the supported worker failure codes",
+                request_id=rid,
+            )
+        message = " ".join(str(error.get("message") or "").split())[:MAX_FAILURE_MESSAGE_CHARS]
+        api_status, failure_envelope = _worker_failure_envelope(record, transaction_id, code, message)
+        accepted_row = batch_jobs.record_transaction(
+            tenant_id=tenant,
+            job_id=record.job_id,
+            transaction_id=transaction_id,
+            status=_tx_status(api_status),
+            api_status=api_status,
+            engine_status=None,
+            error_code=code,
+            prior_state_hash=batch_jobs.last_state_hash(rows),
+            envelope=failure_envelope,
+            http_status=503 if failure_envelope.get("retryable") else 400,
+            lease_owner=owner,
+            lease_generation=generation,
+        )
+        if not accepted_row:
+            return _batch_lease_refusal(record, rid, owner, generation)
+        # A link that produced no candidate cannot carry the sequence forward.
+        try:
+            batch_jobs.mark_pending(
+                tenant_id=tenant,
+                job_id=record.job_id,
+                from_index=row.batch_index + 1,
+                status=batch_jobs.TX_BLOCKED,
+                error_code=batch_jobs.BLOCKED_CODE,
+                lease_owner=owner,
+                lease_generation=generation,
+            )
+            accepted, envelope = batch_jobs.finalize(
+                record, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
+        if not accepted or envelope is None:
+            return _batch_lease_refusal(record, rid, owner, generation)
+        return JSONResponse(status_code=200, content=envelope)
+
+    bridge_body = body.get("bridge_body")
+    if not isinstance(bridge_body, dict):
+        return _error_response(
+            400, "REQUEST_MALFORMED", "bridge_body is required", request_id=rid
+        )
+
+    tx_input = (stored.get(transaction_id) or {}).get("input")
+    if not isinstance(tx_input, str) or not tx_input.strip():
+        _fail_inference_job(
+            record, "INPUT_MISSING", "stored batch transaction has no input"
+        )
+        return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=rid)
+
+    prior_state_hash = batch_jobs.last_state_hash(rows)
+    content, transport_status, failure = _run_kernel_candidate(
+        request,
+        record,
+        tx_input,
+        bridge_body,
+        rid,
+        owner=owner,
+        generation=generation,
+        started=started,
+    )
+    if failure == "MODEL_UNAVAILABLE":
+        _fail_inference_job(
+            record,
+            "MODEL_UNAVAILABLE",
+            "a batch transaction could not be validated on the server",
+        )
+        return _error_response(
+            503,
+            "MODEL_UNAVAILABLE",
+            "the submission could not be validated; retry later",
+            request_id=rid,
+        )
+    if content is None or transport_status is None:
+        logger.warning("inference result: service configuration invalid")
+        return _error_response(
+            503, "PROVIDER_UNAVAILABLE", "service configuration invalid", request_id=rid
+        )
+
+    api_status = content.get("api_status")
+    reason_codes = content.get("reason_codes") or []
+    error_code = reason_codes[0] if isinstance(reason_codes, list) and reason_codes else None
+    state_hash = batch_jobs.state_hash_for(
+        prior_state_hash=prior_state_hash,
+        index=row.batch_index,
+        transaction_id=transaction_id,
+        envelope=content,
+    )
+    state_summary = (
+        batch_jobs.state_summary_for(
+            transaction_id=transaction_id, state_hash=state_hash, envelope=content
+        )
+        if state_hash
+        else None
+    )
+    accepted_row = batch_jobs.record_transaction(
+        tenant_id=tenant,
+        job_id=record.job_id,
+        transaction_id=transaction_id,
+        status=_tx_status(api_status),
+        api_status=api_status,
+        engine_status=content.get("status"),
+        error_code=None if _tx_status(api_status) == batch_jobs.TX_VERIFIED else error_code,
+        prior_state_hash=prior_state_hash,
+        state_hash=state_hash,
+        state_summary=state_summary,
+        envelope=content,
+        http_status=transport_status,
+        lease_owner=owner,
+        lease_generation=generation,
+    )
+    if not accepted_row:
+        return _batch_lease_refusal(record, rid, owner, generation)
+
+    if state_hash is None:
+        # The kernel did not approve this link. Dependent transactions must not
+        # run on an unapproved state, so they are BLOCKED deterministically —
+        # with no device inference spent on them.
+        try:
+            batch_jobs.mark_pending(
+                tenant_id=tenant,
+                job_id=record.job_id,
+                from_index=row.batch_index + 1,
+                status=batch_jobs.TX_BLOCKED,
+                error_code=batch_jobs.BLOCKED_CODE,
+                lease_owner=owner,
+                lease_generation=generation,
+            )
+            accepted, envelope = batch_jobs.finalize(
+                record, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
+        if not accepted or envelope is None:
+            return _batch_lease_refusal(record, rid, owner, generation)
+        return JSONResponse(status_code=200, content=envelope)
+
+    try:
+        refreshed = batch_jobs.rows_for_job(tenant, record.job_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    updated = {r.transaction_id: r for r in refreshed}.get(transaction_id) or row
+
+    if batch_jobs.next_pending(refreshed) is None:
+        try:
+            accepted, envelope = batch_jobs.finalize(
+                record, lease_owner=owner, lease_generation=generation
+            )
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; result not persisted")
+        if not accepted or envelope is None:
+            return _batch_lease_refusal(record, rid, owner, generation)
+        return JSONResponse(status_code=200, content=envelope)
+
+    return _ordered_state_response(record, refreshed, updated, rid)
+
+
+# ---------------------------------------------------------------------------
+# Batch result reads (tenant-scoped, non-disclosing)
+# ---------------------------------------------------------------------------
+
+
+def _batch_result_record(tenant: str, result_id: str) -> Tuple[Optional[async_jobs.JobRecord], Optional[JSONResponse]]:
+    try:
+        record = async_jobs.get_result_record(tenant, result_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return None, _async_not_ready("ASYNC_UNAVAILABLE", None, "async store unavailable")
+    if record is None or record.kind != async_jobs.JOB_KIND_INFERENCE:
+        return None, _error_response(404, "RESULT_NOT_FOUND", "no such result for this tenant", request_id=None)
+    if str(getattr(record, "batch_mode", batch_jobs.MODE_SINGLE) or batch_jobs.MODE_SINGLE) == batch_jobs.MODE_SINGLE:
+        return None, _error_response(
+            400, "NOT_A_BATCH_JOB", "this result is not a multi-transaction batch", request_id=None
+        )
+    return record, None
+
+
+@router.get(
+    "/v1/results/{result_id}/transactions",
+    dependencies=[Depends(_tenant_api_key_guard)],
+    responses={
+        200: {"description": "Per-transaction summaries, in batch order (paginated)."},
+        400: {"description": "NOT_A_BATCH_JOB."},
+        404: {"description": "RESULT_NOT_FOUND (unknown id for this tenant)."},
+        503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
+    },
+)
+def list_batch_transactions(
+    result_id: str, request: Request, limit: int = 50, offset: int = 0
+) -> JSONResponse:
+    """Per-transaction summaries for ONE batch result the tenant owns.
+
+    The full envelope for a single transaction is fetched from its own
+    ``result_url``, so this listing stays bounded no matter how large the
+    batch's individual envelopes are.
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    if not async_jobs.async_configured():
+        return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "this deployment has no durable async store configured")
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    record, error = _batch_result_record(tenant, result_id)
+    if error is not None:
+        return error
+    assert record is not None
+
+    try:
+        rows = batch_jobs.rows_for_job(tenant, record.job_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    bounded_limit = max(1, min(int(limit or 50), 200))
+    bounded_offset = max(0, int(offset or 0))
+    page = rows[bounded_offset : bounded_offset + bounded_limit]
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "result_id": record.result_id,
+            "job_id": record.job_id,
+            "mode": str(getattr(record, "batch_mode", batch_jobs.MODE_INDEPENDENT) or batch_jobs.MODE_INDEPENDENT),
+            "job_status": record.status,
+            "total": len(rows),
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+            "transactions": [
+                batch_jobs.transaction_summary(row, record.result_id) for row in page
+            ],
+        },
+    )
+
+
+@router.get(
+    "/v1/results/{result_id}/transactions/{transaction_id}",
+    dependencies=[Depends(_tenant_api_key_guard)],
+    responses={
+        200: {"description": "The transaction's own authoritative envelope."},
+        400: {"description": "NOT_A_BATCH_JOB."},
+        404: {"description": "RESULT_NOT_FOUND / BATCH_TRANSACTION_NOT_FOUND / RESULT_NOT_READY (non-disclosing)."},
+        503: {"description": "ASYNC_UNAVAILABLE — store down (fail closed)."},
+    },
+)
+def get_batch_transaction_result(
+    result_id: str, transaction_id: str, request: Request
+) -> JSONResponse:
+    """ONE transaction's authoritative envelope, tenant-scoped."""
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    if not async_jobs.async_configured():
+        return _async_not_ready("ASYNC_NOT_CONFIGURED", rid, "this deployment has no durable async store configured")
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    record, error = _batch_result_record(tenant, result_id)
+    if error is not None:
+        return error
+    assert record is not None
+
+    try:
+        row = batch_jobs.get_transaction(tenant, record.job_id, transaction_id)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    if row is None:
+        return _error_response(
+            404,
+            batch_jobs.BATCH_UNKNOWN_TRANSACTION,
+            "no such transaction in this batch",
+            request_id=rid,
+        )
+    if not row.result_json:
+        return _error_response(
+            404,
+            "RESULT_NOT_READY",
+            "this transaction has no authoritative result yet; poll the job status",
+            request_id=rid,
+        )
+    try:
+        envelope = json.loads(row.result_json)
+    except Exception:
+        return _error_response(500, "INTERNAL_ERROR", "internal error", request_id=rid)
+    return JSONResponse(
+        status_code=row.http_status or 200,
+        content=envelope,
+        headers={"Idempotent-Replayed": "false"},
+    )

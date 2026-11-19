@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS platrixa_tenant_rate_limits (
     used         INTEGER     NOT NULL DEFAULT 0,
     PRIMARY KEY (tenant_id)
 );
+CREATE TABLE IF NOT EXISTS platrixa_tenant_rate_limit_events (
+    tenant_id    VARCHAR(64) NOT NULL,
+    rejected     BIGINT      NOT NULL DEFAULT 0,
+    last_rejected_at TIMESTAMPTZ,
+    PRIMARY KEY (tenant_id)
+);
 """
 
 
@@ -243,6 +249,20 @@ def consume(tenant_id: str) -> Dict[str, Any]:
                 used = int(row["used"])
                 retry_after = window
                 if used > limit:
+                    # Durable rejection counter for owner visibility: "how often
+                    # was this tenant throttled" is answered from the store, not
+                    # from a per-process counter that a restart would erase.
+                    session.execute(
+                        text(
+                            "INSERT INTO platrixa_tenant_rate_limit_events "
+                            "  (tenant_id, rejected, last_rejected_at) "
+                            "VALUES (:t, 1, now()) "
+                            "ON CONFLICT (tenant_id) DO UPDATE SET "
+                            "  rejected = platrixa_tenant_rate_limit_events.rejected + 1, "
+                            "  last_rejected_at = now()"
+                        ),
+                        {"t": tenant_id},
+                    )
                     retry = session.execute(
                         text(
                             "SELECT GREATEST(1, ceil(extract(epoch from "
@@ -270,6 +290,39 @@ def consume(tenant_id: str) -> Dict[str, Any]:
     }
 
 
+def event_counts() -> dict:
+    """Cumulative throttling events per tenant (owner report, read-only)."""
+    from sqlalchemy import text
+
+    from backend.auth.async_jobs import AsyncStoreUnavailableError
+
+    try:
+        ensure_schema_for_current_store()
+        SessionLocal = _session_factory()
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(
+                    "SELECT tenant_id, rejected, last_rejected_at "
+                    "FROM platrixa_tenant_rate_limit_events ORDER BY tenant_id"
+                )
+            ).mappings().all()
+    except AsyncStoreUnavailableError:
+        raise
+    except Exception as exc:
+        logger.warning("rate-limit event read failure: %s", type(exc).__name__)
+        raise AsyncStoreUnavailableError("async store unavailable") from exc
+
+    return {
+        str(row["tenant_id"]): {
+            "rejected": int(row["rejected"]),
+            "last_rejected_at": row["last_rejected_at"].isoformat()
+            if row["last_rejected_at"]
+            else None,
+        }
+        for row in rows
+    }
+
+
 def ensure_schema_for_current_store() -> None:
     """Create the counter table on the configured store (idempotent)."""
     from backend.auth.gate import METERING_ENV_VAR
@@ -293,5 +346,6 @@ __all__ = [
     "reset_cache",
     "enabled",
     "consume",
+    "event_counts",
     "ensure_schema_for_current_store",
 ]

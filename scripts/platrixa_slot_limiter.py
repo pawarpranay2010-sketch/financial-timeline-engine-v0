@@ -37,10 +37,23 @@ longer than the TTL, and stealing its slot would break the concurrency
 guarantee exactly when the device is most loaded. The TTL is a backstop for
 records with no usable PID only.
 
+FAIRNESS (one phone, several tenants)
+-------------------------------------
+A plain counting semaphore is not fair: the worker that polls fastest wins the
+slot every time, so one tenant with a large backlog can starve the others. Each
+waiter therefore registers a FIFO ticket (``<slots_dir>/waiting/<ns>-<pid>``)
+BEFORE trying a slot, and a waiter may only take a free slot when NO LIVE
+WAITER IS OLDER. A ticket whose owner is dead (or whose record is older than
+the TTL with no usable PID) is pruned, so a crashed waiter cannot block the
+queue. The result is arrival-order service across tenant workers without any
+shared process, daemon or lock server — and without a waiting worker ever
+holding a job lease (workers acquire the slot before generating, and release
+the claim when the slot stays busy).
+
 CLI (used by the Termux service and by operators)
 -------------------------------------------------
     python3 scripts/platrixa_slot_limiter.py status   --slots-dir DIR
-    python3 scripts/platrixa_slot_limiter.py acquire  --slots-dir DIR --max 1 --wait 5
+    python3 scripts/platrixa_slot_limiter.py acquire  --slots-dir DIR --max 1 --wait 5 --tenant dev-alice
     python3 scripts/platrixa_slot_limiter.py release  --slots-dir DIR --token 0:1234
 
 Exit codes: 0 success, 75 (EX_TEMPFAIL) when no slot is available in time.
@@ -105,6 +118,64 @@ class SlotLimiter:
     def _slot_path(self, index: int) -> Path:
         return self.slots_dir / f"slot-{index}"
 
+    def _waiting_dir(self) -> Path:
+        return self.slots_dir / "waiting"
+
+    # -- fair queue -------------------------------------------------------
+
+    def _register_waiter(self, tenant: Optional[str]) -> Path:
+        """Append this process to the FIFO queue and return its ticket path."""
+        waiting = self._waiting_dir()
+        waiting.mkdir(parents=True, exist_ok=True)
+        # Nanosecond timestamp primary key + pid tiebreak: monotonic enough for
+        # arrival order, unique per process, and sortable as a plain string.
+        name = f"{time.time_ns():020d}-{os.getpid():08d}"
+        ticket = waiting / name
+        try:
+            ticket.write_text((tenant or "").strip(), encoding="utf-8")
+        except Exception:
+            return ticket
+        return ticket
+
+    def _waiter_pid(self, ticket: Path) -> Optional[int]:
+        try:
+            return int(ticket.name.rsplit("-", 1)[1])
+        except Exception:
+            return None
+
+    def _prune_waiters(self) -> List[Path]:
+        """Return the LIVE tickets in arrival order, deleting dead ones."""
+        waiting = self._waiting_dir()
+        try:
+            tickets = sorted(p for p in waiting.iterdir() if p.is_file())
+        except Exception:
+            return []
+        live: List[Path] = []
+        for ticket in tickets:
+            pid = self._waiter_pid(ticket)
+            if pid is not None:
+                if _pid_alive(pid):
+                    live.append(ticket)
+                    continue
+                try:
+                    ticket.unlink()
+                except Exception:
+                    pass
+                continue
+            # No usable PID in the name: age is the only evidence available.
+            try:
+                stale = (time.time() - ticket.stat().st_mtime) > self.stale_ttl_s
+            except Exception:
+                stale = True
+            if stale:
+                try:
+                    ticket.unlink()
+                except Exception:
+                    pass
+            else:
+                live.append(ticket)
+        return live
+
     def _is_stale(self, slot: Path, pid: Optional[int]) -> bool:
         if pid is None:
             # No usable PID: age is the only evidence available.
@@ -115,7 +186,7 @@ class SlotLimiter:
             return age > self.stale_ttl_s
         return not _pid_alive(pid)
 
-    def _try_acquire_slot(self, index: int) -> Optional[str]:
+    def _try_acquire_slot(self, index: int, *, tenant: Optional[str] = None) -> Optional[str]:
         slot = self._slot_path(index)
         try:
             slot.mkdir()
@@ -138,6 +209,8 @@ class SlotLimiter:
             (slot / "acquired_at").write_text(
                 f"{time.time():.3f}", encoding="utf-8"
             )
+            # Label only (operator visibility); never used for authorization.
+            (slot / "tenant").write_text((tenant or "").strip(), encoding="utf-8")
         except Exception:
             shutil.rmtree(slot, ignore_errors=True)
             return None
@@ -145,22 +218,53 @@ class SlotLimiter:
 
     # -- public API -------------------------------------------------------
 
-    def acquire(self, wait_s: float = DEFAULT_WAIT_SECONDS) -> Optional[str]:
+    def acquire(
+        self,
+        wait_s: float = DEFAULT_WAIT_SECONDS,
+        *,
+        tenant: Optional[str] = None,
+        fair: bool = True,
+    ) -> Optional[str]:
         """Acquire one slot, waiting at most ``wait_s`` seconds.
 
-        Returns the token, or ``None`` when every slot stayed busy for the
-        whole wait budget. Never blocks indefinitely.
+        With ``fair=True`` (the default, and what the Termux service uses) this
+        process may take a free slot only when it is the OLDEST live waiter, so
+        four tenant workers are served in arrival order instead of by poll
+        frequency. ``fair=False`` keeps the original best-effort behaviour for
+        single-tenant tools and tests.
+
+        Returns the token, or ``None`` when no slot could be taken for the whole
+        wait budget. Never blocks indefinitely and never steals a live slot.
         """
         self.slots_dir.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + max(0.0, float(wait_s))
-        while True:
-            for index in range(self.max_slots):
-                token = self._try_acquire_slot(index)
-                if token is not None:
-                    return token
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(POLL_INTERVAL_SECONDS)
+        ticket: Optional[Path] = None
+        if fair:
+            ticket = self._register_waiter(tenant)
+        try:
+            while True:
+                if ticket is not None:
+                    live = self._prune_waiters()
+                    if live and live[0] != ticket:
+                        # Someone who arrived earlier is still waiting: yielding
+                        # here is what prevents tenant starvation.
+                        if time.monotonic() >= deadline:
+                            return None
+                        time.sleep(POLL_INTERVAL_SECONDS)
+                        continue
+                for index in range(self.max_slots):
+                    token = self._try_acquire_slot(index, tenant=tenant)
+                    if token is not None:
+                        return token
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(POLL_INTERVAL_SECONDS)
+        finally:
+            if ticket is not None:
+                try:
+                    ticket.unlink()
+                except Exception:
+                    pass
 
     def release(self, token: Optional[str]) -> bool:
         """Release a slot held by THIS process. Mismatched tokens change nothing."""
@@ -200,13 +304,36 @@ class SlotLimiter:
                     age = round(time.time() - slot.stat().st_mtime, 3)
                 except Exception:
                     age = None
+            tenant = ""
+            try:
+                tenant = (slot / "tenant").read_text(encoding="utf-8").strip()
+            except Exception:
+                tenant = ""
             slots.append(
                 {
                     "index": index,
                     "held": pid is not None and _pid_alive(pid),
                     "pid": pid,
+                    "tenant": tenant or None,
                     "age_seconds": age,
                     "stale": self._is_stale(slot, pid),
+                }
+            )
+        waiters: List[Dict[str, object]] = []
+        for ticket in self._prune_waiters():
+            try:
+                label = ticket.read_text(encoding="utf-8").strip()
+            except Exception:
+                label = ""
+            try:
+                waited = round(time.time() - ticket.stat().st_mtime, 3)
+            except Exception:
+                waited = None
+            waiters.append(
+                {
+                    "tenant": label or None,
+                    "pid": self._waiter_pid(ticket),
+                    "waited_seconds": waited,
                 }
             )
         in_use = sum(1 for s in slots if s.get("held"))
@@ -216,6 +343,7 @@ class SlotLimiter:
             "in_use": in_use,
             "available": max(0, self.max_slots - in_use),
             "slots": slots,
+            "waiters": waiters,
         }
 
 
@@ -226,6 +354,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--max", type=int, default=DEFAULT_MAX_SLOTS, dest="max_slots")
     parser.add_argument("--wait", type=float, default=DEFAULT_WAIT_SECONDS)
     parser.add_argument("--token", default=None)
+    parser.add_argument("--tenant", default=None, help="Label for operator visibility (never authorization)")
+    parser.add_argument("--no-fair", action="store_true", help="Best-effort acquisition without FIFO fairness")
     parser.add_argument("--ttl", type=float, default=DEFAULT_STALE_TTL_SECONDS)
     args = parser.parse_args(argv)
 
@@ -235,7 +365,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(limiter.status(), indent=2))
         return 0
     if args.action == "acquire":
-        token = limiter.acquire(args.wait)
+        token = limiter.acquire(args.wait, tenant=args.tenant, fair=not args.no_fair)
         if token is None:
             print(json.dumps({"acquired": False, "reason": "all slots busy"}))
             return EX_TEMPFAIL

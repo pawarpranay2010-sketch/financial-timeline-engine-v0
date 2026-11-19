@@ -1381,6 +1381,31 @@ def job_status_v1(job_id: str, request: Request) -> JSONResponse:
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
     }
+
+    # ---- batch visibility (additive; single-transaction jobs are unchanged) --
+    if str(getattr(record, "batch_mode", "single") or "single") != "single":
+        from backend.auth import batch_jobs
+
+        try:
+            rows = batch_jobs.rows_for_job(tenant, record.job_id)
+        except async_jobs.AsyncStoreUnavailableError:
+            return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+        body["batch"] = {
+            "mode": str(getattr(record, "batch_mode", "independent")),
+            "total_transactions": len(rows),
+            "transaction_count": int(getattr(record, "transaction_count", len(rows)) or len(rows)),
+            "counts": {
+                "verified": len([r for r in rows if r.status == batch_jobs.TX_VERIFIED]),
+                "review_required": len([r for r in rows if r.status == batch_jobs.TX_REVIEW_REQUIRED]),
+                "unsupported": len([r for r in rows if r.status == batch_jobs.TX_UNSUPPORTED]),
+                "failed": len([r for r in rows if r.status in (batch_jobs.TX_FAILED, batch_jobs.TX_INVALID_INPUT)]),
+                "blocked": len([r for r in rows if r.status == batch_jobs.TX_BLOCKED]),
+                "deferred": len([r for r in rows if r.status == batch_jobs.TX_DEFERRED]),
+                "pending": len([r for r in rows if r.status == batch_jobs.TX_PENDING]),
+            },
+            "transactions_url": f"/v1/results/{record.result_id}/transactions",
+        }
+
     return JSONResponse(status_code=200, content=body)
 
 
