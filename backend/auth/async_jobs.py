@@ -434,6 +434,12 @@ CREATE TABLE IF NOT EXISTS platrixa_async_jobs (
     PRIMARY KEY (job_id)
 );
 CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant ON platrixa_async_jobs (tenant_id);
+-- Job history (GET /v1/jobs): the listing is TENANT-scoped and keyset-ordered
+-- (created_at DESC, job_id DESC). This index serves both the tenant predicate
+-- and the ordering, so a page never scans the whole table. It references only
+-- pre-existing columns, so it is safe to create on an upgraded store.
+CREATE INDEX IF NOT EXISTS idx_async_jobs_tenant_cursor
+    ON platrixa_async_jobs (tenant_id, created_at DESC, job_id DESC);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_status ON platrixa_async_jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_async_jobs_result ON platrixa_async_jobs (result_id);
 -- NOTE: the kind index is created by _MIGRATION_INFERENCE (after its

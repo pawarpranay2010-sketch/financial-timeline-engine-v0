@@ -30,6 +30,7 @@ never supply a tenant id.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/v1/inference-jobs` | Create one durable inference job (single transaction or bounded batch). |
+| `GET` | `/v1/jobs` | List your tenant's jobs, newest first (cursor paginated). |
 | `GET` | `/v1/jobs/{job_id}` | Poll job status (batch jobs include a `batch` block). |
 | `GET` | `/v1/results/{result_id}` | The authoritative result envelope (single) or batch envelope (batch). |
 | `GET` | `/v1/results/{result_id}/transactions` | Batch only: per-transaction summaries, paginated. |
@@ -152,6 +153,76 @@ offending index, the limit, the caller's own duplicate ids).
 ```
 
 `batch` is present only for batch jobs. `RETRY_WAIT` is not a terminal verdict.
+
+### 4.1 Job history — `GET /v1/jobs`
+
+```http
+GET /v1/jobs?limit=20&cursor=<opaque>&status=COMPLETED
+X-Platrixa-API-Key: <tenant key>
+```
+
+```json
+{
+  "api_version": "v1",
+  "tenant_id": "acme-books",
+  "jobs": [
+    {
+      "job_id": "job_9f3c1d2a4b5c6d7e8f901234",
+      "status": "COMPLETED",
+      "status_label": "Completed",
+      "api_status": null,
+      "retryable": false,
+      "kind": "inference",
+      "created_at": "2026-11-19T09:30:00.123456+00:00",
+      "updated_at": "2026-11-19T09:30:41.987654+00:00",
+      "completed_at": "2026-11-19T09:30:41.987654+00:00",
+      "transaction_count": 5,
+      "batch": {"mode": "independent", "transaction_count": 5},
+      "result_available": true,
+      "result_url": "/v1/results/res_4b5c6d7e8f9012345678abcd",
+      "reason_code": null,
+      "request_id": "req-1"
+    }
+  ],
+  "count": 1,
+  "limit": 20,
+  "order": "created_at DESC, job_id DESC",
+  "has_more": true,
+  "next_cursor": "eyJjIjoiMjAyNi0xMS0xOVQwOTozMDowMC4xMjM0NTYrMDA6MDAiLCJqIjoiam9iXzlmM2MxZDJhNGI1YzZk N2U4ZjkwMTIzNCIsInYiOjF9"
+}
+```
+
+Guarantees:
+
+- **Tenant-scoped from the key only.** No query parameter can select a tenant;
+  a foreign job is never selected, so its existence is not revealed.
+- **Stable keyset order** `created_at DESC, job_id DESC` — no `OFFSET`, so
+  pages cannot skip or duplicate while new jobs are submitted.
+- **No payloads.** `result_json`/`request_json` are never returned;
+  `result_available` is a server-side projection and the result itself is
+  fetched from `result_url`.
+- **`api_status` is null for `COMPLETED`:** the authoritative outcome
+  (`VERIFIED` / `REVIEW_REQUIRED` / …) lives in the result envelope, and the
+  list does not re-read payloads to guess it. For `FAILED` it is mapped from
+  the stored `reason_code`.
+- Reading the list consumes **no quota**.
+
+Pagination:
+
+| Rule | Value |
+| --- | --- |
+| Default page size | 20 |
+| Hard maximum | 100 (larger → `400 INPUT_INVALID`) |
+| Cursor | opaque `next_cursor`; pass it back verbatim |
+| Cursor expiry | none; cursors carry no authority |
+| Malformed cursor | `400 INVALID_CURSOR` (never a silent restart at page 1) |
+| `has_more` | false on the last page; `next_cursor` is then `null` |
+| Status filter | `QUEUED`, `PROCESSING`, `RETRY_WAIT`, `COMPLETED`, `FAILED` |
+| Invalid filter | `400 INVALID_STATUS_FILTER` |
+
+Building a history screen: request `limit=20`, render `jobs`, keep
+`next_cursor`, and request again only when the user scrolls/pages. Treat
+`result_available` as "there is a result to fetch", not as "it passed".
 
 ---
 
@@ -296,3 +367,56 @@ unit and N transaction units.
 
 - No error body contains key material, another tenant's data, transaction
   text, prompts or model output.
+
+---
+
+## 9. Usage reporting semantics
+
+`GET /v1/usage` (tenant key) reports two different meters. They are never
+interchangeable:
+
+| Field | Unit | What it counts |
+| --- | --- | --- |
+| `used`, `monthly_limit`, `remaining` | job quota units | Units consumed by **this credential**: one per admitted API job, regardless of batch size |
+| `key_quota.*` | job quota units | The same numbers, explicitly labelled (scope = this credential) |
+| `tenant_usage.jobs.submitted` | jobs | Inference jobs **admitted this UTC month** |
+| `tenant_usage.jobs.completed` / `failed` | jobs | Inference jobs currently in that terminal state, admitted this month |
+| `tenant_usage.jobs.pending` / `retry_wait` | jobs | `QUEUED`/`PROCESSING`/`RETRY_WAIT`, admitted this month |
+| `tenant_usage.jobs.document_jobs_submitted` | jobs | Document jobs admitted this month (reported separately, never merged) |
+| `tenant_usage.transactions.admitted` | accounting transactions | `sum(transaction_count)` over this month's jobs; equals what the transaction quota charges |
+| `tenant_usage.transactions.verified` / `review_required` / `unsupported` / `invalid_input` / `failed` | accounting transactions | **Batch rows only** currently in that state |
+| `tenant_usage.transactions.blocked` / `deferred` / `pending` | accounting transactions | Admitted (charged) but never evaluated |
+| `tenant_usage.transactions.tracked_rows` | rows | Per-transaction rows that exist (batch jobs only) |
+| `tenant_usage.transactions.coverage` | — | Explains the difference between `admitted` and `tracked_rows` |
+
+Accounting rules, stated exactly:
+
+- a **batch of N transactions is 1 job and N transaction units** — never N
+  jobs, never 1 transaction;
+- a single-transaction job is 1 job and 1 transaction unit;
+- rejected-before-admission requests (malformed, over a limit, bad key, quota
+  exhausted, queue full) charge **nothing**;
+- an **idempotent replay** charges nothing and creates no job;
+- a **worker retry** of an already-admitted job charges nothing;
+- `BLOCKED` (ordered, prior link unverified), `DEFERRED` (device budget) and
+  `PENDING` were admitted and **are charged** — the unit bought admission to
+  bounded work;
+- **single-transaction jobs do not materialize a per-transaction row.** Their
+  transaction unit is counted from the job's `transaction_count`, and their
+  outcome is the job status. Per-state transaction counts therefore cover
+  batch rows only and are never extrapolated;
+- counters are scoped to the **current UTC calendar month by admission time**
+  and are not lifetime totals;
+- `GET /v1/developer/usage` (management token) is bound to the management
+  tenant and reports the same counters plus both quota meters;
+- `GET /v1/owner/usage` (management token) reports, per tenant, **all-time**
+  job/transaction counts and **monthly** quota consumption, with both windows
+  labelled (`reporting_windows`).
+
+Limitations reported rather than hidden:
+
+- job rows do not record which credential admitted them, so a **per-key** job
+  or transaction count cannot be produced; only the quota row is per-key;
+- when transaction rows exceed the jobs' admitted transaction count (which the
+  admission path cannot produce), the response says so instead of adjusting
+  either figure.

@@ -11,8 +11,9 @@ import { cn } from "@/lib/utils";
  *   - API key self-service: the backend exposes key VERIFICATION for its
  *     own gate but no issuance/rotation/revocation API, so this section
  *     shows the planned architecture and says so. No fake keys, ever.
- *   - Requests: no request-history endpoint exists, so no history is shown.
- *     The planned table columns are documentation, not data.
+ *   - Requests: a tenant-scoped JOB HISTORY endpoint (GET /v1/jobs) exists
+ *     and is documented here, but this static page has no developer session,
+ *     so it renders no data. The table columns are documentation, not data.
  *   - Documentation (Phase 5D/5E): reflects the REAL contract — the
  *     canonical result envelope, evidence model (never fabricated), the
  *     async document workflow, idempotency, and the best-effort webhook
@@ -72,7 +73,9 @@ const ENDPOINTS: Array<[string, string]> = [
   ["POST /v1/process", "Process one financial narration — the canonical 5D result envelope"],
   ["POST /v1/process/document", "Text, PDF, or image — returns pages, evidence, lineage, timings"],
   ["POST /v1/documents", "Async document submission (202: job_id + result_id; admitted ≠ VERIFIED)"],
+  ["GET /v1/jobs", "List your tenant's jobs, newest first — cursor paginated; no payloads"],
   ["GET /v1/jobs/{job_id}", "Poll an async job — completion is NOT VERIFIED; the status tells the truth"],
+  ["GET /v1/usage", "Your quota units and this month's job/transaction counters (separate units)"],
   ["GET /v1/results/{result_id}", "Fetch the finished result — the SAME 5D envelope as /v1/process"],
   ["POST /v1/webhook-endpoints", "Register signed webhook delivery (best-effort, single-attempt)"],
   ["GET /v1/capabilities", "Read-only projection of the live capability registry"],
@@ -229,25 +232,36 @@ function RequestsSection() {
       <Card className="border-dashed">
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-sm font-semibold">Request history</h2>
-            <ComingSoon>NO HISTORY ENDPOINT YET</ComingSoon>
+            <h2 className="text-sm font-semibold">Job history</h2>
+            <ComingSoon>AVAILABLE IN YOUR APP · NOT ON THIS PAGE</ComingSoon>
           </div>
           <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
-            The backend does not currently expose a request-history API, so this page shows no
-            historical requests — none are invented or cached client-side. Every response does carry
-            a <code className="font-mono text-xs">request_id</code> you can correlate in your own
-            logs.
+            A tenant-scoped job-history API exists:{" "}
+            <code className="font-mono text-xs">GET /v1/jobs</code> returns your jobs newest
+            first with bounded cursor pagination, so your own application can build the history
+            screen below without storing every job id itself. It never returns transaction text or
+            a result payload, and reading it consumes no quota.
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            This website has no developer sign-in, so it cannot show <em>your</em> jobs and shows no
+            invented data. Owner-only request metadata (key prefixes, latency, reason codes) is a
+            separate management-plane view that a developer key cannot reach.
           </p>
           <div className="mt-4 rounded-lg border border-border/70 bg-muted/30 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">Planned view</p>
+            <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">What GET /v1/jobs gives a history screen</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              {["Request ID", "Time", "Status", "Endpoint", "Latency"].map((col) => (
+              {["Job ID", "Submitted", "Status", "Transactions", "Result available"].map((col) => (
                 <span key={col} className="rounded border border-border bg-card px-2 py-1 font-mono text-[11px] text-muted-foreground">{col}</span>
               ))}
             </div>
+            <p className="mt-2.5 rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
+              GET /v1/jobs?limit=20 → jobs[] + next_cursor → repeat with cursor
+            </p>
             <p className="mt-2.5 text-xs text-muted-foreground">
-              Clicking a request will open its metadata, reason codes, response, evidence, and errors
-              once the API exists.
+              Completion is not approval: for a <code className="font-mono">COMPLETED</code> job,
+              fetch <code className="font-mono">result_url</code> for the authoritative{" "}
+              <code className="font-mono">api_status</code>. The list intentionally leaves it null
+              rather than guessing.
             </p>
           </div>
         </CardContent>

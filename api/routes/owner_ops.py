@@ -175,10 +175,10 @@ def usage_report(
                        coalesce(sum(transaction_count) FILTER (WHERE kind = 'inference'), 0) AS transactions,
                        count(*) FILTER (WHERE kind = 'inference' AND status = 'COMPLETED') AS completed,
                        count(*) FILTER (WHERE kind = 'inference' AND status = 'FAILED') AS failed,
-                       count(*) FILTER (WHERE status = 'PROCESSING') AS processing,
-                       count(*) FILTER (WHERE status = 'RETRY_WAIT') AS retry_wait,
-                       count(*) FILTER (WHERE status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS pending,
-                       min(created_at) FILTER (WHERE status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS oldest_pending_at
+                       count(*) FILTER (WHERE kind = 'inference' AND status = 'PROCESSING') AS processing,
+                       count(*) FILTER (WHERE kind = 'inference' AND status = 'RETRY_WAIT') AS retry_wait,
+                       count(*) FILTER (WHERE kind = 'inference' AND status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS pending,
+                       min(created_at) FILTER (WHERE kind = 'inference' AND status IN ('QUEUED','PROCESSING','RETRY_WAIT')) AS oldest_pending_at
                     FROM platrixa_async_jobs GROUP BY tenant_id ORDER BY tenant_id"""
                 )
             ).mappings().all()
@@ -246,7 +246,11 @@ def usage_report(
                     "deferred": 0,
                     "pending": 0,
                 },
-                "quota": {"jobs": None, "transactions": None},
+                "quota": {
+                    "jobs": None,
+                    "transactions": None,
+                    "window": "current UTC month (usage_month on each quota row)",
+                },
                 "rate_limit": {
                     "rejected": 0,
                     "last_rejected_at": None,
@@ -258,7 +262,13 @@ def usage_report(
 
     for row in job_rows:
         slot = _slot(str(row["tenant_id"]))
+        # Every counter here is inference-only and ALL-TIME (rows still present
+        # in the store). The quota block below is a MONTH bucket. The two are
+        # labelled separately so a lifetime job count is never compared with a
+        # monthly allowance as if they were the same window.
         slot["jobs"] = {
+            "window": "all_time",
+            "unit": "jobs (one per admitted job, regardless of transaction_count)",
             "total": int(row["jobs"]),
             "completed": int(row["completed"]),
             "failed": int(row["failed"]),
@@ -291,6 +301,7 @@ def usage_report(
     for row in job_quota_rows:
         slot = _slot(str(row["tenant_id"]))
         slot["quota"]["jobs"] = {
+            "unit": "admitted job units",
             "monthly_limit": int(row["monthly_limit"]),
             "used": int(row["current_month_usage"]),
             "usage_month": row["usage_month"],
@@ -299,6 +310,7 @@ def usage_report(
 
     for tenant_id, quota in tx_quotas.items():
         _slot(tenant_id)["quota"]["transactions"] = {
+            "unit": "admitted accounting transactions",
             "monthly_limit": int(quota["monthly_limit"]),
             "used": int(quota["used"]),
             "remaining": int(quota["remaining"]),
@@ -325,6 +337,20 @@ def usage_report(
             "quota_units": {
                 "jobs": "admitted API jobs",
                 "transactions": "admitted accounting transactions",
+            },
+            "reporting_windows": {
+                "jobs": (
+                    "all_time counts of rows still present in "
+                    "platrixa_async_jobs (kind='inference')"
+                ),
+                "transactions": (
+                    "all_time per-transaction states still present in "
+                    "platrixa_batch_transactions"
+                ),
+                "quota": (
+                    "current UTC calendar month, from each tenant's quota rows "
+                    "(jobs and transactions are separate meters)"
+                ),
             },
             "queue": summary,
         },

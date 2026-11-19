@@ -4,6 +4,10 @@ This is the operator's page. It assumes the code in
 `release/private-beta-rc1` is deployed and one phone runs one or more worker
 instances.
 
+Per-developer onboarding: `docs/PRIVATE_BETA_ONBOARDING.md`.
+Device acceptance procedure (four workers + batches):
+`docs/ANDROID_PRIVATE_BETA_DEVICE_TEST.md` — **pending real-device execution**.
+
 **The one rule:** the deterministic kernel decides. The phone generates text;
 it never decides a verdict. If a document cannot be verified, the answer is
 `NEEDS_REVIEW` with reasons, never a guess.
@@ -21,11 +25,15 @@ it never decides a verdict. If a document cannot be verified, the answer is
 | Tenant provisioning + revocation | implemented, tested | `platrixa_phase1b_tenant_provisioning_test.py` (43) |
 | One worker / device, tenant-scoped | implemented, tested | `platrixa_outbound_inference_worker_test.py` (51) |
 | Several instances on one phone | implemented, tested off-device | `platrixa_termux_multiinstance_test.py` (12), `platrixa_termux_service_test.py` (25) |
+| Four-worker queue coordination | implemented, tested off-device | `platrixa_four_worker_queue_test.py` (17) |
+| Developer job history (`GET /v1/jobs`) | implemented, tested | `platrixa_private_beta_jobs_usage_test.py` (50) |
+| Usage accuracy (jobs vs transactions) | corrected + tested | `platrixa_private_beta_jobs_usage_test.py` (50) |
 | Device-wide generation cap | implemented, tested off-device | `platrixa_slot_limiter_test.py` (17) |
 | Encrypted backup + restore drill | implemented, drilled locally | `platrixa_backup_restore_drill_test.py` (20) |
 | Retention / pruning | implemented, tested | `platrixa_retention_test.py` (20) |
 | Key rotation | documented procedure | `docs/KEY_ROTATION.md` |
 | **Real phone capacity** | **NOT MEASURED** | requires the device |
+| **Real phone four-worker / batch acceptance** | **NOT MEASURED** | `docs/ANDROID_PRIVATE_BETA_DEVICE_TEST.md` |
 | **Scheduled production backups** | **NOT DONE** | requires a storage target |
 
 Anything in the last two rows must not be described to a developer as working.

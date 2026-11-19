@@ -233,6 +233,72 @@ the per-outcome counts, and the state chain in ordered mode. `api_status` is
 
 ---
 
+## 6.1 List your job history — `GET /v1/jobs`
+
+You do not have to remember every `job_id`. The API lists your tenant's jobs,
+newest first, with bounded cursor pagination:
+
+```bash
+curl -sS -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  "$PLATRIXA_BASE_URL/v1/jobs?limit=20"
+```
+
+```json
+{
+  "api_version": "v1",
+  "tenant_id": "your-tenant",
+  "jobs": [
+    {"job_id": "job_...", "status": "COMPLETED", "status_label": "Completed",
+     "api_status": null, "retryable": false, "kind": "inference",
+     "created_at": "...", "updated_at": "...", "completed_at": "...",
+     "transaction_count": 5,
+     "batch": {"mode": "independent", "transaction_count": 5},
+     "result_available": true, "result_url": "/v1/results/res_...",
+     "reason_code": null, "request_id": "req-1"}
+  ],
+  "count": 1, "limit": 20, "order": "created_at DESC, job_id DESC",
+  "has_more": true, "next_cursor": "eyJ..."
+}
+```
+
+To page, pass `next_cursor` back:
+
+```bash
+curl -sS -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  "$PLATRIXA_BASE_URL/v1/jobs?limit=20&cursor=eyJ..."
+```
+
+Rules that matter for a history screen:
+
+- `limit` is 1–100 (default 20); anything else is `400 INPUT_INVALID`.
+- The order is stable (`created_at DESC, job_id DESC`) and keyset-based, so a
+  page can never skip or duplicate a job while you are paging.
+- A malformed cursor is `400 INVALID_CURSOR` — never a silent restart at the
+  first page. Cursors do not expire.
+- `status` filters on `QUEUED`, `PROCESSING`, `RETRY_WAIT`, `COMPLETED`,
+  `FAILED`. Any other value is `400 INVALID_STATUS_FILTER`.
+- `api_status` is `null` for `COMPLETED`: the authoritative outcome
+  (`VERIFIED` / `REVIEW_REQUIRED` / …) is in the result envelope, so fetch
+  `result_url` before telling a user the job passed.
+- `GET /v1/jobs` never returns transaction text or a result payload, and reading
+  it consumes no quota.
+
+### Usage: jobs and transactions are different units
+
+```bash
+curl -sS -H "X-Platrixa-API-Key: $PLATRIXA_API_KEY" \
+  "$PLATRIXA_BASE_URL/v1/usage"
+```
+
+`used` / `monthly_limit` / `remaining` are **job quota units for this key**.
+`tenant_usage.jobs.submitted` counts jobs; `tenant_usage.transactions.admitted`
+counts accounting transactions. A 5-transaction batch is **1** job and **5**
+transactions. The response labels both units and states the month window, so
+do not render `used` as "jobs used". Full definitions:
+[DEVELOPER_API_CONTRACT.md](DEVELOPER_API_CONTRACT.md#9-usage-reporting-semantics).
+
+---
+
 ## 7. Handle `REVIEW_REQUIRED` (and other non-verified outcomes)
 
 | `api_status` | Meaning | What to do |

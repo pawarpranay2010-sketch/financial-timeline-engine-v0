@@ -115,11 +115,19 @@ Policy:
 - the only decrement is `transaction_quota.release()`, used exclusively when
   the job row could not be created after the charge was taken.
 
+Developer visibility: `GET /v1/usage` (tenant key) reports this credential's job
+quota units plus the tenant's monthly job and transaction counters, with each
+unit and the month window labelled. `GET /v1/jobs` lists the tenant's jobs —
+one entry per job, carrying `transaction_count` — so a 5-transaction batch never
+appears as five jobs.
+
 Owner visibility: `GET /v1/owner/usage` (management token) reports, per tenant:
 active/revoked keys, job totals, transactions admitted, verified /
 review-required / unsupported / failed / blocked / deferred / pending counts,
 oldest pending instant, processing and retry counts, both quotas, and durable
-throttling events.
+throttling events. Job/transaction counts there are **all-time** (rows still
+present) while quota consumption is the **current UTC month**; both windows are
+labelled in `reporting_windows` so they are never compared as if equal.
 
 ---
 

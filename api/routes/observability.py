@@ -147,14 +147,49 @@ def get_usage(request: Request):
     except Exception:
         last_request_at = None  # advisory field — hidden, not guessed
 
+    # Honest counters, separately windowed and unit-labelled. The legacy
+    # fields above are preserved byte-for-byte (values and names), but they
+    # are quota units for THIS credential — never a job count and never a
+    # transaction count. The tenant-wide counters below name their unit and
+    # their window explicitly so a 5-transaction batch cannot be read as
+    # five jobs or as one transaction.
+    from backend.auth import usage_reporting
+
+    try:
+        tenant_usage = usage_reporting.tenant_usage_counts(
+            ctx.tenant_id, month=ctx.usage_month
+        )
+    except Exception:
+        tenant_usage = {
+            "available": False,
+            "reason": "usage counters unavailable; quota figures above are unaffected",
+        }
+
+    window = usage_reporting.month_window(ctx.usage_month)
     return {
         "api_version": API_VERSION,
         "tenant_id": ctx.tenant_id,
         "month": ctx.usage_month,
+        # ---- legacy fields: values unchanged, meaning now explicit ----------
         "monthly_limit": limit,
         "used": used,
         "remaining": max(limit - used, 0),
         "last_request_at": last_request_at,
+        "key_quota": {
+            "scope": "this credential",
+            "unit": "admitted job units (one per admitted API job)",
+            "monthly_limit": limit,
+            "used": used,
+            "remaining": max(limit - used, 0),
+            "month": ctx.usage_month,
+            "resets_at": window["end"],
+            "note": (
+                "'used' counts job quota units consumed by this key. It is not "
+                "a job count and not a transaction count; see tenant_usage."
+            ),
+        },
+        "tenant_usage": tenant_usage,
+        "limitations": [usage_reporting.PER_KEY_LIMITATION],
     }
 
 
@@ -301,14 +336,67 @@ def get_tenant_usage(request: Request):
     active = [r for r in rows if r.is_active]
     used = sum(r.current_month_usage for r in active if r.usage_month == month)
     limit = sum(r.monthly_limit for r in active)
+    # The tenant aggregate is the sum of the ACTIVE credentials' job-quota
+    # rows; the counters below come from the job store. Both describe the
+    # same tenant, which is why they are reported side by side here (they are
+    # NOT side by side on the per-key route). Every number names its unit.
+    from backend.auth import transaction_quota, usage_reporting
+
+    try:
+        tenant_usage = usage_reporting.tenant_usage_counts(tenant_id, month=month)
+    except Exception:
+        tenant_usage = {
+            "available": False,
+            "reason": "usage counters unavailable; quota figures are unaffected",
+        }
+
+    try:
+        tx_quota = transaction_quota.usage(tenant_id)
+    except Exception:
+        tx_quota = None  # never guessed
+
+    window = usage_reporting.month_window(month)
     return {
         "api_version": API_VERSION,
         "tenant_id": tenant_id,
         "month": month,
         "active_keys": len(active),
+        # ---- legacy fields: values unchanged, meaning now explicit ----------
         "monthly_limit": limit,
         "used": used,
         "remaining": max(limit - used, 0),
+        "unit": "admitted job units (one per admitted API job)",
+        "quota": {
+            "jobs": {
+                "scope": "tenant (sum of active credentials)",
+                "unit": "admitted job units",
+                "monthly_limit": limit,
+                "used": used,
+                "remaining": max(limit - used, 0),
+                "month": month,
+                "resets_at": window["end"],
+            },
+            "transactions": (
+                {
+                    "scope": "tenant",
+                    "unit": "admitted accounting transactions",
+                    "monthly_limit": int(tx_quota["monthly_limit"]),
+                    "used": int(tx_quota["used"]),
+                    "remaining": int(tx_quota["remaining"]),
+                    "month": tx_quota.get("usage_month"),
+                }
+                if tx_quota is not None
+                else {"available": False}
+            ),
+        },
+        "tenant_usage": tenant_usage,
+        "limitations": [
+            usage_reporting.PER_KEY_LIMITATION,
+            (
+                "job and transaction counters are scoped to the current UTC "
+                "month by admission time; they are not lifetime totals"
+            ),
+        ],
     }
 
 

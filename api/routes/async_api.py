@@ -70,6 +70,7 @@ from api.routes.developer import (
     _sanitize_request_id,
 )
 from backend.auth import async_jobs
+from backend.auth import job_history
 from backend.auth import gate as metered_gate
 from backend.auth import idempotency as idempotency_store
 from backend.auth import queue_capacity
@@ -1298,6 +1299,91 @@ def _creation_fingerprint(body: Dict[str, Any]) -> Dict[str, Any]:
         "raw_input": body.get("raw_input"),
         "source_name": str(body.get("source_name") or "document.pdf"),
     }
+
+
+@router.get(
+    "/v1/jobs",
+    dependencies=[Depends(_metered_api_key_guard_async)],
+    responses={
+        200: {"description": "One page of this tenant's jobs, newest first."},
+        400: {
+            "description": (
+                "INPUT_INVALID (limit outside 1-100), INVALID_CURSOR or "
+                "INVALID_STATUS_FILTER — nothing is read."
+            )
+        },
+        401: {"description": "Missing/unknown/inactive API key."},
+        503: {"description": "ASYNC_NOT_CONFIGURED / ASYNC_UNAVAILABLE — fail closed."},
+    },
+    summary="List this tenant's jobs (cursor paginated)",
+    description=(
+        "Answers 'what work has this tenant submitted?' without the developer "
+        "having to remember every job id. Strictly tenant-scoped from the "
+        "authenticated data-plane key: a caller cannot supply a tenant id, and "
+        "another tenant's job is never selected (so its existence is not "
+        "revealed). Newest first in the stable order created_at DESC, job_id "
+        "DESC, using keyset pagination — no OFFSET, so a page cannot skip or "
+        "duplicate rows while new jobs are submitted. Payloads are never "
+        "returned: fetch a result envelope from GET /v1/results/{result_id}. "
+        "Reading the list consumes no quota."
+    ),
+)
+def list_jobs_v1(
+    request: Request,
+    limit: int = job_history.DEFAULT_PAGE_SIZE,
+    cursor: Optional[str] = None,
+    status: Optional[str] = None,
+) -> JSONResponse:
+    """GET /v1/jobs — one page of the authenticated tenant's job history.
+
+    ``cursor`` is the opaque ``next_cursor`` of the previous page. Cursors do
+    not expire; a malformed one is a 400 rather than a silent reset to page 1
+    (which would make a paginating client loop forever). ``status`` filters on
+    the stored job states only.
+    """
+    rid = _sanitize_request_id(request.headers.get("x-request-id", ""))
+    if not async_jobs.async_configured():
+        return _async_not_ready(
+            "ASYNC_NOT_CONFIGURED", rid, "async jobs are not configured on this deployment"
+        )
+    tenant = _resolve_idempotency_tenant(request)
+    if tenant is None:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+    if limit < 1 or limit > job_history.MAX_PAGE_SIZE:
+        return _error_response(
+            400,
+            "INPUT_INVALID",
+            f"limit must be between 1 and {job_history.MAX_PAGE_SIZE}",
+            request_id=rid,
+        )
+    try:
+        entries, has_more = job_history.list_jobs(
+            tenant,
+            limit=limit,
+            cursor=cursor,
+            status=status,
+            visitor_id=async_jobs.current_visitor_scope(),
+        )
+    except job_history.CursorError as exc:
+        return _error_response(400, "INVALID_CURSOR", str(exc), request_id=rid)
+    except job_history.StatusFilterError as exc:
+        return _error_response(400, exc.code, exc.message, request_id=rid)
+    except async_jobs.AsyncStoreUnavailableError:
+        return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable")
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "api_version": API_VERSION,
+            "tenant_id": tenant,
+            "jobs": entries,
+            "count": len(entries),
+            "limit": limit,
+            "order": "created_at DESC, job_id DESC",
+            "has_more": has_more,
+            "next_cursor": job_history.next_cursor_for(entries) if has_more else None,
+        },
+    )
 
 
 @router.get(
