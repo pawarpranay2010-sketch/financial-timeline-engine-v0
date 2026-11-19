@@ -73,6 +73,7 @@ const ENDPOINTS: Array<[string, string]> = [
   ["POST /v1/process", "Process one financial narration — the canonical 5D result envelope"],
   ["POST /v1/process/document", "Text, PDF, or image — returns pages, evidence, lineage, timings"],
   ["POST /v1/documents", "Async document submission (202: job_id + result_id; admitted ≠ VERIFIED)"],
+  ["POST /v1/inference-jobs", "Submit one transaction or a bounded batch as an async job (202 admitted ≠ VERIFIED)"],
   ["GET /v1/jobs", "List your tenant's jobs, newest first — cursor paginated; no payloads"],
   ["GET /v1/jobs/{job_id}", "Poll an async job — completion is NOT VERIFIED; the status tells the truth"],
   ["GET /v1/usage", "Your quota units and this month's job/transaction counters (separate units)"],
@@ -89,6 +90,29 @@ const REASON_CODES: Array<[string, string]> = [
   ["GROUNDING_REJECTED", "grounding/evidence gate failed (FAILED)"],
   ["EVIDENCE_RECORDED", "FAILED with reasons recorded in issues / grounding_issues"],
   ["RESULT_PENDING", "outcome unknown — provider unavailable (PROCESSING)"],
+];
+
+const BATCH_SEMANTICS: Array<[string, string]> = [
+  [
+    'mode: "independent"',
+    "Each transaction is processed on its own — one failed transaction never invalidates the others.",
+  ],
+  [
+    'mode: "ordered"',
+    "Transactions run in order. Only a kernel-VERIFIED transaction advances the chain, and the state carried forward is the kernel's own output, never model text.",
+  ],
+  [
+    "BLOCKED_BY_PRIOR_UNVERIFIED_STATE",
+    "An ordered chain halts at the first non-VERIFIED link: every later transaction is BLOCKED explicitly and receives no model time.",
+  ],
+  [
+    "BATCH_BUDGET_EXHAUSTED",
+    "When the per-job device budget runs out, the untouched remainder is DEFERRED — explicit, never silently dropped.",
+  ],
+  [
+    "Aggregate status",
+    "VERIFIED only when every processed transaction is VERIFIED; otherwise the first non-VERIFIED outcome is carried verbatim.",
+  ],
 ];
 
 function CodeBlock({ children }: { children: string }) {
@@ -368,6 +392,54 @@ function DocumentationSection() {
               </li>
             ))}
           </ol>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6">
+          <h2 className="text-sm font-semibold">Batches — many transactions, one job</h2>
+          <p className="mt-1 mb-3 text-sm leading-relaxed text-muted-foreground">
+            <code className="font-mono text-xs">POST /v1/inference-jobs</code> accepts one
+            transaction (<code className="font-mono text-xs">raw_input</code>) or a bounded batch
+            (<code className="font-mono text-xs">mode</code> plus a list of{" "}
+            <code className="font-mono text-xs">transactions[]</code>). Both answer 202 with a job
+            id — a batch is ONE job carrying N transactions.
+          </p>
+          <dl className="space-y-2">
+            {BATCH_SEMANTICS.map(([term, meaning]) => (
+              <div
+                key={term}
+                className="grid gap-1 rounded-lg border border-border/70 bg-muted/30 px-3 py-2 sm:grid-cols-[240px_1fr] sm:items-baseline"
+              >
+                <dt className="font-mono text-xs font-semibold">{term}</dt>
+                <dd className="text-sm text-muted-foreground">{meaning}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            Bounds are operator-configured per deployment: 10 transactions per request by default
+            (hard ceiling 50), 256 KiB request body, 20,000 total input characters, and a
+            180-second device budget per job.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="pt-6">
+          <h2 className="text-sm font-semibold">Metering — jobs and transactions are separate units</h2>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            One admitted job consumes one <strong className="text-foreground">job unit</strong>;
+            each admitted accounting transaction consumes one{" "}
+            <strong className="text-foreground">transaction unit</strong>. A 5-transaction batch is
+            therefore 1 job and 5 transactions — never 5 jobs, and never 1 transaction. Units are
+            charged at admission: a transaction that is later BLOCKED, DEFERRED, or FAILED was still
+            admitted and is still counted. Requests rejected before admission (malformed body,
+            duplicate transaction ids, over the batch bound, exhausted quota) charge nothing, and an
+            idempotent replay charges nothing.{" "}
+            <code className="font-mono text-xs">GET /v1/usage</code> reports the credential&apos;s job
+            quota alongside this UTC month&apos;s job and transaction counters, each labelled with its
+            unit and window.
+          </p>
         </CardContent>
       </Card>
 
