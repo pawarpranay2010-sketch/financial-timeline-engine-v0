@@ -150,38 +150,60 @@ function OverviewSection() {
 function ApiKeysSection() {
   return (
     <div className="space-y-5">
-      <Card className="border-dashed">
+      <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-sm font-semibold">API key self-service</h2>
-            <ComingSoon>NOT YET ENABLED</ComingSoon>
+            <h2 className="text-sm font-semibold">Getting an API key</h2>
+            <ComingSoon>PRIVATE BETA · OPERATOR-ISSUED</ComingSoon>
           </div>
           <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
-            The backend currently supports key <em>verification</em> for its own metering gate
-            (requests present <code className="font-mono text-xs">X-Platrixa-API-Key</code>), but it
-            does not yet expose key generation, rotation, or revocation to end users. Platrixa does
-            not fake this: no keys can be created from this page because no issuance API exists.
+            Keys are issued by the Platrixa operator when your tenant is provisioned for the private
+            beta. There is no public sign-up and this page cannot create a key: key management is a
+            management-plane operation that requires the operator&apos;s credential, and that credential
+            never reaches this website or its proxy.
           </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Keys are provisioned by the operator in the backend configuration. Contact the operator
-            if you need a tenant key for the hosted gate.
+            A new key is generated with a cryptographically secure random source and returned exactly
+            once, to the operator, who hands it to you out of band. Platrixa stores only a SHA-256
+            hash of the key, so it cannot be retrieved again — by you or by the operator. Revocation
+            and rotation are operator actions: revocation stops the key authenticating at commit, and
+            rotation issues a new one-time secret.
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="pt-6">
-          <h2 className="text-sm font-semibold">Planned design</h2>
+          <h2 className="text-sm font-semibold">Where the key may be used</h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+            Server-side only. Call Platrixa from your own backend and keep the key in an environment
+            variable or a secret manager. If your frontend or mobile app needs Platrixa, proxy the
+            call through your backend.
+          </p>
+          <p className="mt-3 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+            This website&apos;s API proxy always authenticates as the website&apos;s own tenant and discards
+            any key supplied by a browser. A key pasted into browser devtools therefore cannot act as
+            your tenant — it is ignored, not honoured. Never ship a key in JavaScript, a mobile app
+            binary, localStorage, a URL query string, or a public repository.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-md bg-muted/40 px-3 py-2 font-mono text-[11px]">{`# .env — server side, never committed
+PLATRIXA_API_KEY=plx_test_...`}</pre>
+        </CardContent>
+      </Card>
+
+      <Card className="border-dashed">
+        <CardContent className="pt-6">
+          <h2 className="text-sm font-semibold">What a self-service portal still needs</h2>
           <p className="mt-1.5 text-xs text-muted-foreground">
-            Architecture prepared on this page — it activates only against a real issuance API.
+            Stated plainly so nobody mistakes this page for a working dashboard.
           </p>
           <ol className="mt-3 space-y-2 text-sm text-muted-foreground">
             {[
-              "Create key → name + environment, generated server-side",
-              "Secret shown exactly once, with copy action — never displayed again",
-              "List view: name, masked key, environment, created date, last used, status",
-              "Revoke and rotate actions per key",
-              "Tenant and quota association, mirroring the backend metering gate",
+              "A developer identity with a verified sign-in session (does not exist yet)",
+              "Server-side tenant ownership derived from that identity, never from the request body",
+              "Key creation, masked listing, revocation and rotation scoped to the signed-in tenant",
+              "Usage, quota and recent-job views for that tenant only",
+              "Owner-controlled invitations remain the provisioning path until sign-in is reviewed",
             ].map((item, i) => (
               <li key={i} className="flex gap-2.5">
                 <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px] text-muted-foreground">
@@ -192,8 +214,8 @@ function ApiKeysSection() {
             ))}
           </ol>
           <p className="mt-3 rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            Keys will never be exposed through <code className="font-mono">NEXT_PUBLIC_*</code>, client-side
-            source, browser storage, or logs — they will be created and stored server-side only.
+            Keys are never exposed through <code className="font-mono">NEXT_PUBLIC_*</code>, client-side
+            source, browser storage or logs, and are never returned again after creation.
           </p>
         </CardContent>
       </Card>

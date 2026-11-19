@@ -34,6 +34,13 @@ A request without a valid key is refused before any work happens. The key
 identifies your tenant; you never send a tenant id, and you cannot read another
 tenant's jobs or results.
 
+**Never send this key from a browser.** The public website's API proxy always
+authenticates as the website's own tenant and discards any key a browser
+supplies, so a key pasted into browser devtools is ignored rather than honoured
+— your request would quietly run as the website, not as you. Call the API from
+your own backend (or proxy through it), with the key in an environment variable
+or a secret manager.
+
 Check that your credential and the service are ready:
 
 ```bash
