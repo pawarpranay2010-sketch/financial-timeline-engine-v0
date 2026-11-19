@@ -7,6 +7,7 @@ import { WhyPlatrixa } from "@/components/home/why-platrixa";
 import { FailureModes } from "@/components/home/failure-modes";
 import { AuthoritiesSection } from "@/components/home/authorities-section";
 import { DeveloperFlow } from "@/components/home/developer-flow";
+import { DeveloperCta } from "@/components/home/developer-cta";
 import { TrustSafetySection } from "@/components/home/trust-safety-section";
 import { RegistryStrip } from "@/components/home/registry-strip";
 
@@ -15,7 +16,7 @@ import { RegistryStrip } from "@/components/home/registry-strip";
  *
  *   HERO → TRY IT → VALIDATION JOURNEY → RESULT/EVIDENCE (inside the
  *   journey) → WHY PLATRIXA → FAILURE MODES → AUTHORITIES → DEVELOPER
- *   EXPERIENCE → TRUST & SAFETY → (site footer)
+ *   EXPERIENCE → DEVELOPER API ENTRY POINT → TRUST & SAFETY → (site footer)
  *
  * The validation story is the hero; animation only communicates the
  * architecture. The live registry supplies every number shown.
@@ -32,6 +33,7 @@ export default function LandingPage() {
         <FailureModes />
         <AuthoritiesSection />
         <DeveloperFlow />
+        <DeveloperCta />
         <TrustSafetySection />
       </div>
     </main>
