@@ -153,17 +153,22 @@ This is the configuration that serves the **V2 app as the main page**:
 | Environment variable | `API_BACKEND_URL=https://<your-fastapi-host>` |
 
 `npm run build:pages` (see `frontend/web/scripts/build-pages.mjs`) statically
-exports the Next.js app to `out/` and then copies `frontend/functions/` into
-`out/functions/`. Cloudflare only discovers Pages Functions inside the build
-output directory, so the copy is what makes the API boundary work from the
-V2 artifact. The two Node route handlers that cannot be statically exported
-are excluded from this one build only and are always restored afterwards; the
-managed dev/preview build (`npm run build`) still includes them.
+exports the Next.js app to `out/` and then packages the two proxy handlers
+from `frontend/functions/` as an advanced-mode `out/_worker.js`
+(`frontend/web/pages-worker.js`) that imports them from `out/_proxy/`. A
+`functions/` directory is compiled only by Cloudflare's Git build, so a
+direct `wrangler pages deploy` of `out/` would otherwise serve the site and
+answer `/api/*` and `/v1/*` with the static 404 page. The worker wrapper
+mounts the same handlers unchanged, so both publish paths expose the
+identical API boundary and its security decisions. The two Node route
+handlers that cannot be statically exported are excluded from this one build
+only and are always restored afterwards; the managed dev/preview build
+(`npm run build`) still includes them.
 
 Verified locally: `npm run lint`, `npx tsc --noEmit` (run AFTER a build, since
 `LayoutProps` is a Next-generated global from `.next/types`) and
-`npm run build:pages` all succeed; all seven routes prerender static and both
-Functions are present in the artifact.
+`npm run build:pages` all succeed; all seven routes prerender static and the
+artifact carries `_worker.js` plus both proxy modules in `_proxy/`.
 
 If the Pages project is still pointed at `frontend/` it is serving the
 **legacy** UI. That is the single setting that decides which page is public.

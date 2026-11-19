@@ -72,6 +72,21 @@ if (failed) {
   process.exit(1);
 }
 
-// 4. Pages Functions must live inside the build output directory.
-cpSync(functionsDir, path.join(root, "out", "functions"), { recursive: true });
-console.log("build-pages: Pages artifact ready at frontend/web/out (static app + functions/)");
+// 4. Package the proxy handlers with the artifact.
+//
+// A `functions/` directory is only compiled by Cloudflare's Git build, so a
+// direct `wrangler pages deploy` of out/ would serve the site and answer
+// /api/* and /v1/* with the static 404 page. Ship the SAME handlers as an
+// advanced-mode _worker.js (pages-worker.js) that imports them instead, so
+// both publish paths expose the identical API boundary.
+// A stale out/functions from an older build would collide with _worker.js
+// (Pages rejects an artifact that has both), so it is removed.
+rmSync(path.join(root, "out", "functions"), { recursive: true, force: true });
+const proxyDir = path.join(root, "out", "_proxy");
+mkdirSync(proxyDir, { recursive: true });
+cpSync(path.join(functionsDir, "api", "[[path]].js"), path.join(proxyDir, "api.js"));
+cpSync(path.join(functionsDir, "v1", "[[path]].js"), path.join(proxyDir, "v1.js"));
+cpSync(path.join(root, "pages-worker.js"), path.join(root, "out", "_worker.js"));
+console.log(
+  "build-pages: Pages artifact ready at frontend/web/out (static app + _worker.js proxy)",
+);
