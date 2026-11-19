@@ -35,6 +35,8 @@ from api.schemas import (
     ApiKeyCreatedResponse,
     ApiKeyListResponse,
     ApiKeyRevokedResponse,
+    TenantProvisionedResponse,
+    TenantProvisionRequest,
 )
 from api.status import LABEL_BY_PUBLIC_STATUS, public_status_for_error_code
 
@@ -291,6 +293,130 @@ def revoke_api_key(
 
     try:
         view, code = store.revoke_api_key(tenant_id, key_id)
+    except store.ApiKeyStoreError:
+        return _store_error_response(request)
+    if view is None:
+        if code == store.KEY_REVOKED:
+            return _error_response(
+                404,
+                "API_KEY_REVOKED",
+                "key is revoked and cannot be rotated",
+                request.headers.get("x-request-id"),
+            )
+        return _error_response(
+            404,
+            "API_KEY_NOT_FOUND",
+            "no such key for this tenant",
+            request.headers.get("x-request-id"),
+        )
+    return view
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/developer/tenants — owner-only tenant provisioning
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/tenants",
+    response_model=TenantProvisionedResponse,
+    status_code=201,
+    responses={
+        400: {"description": "Invalid tenant id / developer name / environment / quota"},
+        403: {"description": "Management authorization failed"},
+        409: {"description": "TENANT_ALREADY_EXISTS — the tenant already owns a credential"},
+        503: {"description": "Management store unavailable (fail closed)"},
+    },
+)
+def provision_tenant(
+    request: Request,
+    payload: TenantProvisionRequest,
+    x_platrixa_management_token: Optional[str] = Header(default=None),
+):
+    """Provision ONE new developer tenant: its own API key and quota.
+
+    The authorizing identity is the OWNER (management plane). The target
+    tenant comes from the request body — never from the owner's own tenant
+    binding — so a new developer can never be silently folded into the
+    existing tenant. The registry row and the quota row are written in one
+    transaction, and the raw key is returned exactly once.
+    """
+    from backend.auth import api_keys as store
+
+    owner_tenant = _authorize(request)
+    logger.info(
+        "tenant provisioning requested: owner=%s target=%s",
+        owner_tenant,
+        payload.tenant_id,
+    )
+    try:
+        created = store.provision_tenant(
+            tenant_id=payload.tenant_id,
+            developer_name=payload.developer_name,
+            environment=payload.environment,
+            monthly_limit=payload.monthly_limit,
+        )
+    except store.TenantAlreadyExistsError:
+        return _error_response(
+            409,
+            "TENANT_ALREADY_EXISTS",
+            "tenant already owns a credential; use a new tenant id or rotate the existing key",
+            request.headers.get("x-request-id"),
+        )
+    except ValueError:
+        return _error_response(
+            400,
+            "TENANT_PROVISION_INVALID",
+            "tenant_id must be a lowercase slug (3-64 chars), developer_name 1-120 chars, "
+            "environment one of test|live, monthly_limit 0-1000000",
+            request.headers.get("x-request-id"),
+        )
+    except store.ApiKeyStoreError:
+        logger.warning("tenant provisioning store failure (fail closed)")
+        return _store_error_response(request)
+    return created
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/developer/tenants/{tenant_id}/keys/{key_id}/revoke
+# ---------------------------------------------------------------------------
+#
+# The tenant-bound revoke route above can only ever reach the OWNER tenant's
+# keys, which is correct for isolation but leaves a provisioned developer
+# tenant unrevokable. This owner-scoped route names the target tenant
+# explicitly; the store still enforces that the key must belong to it.
+
+
+@router.post(
+    "/tenants/{tenant_id}/keys/{key_id}/revoke",
+    response_model=ApiKeyRevokedResponse,
+    responses={
+        400: {"description": "Invalid tenant id"},
+        403: {"description": "Management authorization failed"},
+        404: {"description": "Key not found for that tenant (or already revoked)"},
+        503: {"description": "Management store unavailable (fail closed)"},
+    },
+)
+def revoke_tenant_key(
+    request: Request,
+    tenant_id: str,
+    key_id: str,
+    x_platrixa_management_token: Optional[str] = Header(default=None),
+):
+    """Revoke one key belonging to an explicitly named tenant (owner-only)."""
+    from backend.auth import api_keys as store
+
+    _authorize(request)
+    target = store.validate_tenant_id(tenant_id)
+    if target is None:
+        return _error_response(
+            400,
+            "TENANT_ID_INVALID",
+            "tenant_id must be a lowercase slug (3-64 chars)",
+            request.headers.get("x-request-id"),
+        )
+    try:
+        view, code = store.revoke_api_key(target, key_id)
     except store.ApiKeyStoreError:
         return _store_error_response(request)
     if view is None:

@@ -42,6 +42,17 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # Phase 1B: pending-queue limits are validated at STARTUP. An invalid,
+    # negative, or zero limit raises here instead of silently disabling
+    # protection for the whole deployment (the pre-correction behaviour).
+    from backend.auth import queue_capacity, tenant_rate_limit
+
+    queue_capacity.validate_config()
+    # Durable per-tenant request-rate limits are validated at startup too: a
+    # non-integer or negative value must stop the deployment, not silently
+    # disable the control (PLATRIXA_TENANT_RATE_LIMIT=0 disables it on purpose).
+    tenant_rate_limit.validate_config()
+
     app = FastAPI(
         title="Platrixa API",
         version=__version__,
@@ -319,6 +330,12 @@ def create_app() -> FastAPI:
     from api.routes import observability
 
     app.include_router(observability.router)
+    # Owner-only operational visibility (queue depth, reconciliation, worker
+    # activity derived from leases). Same management credential as key
+    # management; never reachable with a developer API key.
+    from api.routes import owner_ops
+
+    app.include_router(owner_ops.router)
     # Phase 15: deterministic malformed-request normalization for /v1 only
     # (400 instead of the framework-default 422 for parsing/validation
     # failures). Browser-facing /api/v1 keeps its documented behavior.

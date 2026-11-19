@@ -286,13 +286,19 @@ def _ensure_schema(engine) -> None:
     from pathlib import Path
     from sqlalchemy import text
 
-    ddl_path = (
-        Path(__file__).resolve().parent.parent
-        / "database"
-        / "platrixa_api_keys_schema.sql"
-    )
+    # The registry DDL alone is NOT enough: create_api_key inserts into the
+    # companion quota table in the same transaction, and that table was
+    # previously created only lazily at the first METERED request. On a fresh
+    # database the first key creation therefore failed with
+    # UndefinedTable: relation "platrixa_tenant_quotas" does not exist.
+    # Both idempotent files are applied here, quota first.
+    ddl_dir = Path(__file__).resolve().parent.parent / "database"
     with engine.begin() as conn:
-        conn.execute(text(ddl_path.read_text(encoding="utf-8")))
+        for ddl_name in (
+            "platrixa_tenant_quota_schema.sql",
+            "platrixa_api_keys_schema.sql",
+        ):
+            conn.execute(text((ddl_dir / ddl_name).read_text(encoding="utf-8")))
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +399,53 @@ def _safe_view(row: ApiKey, last_used: Optional[datetime]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
+DEFAULT_MONTHLY_LIMIT = 100
+MAX_MONTHLY_LIMIT = 1_000_000
+TENANT_ID_MIN_LEN = 3
+TENANT_ID_MAX_LEN = 64
+
+
+def validate_tenant_id(raw: object) -> Optional[str]:
+    """Normalized tenant id, or None when invalid (fail closed).
+
+    A tenant id is an owner-assigned slug. It is NEVER accepted from a data
+    plane client: the runtime resolves the tenant from the authenticated
+    credential's stored row. Lowercase alphanumeric and internal hyphens
+    only, so an id can never carry a control character, a path separator,
+    whitespace, or a case variant that looks like a different tenant.
+    """
+    import re
+
+    if not isinstance(raw, str):
+        return None
+    tenant = raw.strip()
+    # Reject rather than case-fold: a silently normalized id would make the
+    # response's tenant_id differ from the request's, so an owner could
+    # believe they created "Alice" while the tenant is "alice".
+    if tenant != tenant.lower():
+        return None
+    if not (TENANT_ID_MIN_LEN <= len(tenant) <= TENANT_ID_MAX_LEN):
+        return None
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", tenant):
+        return None
+    return tenant
+
+
+def validate_monthly_limit(raw: object) -> Optional[int]:
+    """Non-negative integer quota, or None when invalid (fail closed)."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    if raw < 0 or raw > MAX_MONTHLY_LIMIT:
+        return None
+    return raw
+
+
+def create_api_key(
+    tenant_id: str,
+    name: str,
+    environment: str,
+    monthly_limit: int = DEFAULT_MONTHLY_LIMIT,
+) -> dict:
     """Create a key: registry row + companion quota row, one transaction.
 
     The returned dict contains ``raw_key`` EXACTLY ONCE. The database
@@ -410,6 +462,9 @@ def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
         raise ValueError("invalid key name")
     if environment not in ENVIRONMENTS:
         raise ValueError("invalid environment")
+    limit = validate_monthly_limit(monthly_limit)
+    if limit is None:
+        raise ValueError("invalid monthly limit")
 
     last_error: Optional[Exception] = None
     for _attempt in range(_MAX_GENERATION_ATTEMPTS):
@@ -436,7 +491,7 @@ def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
                     TenantQuota(
                         api_key_hash=key_hash,
                         tenant_id=tenant_id,
-                        monthly_limit=100,
+                        monthly_limit=limit,
                         current_month_usage=0,
                         usage_month=current_usage_month(),
                         is_active=True,
@@ -457,6 +512,122 @@ def create_api_key(tenant_id: str, name: str, environment: str) -> dict:
             # with freshly generated randomness; never overwrite.
             last_error = exc
     raise ApiKeyStoreError("key generation failed after retries") from last_error
+
+
+class TenantAlreadyExistsError(ApiKeyStoreError):
+    """A tenant id already owns at least one credential record."""
+
+
+def tenant_exists(tenant_id: str) -> bool:
+    """True when the tenant already owns a credential record."""
+    from sqlalchemy import select
+
+    model = api_key_model()
+    with _session() as session:
+        row = session.execute(
+            select(model.id).where(model.tenant_id == tenant_id).limit(1)
+        ).first()
+    return row is not None
+
+
+def provision_tenant(
+    tenant_id: str,
+    developer_name: str,
+    environment: str = DEFAULT_ENVIRONMENT,
+    monthly_limit: int = DEFAULT_MONTHLY_LIMIT,
+) -> dict:
+    """Provision ONE new developer tenant with its own API key and quota.
+
+    Owner-only operation. It reuses the existing identity model exactly:
+    a tenant is the ``tenant_id`` string carried by its credential row and
+    its companion quota row — there is no separate tenants table, and every
+    data-plane query is already scoped by that string.
+
+    Atomicity: the registry row and the quota row are inserted in ONE
+    transaction, so a failure leaves no tenant, no key and no quota behind.
+    A transaction-scoped advisory lock serialises concurrent provisioning of
+    the SAME tenant id, so two owners hitting the endpoint at once can never
+    create two tenants that look like one.
+
+    Returns the created record with the raw key EXACTLY ONCE. Nothing here
+    logs, stores, or re-derives the raw key.
+    """
+    from sqlalchemy import select, text
+    from sqlalchemy.exc import IntegrityError
+
+    from backend.auth.models import TenantQuota, current_usage_month
+
+    tenant = validate_tenant_id(tenant_id)
+    if tenant is None:
+        raise ValueError("invalid tenant id")
+    normalized = validate_name(developer_name)
+    if normalized is None:
+        raise ValueError("invalid developer name")
+    if environment not in ENVIRONMENTS:
+        raise ValueError("invalid environment")
+    limit = validate_monthly_limit(monthly_limit)
+    if limit is None:
+        raise ValueError("invalid monthly limit")
+
+    model = api_key_model()
+    raw_key, key_prefix, key_hash = generate_raw_key(environment)
+    now = datetime.now(timezone.utc)
+    key_id = str(uuid.uuid4())
+
+    with _session() as session:
+        # Serialise concurrent provisioning of this tenant id for the whole
+        # transaction; the lock is released by COMMIT/ROLLBACK.
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:t)::bigint)"),
+            {"t": f"platrixa-tenant:{tenant}"},
+        )
+        existing = session.execute(
+            select(model.id).where(model.tenant_id == tenant).limit(1)
+        ).first()
+        if existing is not None:
+            raise TenantAlreadyExistsError(tenant)
+
+        session.add(
+            model(
+                id=key_id,
+                tenant_id=tenant,
+                name=normalized,
+                key_prefix=key_prefix,
+                key_hash=key_hash,
+                environment=environment,
+                status="ACTIVE",
+                created_at=now,
+            )
+        )
+        session.add(
+            TenantQuota(
+                api_key_hash=key_hash,
+                tenant_id=tenant,
+                monthly_limit=limit,
+                current_month_usage=0,
+                usage_month=current_usage_month(),
+                is_active=True,
+            )
+        )
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # Any constraint failure rolls the WHOLE provisioning transaction
+            # back: no tenant row, no key row, no quota row.
+            session.rollback()
+            raise ApiKeyStoreError("tenant provisioning failed") from exc
+
+    return {
+        "tenant_id": tenant,
+        "key_id": key_id,
+        "name": normalized,
+        "environment": environment,
+        "monthly_limit": limit,
+        "key": raw_key,
+        "key_prefix": key_prefix,
+        "status": "ACTIVE",
+        "created_at": now.isoformat(),
+    }
 
 
 def list_api_keys(tenant_id: str) -> List[dict]:

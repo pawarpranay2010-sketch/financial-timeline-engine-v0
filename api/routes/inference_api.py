@@ -83,6 +83,7 @@ from api.schemas import DeveloperJobAcceptedResponse, KernelProcessRequest
 from backend.auth import admission as admission_boundary
 from backend.auth import async_jobs
 from backend.auth import idempotency as idempotency_store
+from backend.auth import queue_capacity
 
 # NOTE: `backend.model_provider.local_bridge` (and therefore
 # `backend.model_provider.remote_hf`, `requests`, …) is imported INSIDE the
@@ -131,6 +132,41 @@ def _tenant_api_key_guard(request: Request) -> None:
     reason, _adm = admission_boundary.authenticate_only(provided)
     if reason != admission_boundary.ADMIT_OK:
         raise _gate_http_exception(reason)
+
+
+def _enforce_tenant_rate_limit(tenant: str):
+    """Consume ONE durable per-tenant request unit for this call.
+
+    Returns a response to send when the tenant is over its configured rate,
+    or None when the call may continue. The counter lives in the metering
+    store, so a restart or a second API process cannot reset or duplicate it
+    — unlike the per-IP in-memory limiter in ``api/rate_limit.py``.
+
+    A store failure fails closed (503): the queue itself is unreachable in
+    that state, so admitting the request would only fail later and later.
+    """
+    from backend.auth import tenant_rate_limit
+    from backend.auth.async_jobs import AsyncStoreUnavailableError
+
+    if not tenant_rate_limit.enabled():
+        return None
+    try:
+        tenant_rate_limit.consume(tenant)
+    except tenant_rate_limit.TenantRateLimited as exc:
+        response = _error_response(
+            429,
+            tenant_rate_limit.TENANT_RATE_LIMITED,
+            "this tenant exceeded its request rate for the current window",
+            request_id=None,
+        )
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        response.headers["X-RateLimit-Limit"] = str(exc.limit)
+        return response
+    except AsyncStoreUnavailableError:
+        return _async_not_ready(
+            "ASYNC_UNAVAILABLE", None, "async store unavailable; request not admitted"
+        )
+    return None
 
 
 def _sanitize_worker_id(value: Any) -> Optional[str]:
@@ -257,6 +293,11 @@ async def create_inference_job(request: Request) -> JSONResponse:
             "this deployment has no durable async store configured; use POST /v1/process",
         )
 
+    # NOTE: pending-queue capacity is enforced ATOMICALLY inside
+    # async_jobs.create_job (advisory lock + durable count + INSERT in one
+    # transaction). A pre-flight check here could only race the insert and
+    # would under-count jobs still waiting for a worker.
+
     # ---- parse + validate with the canonical request schema ---------------
     # KernelProcessRequest is the SAME schema POST /v1/process uses, so the
     # raw-input length constraints (1..2000) cannot drift between the two.
@@ -285,6 +326,9 @@ async def create_inference_job(request: Request) -> JSONResponse:
     tenant = _resolve_idempotency_tenant(request)
     if tenant is None:
         return _async_not_ready("ASYNC_UNAVAILABLE", rid, "async store unavailable; request not admitted")
+    limited = _enforce_tenant_rate_limit(tenant)
+    if limited is not None:
+        return limited
 
     # ---- idempotency FIRST (Phase 5C ordering) ----------------------------
     # The key is claimed BEFORE the reservation, so a replay never charges and
@@ -369,6 +413,15 @@ async def create_inference_job(request: Request) -> JSONResponse:
             request_id=rid or None,
             kind=async_jobs.JOB_KIND_INFERENCE,
         )
+    except queue_capacity.QueueCapacityExceeded as exc:
+        # Queue full: the admission transaction rolled back, so no job row and
+        # no capacity reservation exist. Release the idempotency claim so the
+        # client can retry the same key once capacity frees up.
+        if idem_key:
+            idempotency_store.release(idem_key, tenant)
+        _log("/v1/inference-jobs", request_id=rid, status=None,
+             duration_ms=int((time.perf_counter() - started) * 1000), error=exc.code)
+        return _async_not_ready(exc.code, rid, "pending queue capacity exhausted; retry later")
     except async_jobs.AsyncStoreUnavailableError:
         if idem_key:
             idempotency_store.release(idem_key, tenant)
@@ -473,6 +526,10 @@ async def claim_inference_job(request: Request) -> JSONResponse:
     tenant = _resolve_idempotency_tenant(request)
     if tenant is None:
         return _async_not_ready("ASYNC_UNAVAILABLE", None, "async store unavailable")
+
+    limited = _enforce_tenant_rate_limit(tenant)
+    if limited is not None:
+        return limited
 
     owner = _claim_owner(request)
     # Opportunistic sweep: a job whose retry budget is spent and whose lease has

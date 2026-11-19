@@ -147,7 +147,12 @@ class FakeSession:
         self.calls = []
 
     def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002 - mirrors requests
-        call = {"url": url, "json": json, "headers": dict(headers or {}), "timeout": timeout}
+        call = {"method": "POST", "url": url, "json": json, "headers": dict(headers or {}), "timeout": timeout}
+        self.calls.append(call)
+        return self._handler(call)
+
+    def get(self, url, headers=None, timeout=None):
+        call = {"method": "GET", "url": url, "json": None, "headers": dict(headers or {}), "timeout": timeout}
         self.calls.append(call)
         return self._handler(call)
 
@@ -1596,6 +1601,258 @@ def test_model_length_finish_reason_is_truncated_not_complete() -> None:
         assert body["finish_reason"] == "length"
 
 
+# ---------------------------------------------------------------------------
+# S1 — local model readiness gate (GET /v1/models before every claim)
+# ---------------------------------------------------------------------------
+
+
+def make_readiness_worker(model_handler, api_handler, *, model_id="default"):
+    """A direct-model worker whose MODEL transport is a fake (never a socket)."""
+    if api_handler is None:
+        api_handler = lambda call: FakeResponse(200, no_work_body(0.01))  # noqa: E731
+    config = WorkerConfig(
+        api_base_url=API_BASE,
+        api_key=API_KEY,
+        worker_id=WORKER_ID,
+        bridge_url=BRIDGE_BASE,
+        bridge_key=BRIDGE_KEY,
+        model_url=MODEL_URL,
+        model_id=model_id,
+        heartbeat_tick_s=0.01,
+        shutdown_timeout_s=5.0,
+    )
+    api_session = FakeSession(api_handler)
+    model_session = FakeSession(model_handler)
+    worker = OutboundInferenceWorker(
+        config,
+        session=api_session,
+        bridge_session=FakeSession(
+            lambda call: (_ for _ in ()).throw(
+                AssertionError("the readiness/direct-model path must not use the bridge")
+            )
+        ),
+        model_session=model_session,
+        now=time.monotonic,
+        sleep=lambda seconds: None,
+    )
+    return worker, api_session, model_session
+
+
+def models_body(*ids: str) -> dict:
+    return {"object": "list", "data": [{"id": model_id} for model_id in ids]}
+
+
+def test_readiness_gate_probes_get_models() -> None:
+    """A healthy endpoint is probed with GET (not POST) and reads as ready."""
+    worker, _api, model = make_readiness_worker(
+        lambda call: FakeResponse(200, models_body("default")), None
+    )
+
+    readiness = worker.model_ready()
+
+    assert readiness.configured is True
+    assert readiness.ready is True, readiness.reason
+    assert readiness.reason == "model ready", readiness.reason
+    assert readiness.model_ids == ("default",), readiness.model_ids
+    assert readiness.checked_at > 0
+    assert len(model.calls) == 1, model.calls
+    assert model.calls[0]["method"] == "GET", (
+        f"the readiness probe must be a GET, got {model.calls[0]['method']}"
+    )
+    assert model.calls[0]["url"] == MODEL_URL + "/v1/models", model.calls[0]["url"]
+    # No model key configured: no Authorization header, and never a tenant key.
+    assert "Authorization" not in model.calls[0]["headers"]
+    assert API_KEY not in json.dumps(model.calls[0]["headers"])
+
+
+def test_readiness_unreachable_model_is_not_ready() -> None:
+    """A refused connection is NOT ready and never raises into the poll loop."""
+    def boom(call):
+        raise requests.ConnectionError("connection refused")
+
+    worker, _api, _model = make_readiness_worker(boom, None)
+    readiness = worker.model_ready()
+
+    assert readiness.ready is False
+    assert "unreachable" in readiness.reason.lower(), readiness.reason
+
+
+def test_readiness_http_error_is_not_ready() -> None:
+    worker, _api, _model = make_readiness_worker(
+        lambda call: FakeResponse(503, error_body("MODEL_LOADING")), None
+    )
+    readiness = worker.model_ready()
+
+    assert readiness.ready is False
+    assert "http 503" in readiness.reason.lower(), readiness.reason
+
+
+def test_readiness_invalid_json_is_not_ready() -> None:
+    worker, _api, _model = make_readiness_worker(
+        lambda call: FakeResponse(200, text="{not json"), None
+    )
+    readiness = worker.model_ready()
+
+    assert readiness.ready is False
+    assert "not valid json" in readiness.reason.lower(), readiness.reason
+
+
+def test_readiness_empty_model_list_is_not_ready() -> None:
+    worker, _api, _model = make_readiness_worker(
+        lambda call: FakeResponse(200, {"object": "list", "data": []}), None
+    )
+    readiness = worker.model_ready()
+
+    assert readiness.ready is False
+    assert "no model id" in readiness.reason.lower(), readiness.reason
+
+
+def test_readiness_missing_configured_model_is_not_ready() -> None:
+    """The endpoint being up is not enough: the CONFIGURED id must be loaded."""
+    worker, _api, _model = make_readiness_worker(
+        lambda call: FakeResponse(200, models_body("some-other-model")), None
+    )
+    readiness = worker.model_ready()
+
+    assert readiness.ready is False
+    assert "not advertised" in readiness.reason.lower(), readiness.reason
+    assert readiness.model_ids == ("some-other-model",), readiness.model_ids
+
+
+def test_readiness_auto_resolves_only_a_single_id() -> None:
+    """--model-id auto resolves a single advertised id; ambiguity is not ready."""
+    worker, _api, _model = make_readiness_worker(
+        lambda call: FakeResponse(200, models_body("only-model")), None, model_id="auto"
+    )
+    readiness = worker.model_ready()
+    assert readiness.ready is True, readiness.reason
+    assert worker.config.model_id == "auto"  # config is frozen; resolution is internal
+
+    ambiguous, _api2, _model2 = make_readiness_worker(
+        lambda call: FakeResponse(200, models_body("one", "two")), None, model_id="auto"
+    )
+    readiness2 = ambiguous.model_ready()
+    assert readiness2.ready is False
+    assert "ambiguous" in readiness2.reason.lower(), readiness2.reason
+
+
+def test_no_job_is_claimed_while_model_is_unready() -> None:
+    """An unready model means ZERO claim requests — nothing is burned server-side."""
+    worker, api, model = make_readiness_worker(
+        lambda call: FakeResponse(503, error_body("MODEL_DOWN")), None
+    )
+
+    completed = worker.run_forever(max_polls=2)
+
+    report = worker.last_run_report
+    assert completed == 0
+    assert api.calls == [], f"no claim may be sent while unready (got {api.calls})"
+    assert report["claims"] == 0, report
+    assert report["readiness_waits"] == 2, report
+    assert report["claimed"] == 0
+    assert report["failures_reported"] == 0
+    assert len(model.calls) == 2, "one readiness probe per poll attempt"
+    assert all(call["method"] == "GET" for call in model.calls), model.calls
+
+
+def test_readiness_recovers_and_the_worker_claims_again() -> None:
+    """Readiness is re-checked each cycle: once the model returns, work resumes."""
+    state = {"probes": 0, "claims": 0}
+
+    def model_handler(call):
+        if call["url"].endswith("/v1/models"):
+            state["probes"] += 1
+            if state["probes"] == 1:
+                return FakeResponse(503, error_body("MODEL_LOADING"))
+            return FakeResponse(200, models_body("default"))
+        return FakeResponse(
+            200,
+            {"choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}]},
+        )
+
+    def api_handler(call):
+        url = call["url"]
+        if url.endswith("/claim"):
+            state["claims"] += 1
+            if state["claims"] == 1:
+                return FakeResponse(200, claim_body())
+            return FakeResponse(200, no_work_body(0.01))
+        if url.endswith("/lease"):
+            return FakeResponse(200, renewal_body())
+        if url.endswith("/result"):
+            return FakeResponse(200, RESULT_ENVELOPE)
+        raise AssertionError(f"unexpected API call: {url}")
+
+    worker, _api, _model = make_readiness_worker(model_handler, api_handler)
+    completed = worker.run_forever(max_polls=3)
+    report = worker.last_run_report
+
+    assert report["readiness_waits"] == 1, report
+    assert report["claimed"] == 1, report
+    assert completed == 1, report
+    assert report["accepted"] == 1, report
+
+
+def test_readiness_rechecked_after_model_unavailable() -> None:
+    """A MODEL_UNAVAILABLE generation is followed by a readiness probe before
+    the next claim — a still-down model stops the worker from claiming again."""
+    state = {"ready": True, "claims": 0}
+    failures: list = []
+
+    def model_handler(call):
+        if call["url"].endswith("/v1/models"):
+            if state["ready"]:
+                return FakeResponse(200, models_body("default"))
+            return FakeResponse(503, error_body("MODEL_DOWN"))
+        # The inference call fails and the model is (from now on) down.
+        state["ready"] = False
+        return FakeResponse(503, text="model is down")
+
+    def api_handler(call):
+        url = call["url"]
+        if url.endswith("/claim"):
+            state["claims"] += 1
+            return FakeResponse(200, claim_body())
+        if url.endswith("/lease"):
+            return FakeResponse(200, renewal_body())
+        if url.endswith("/failure"):
+            failures.append(call)
+            return FakeResponse(
+                200, {"api_version": "v1", "status": "RETRY_WAIT", "retryable": True}
+            )
+        raise AssertionError(f"unexpected API call: {url}")
+
+    worker, _api, _model = make_readiness_worker(model_handler, api_handler)
+    worker.run_forever(max_polls=3)
+    report = worker.last_run_report
+
+    assert state["claims"] == 1, f"a down model must not be claimed again ({state})"
+    assert len(failures) == 1, "the unusable generation is reported exactly once"
+    assert report["readiness_waits"] >= 1, report
+    assert report["failures_reported"] == 1, report
+
+
+def test_bridge_mode_skips_the_readiness_gate() -> None:
+    """Device-bridge mode has no model probe and keeps its previous behaviour."""
+    worker, api, _bridge = make_worker(
+        lambda call: FakeResponse(200, no_work_body(0.01))
+    )
+    worker.run_forever(max_polls=1)
+    report = worker.last_run_report
+
+    assert report["claims"] == 1, report
+    assert report["readiness_waits"] == 0, report
+    assert [c["method"] for c in api.calls] == ["POST"], api.calls
+    # Bridge mode never probes in the poll loop; asking explicitly reports that
+    # the bridge owns readiness rather than inventing a probe result.
+    readiness = worker.model_ready()
+    assert worker.last_readiness is readiness
+    assert readiness.configured is False
+    assert readiness.ready is True
+    # The bridge worker has no model endpoint at all; no GET was possible.
+    assert worker._model_base_url is None
+
+
 TESTS = (
     test_no_work_and_headers,
     test_claimed_job,
@@ -1637,6 +1894,18 @@ TESTS = (
     test_model_unrecognized_finish_reason_fails_closed,
     test_model_stop_finish_reason_is_complete,
     test_model_length_finish_reason_is_truncated_not_complete,
+    # S1 readiness gate
+    test_readiness_gate_probes_get_models,
+    test_readiness_unreachable_model_is_not_ready,
+    test_readiness_http_error_is_not_ready,
+    test_readiness_invalid_json_is_not_ready,
+    test_readiness_empty_model_list_is_not_ready,
+    test_readiness_missing_configured_model_is_not_ready,
+    test_readiness_auto_resolves_only_a_single_id,
+    test_no_job_is_claimed_while_model_is_unready,
+    test_readiness_recovers_and_the_worker_claims_again,
+    test_readiness_rechecked_after_model_unavailable,
+    test_bridge_mode_skips_the_readiness_gate,
 )
 
 

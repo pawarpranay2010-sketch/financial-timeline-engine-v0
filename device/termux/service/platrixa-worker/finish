@@ -1,0 +1,52 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Platrixa — runit `finish` script for ONE Termux worker instance (S2 + M7).
+#
+# Installed to: $PREFIX/var/service/platrixa-worker[-INSTANCE]/finish
+#
+# runit calls this after the run script exits, with the exit status as $1 and
+# the signal as $2. It does two jobs:
+#
+#   * BOUNDED RESTART: a clean stop (0) or Ctrl-C (130) restarts immediately;
+#     a configuration error (78) waits longer; anything else waits a short
+#     backoff. A fast-crashing worker therefore cannot become a hot loop.
+#   * LOG ROTATION: keeps THIS INSTANCE's log from growing without bound.
+#     Rotation is per instance, so one noisy tenant cannot truncate another
+#     tenant's evidence.
+
+set -u
+
+HOME_DIR="${HOME:?HOME must be set}"
+INSTANCE="${PLATRIXA_WORKER_INSTANCE:-default}"
+case "$INSTANCE" in
+    default|'' ) INSTANCE="default"; SUFFIX="" ;;
+    *[!A-Za-z0-9_-]* ) INSTANCE="default"; SUFFIX="" ;;
+    * ) SUFFIX="-$INSTANCE" ;;
+esac
+
+LOG_DIR="${PLATRIXA_LOG_DIR:-$HOME_DIR/.platrixa/logs}"
+LOG_FILE="${PLATRIXA_LOG_FILE:-$LOG_DIR/worker$SUFFIX.log}"
+MAX_BYTES="${PLATRIXA_LOG_MAX_BYTES:-5242880}"
+
+code="${1:-0}"
+
+if [ -f "$LOG_FILE" ]; then
+    size="$(wc -c < "$LOG_FILE" | tr -d ' ')"
+    if [ -n "$size" ] && [ "$size" -gt "$MAX_BYTES" ]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
+    fi
+fi
+
+case "$code" in
+    0|130)
+        # Deliberate stop or clean exit: restart promptly.
+        ;;
+    78)
+        # Bad configuration: do not hammer; give the operator time to fix it.
+        sleep "${PLATRIXA_CONFIG_BACKOFF_S:-60}"
+        ;;
+    *)
+        sleep "${PLATRIXA_RESTART_BACKOFF_S:-10}"
+        ;;
+esac
+
+exit 0

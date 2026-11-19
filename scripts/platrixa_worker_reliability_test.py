@@ -165,7 +165,15 @@ def make_reliability_worker(
     )
     api_session = FakeSession(api_handler)
     bridge_session = FakeSession(bridge_handler or (lambda call: FakeResponse(200, BRIDGE_BODY)))
-    model_session = FakeSession(model_handler) if model_handler is not None else None
+    # S1 readiness gate: the fake endpoint must advertise the configured model,
+    # otherwise the worker (correctly) never claims. The test's model_handler
+    # still governs the INFERENCE call and its failure behaviour.
+    def routed_model_handler(call):
+        if call["url"].endswith("/v1/models"):
+            return FakeResponse(200, {"object": "list", "data": [{"id": "default"}]})
+        return model_handler(call)
+
+    model_session = FakeSession(routed_model_handler) if model_handler is not None else None
     worker = OutboundInferenceWorker(
         config,
         session=api_session,

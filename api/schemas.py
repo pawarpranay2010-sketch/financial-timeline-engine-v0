@@ -67,6 +67,55 @@ class ApiKeyCreatedResponse(BaseModel):
     created_at: str
 
 
+class TenantProvisionRequest(BaseModel):
+    """Owner-only provisioning of ONE new developer tenant.
+
+    ``tenant_id`` is owner-assigned. It is NEVER client-supplied at runtime:
+    the data plane always resolves the tenant from the authenticated
+    credential's stored row.
+    """
+
+    tenant_id: str = Field(
+        ...,
+        description="Owner-assigned tenant slug (lowercase letters, digits, internal hyphens; 3-64 chars).",
+        examples=["dev-alice"],
+    )
+    developer_name: str = Field(
+        ...,
+        description="Developer label / invitation name stored on the key (1-120 chars after trim).",
+        examples=["Alice (invited 2026-11-19)"],
+    )
+    environment: str = Field(
+        default="test",
+        description="Closed set: 'test' or 'live'.",
+        examples=["test"],
+    )
+    monthly_limit: int = Field(
+        default=100,
+        ge=0,
+        le=1000000,
+        description="Quota units for the new tenant's monthly bucket.",
+    )
+
+
+class TenantProvisionedResponse(BaseModel):
+    """Provisioned tenant. The raw ``key`` appears HERE AND ONLY HERE."""
+
+    tenant_id: str
+    key_id: str
+    name: str
+    environment: str
+    monthly_limit: int
+    key: str = Field(
+        ...,
+        description="The new tenant's raw API key — shown EXACTLY ONCE. Store it in a 0600 file; it cannot be recovered.",
+        examples=["plx_test_EXAMPLE_ONLY_NOT_A_REAL_KEY"],
+    )
+    key_prefix: str = Field(..., description="Masked identification prefix")
+    status: str = Field(..., description="ACTIVE")
+    created_at: str
+
+
 class ApiKeyView(BaseModel):
     """Masked key metadata — never contains key material (raw or hashed)."""
 
