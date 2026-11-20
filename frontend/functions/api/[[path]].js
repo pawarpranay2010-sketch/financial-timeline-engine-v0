@@ -51,22 +51,69 @@ function requiresCSRFProtection(method) {
   return method !== "GET" && method !== "HEAD";
 }
 
-// The visitor id is edge-owned: it is read ONLY from the HttpOnly cookie
-// issued by this proxy. A browser-supplied `x-platrixa-visitor-id` header is
-// never trusted — the forwarded value is always overwritten below.
-const VISITOR_COOKIE_NAME = "platrixa_visitor_id";
+// --- Visitor identity cookie (edge-issued, persistent, tamper-evident) ---
+// The visitor id lives in a `__Host-` cookie: host-locked (no Domain),
+// Path=/, Secure and HttpOnly, so neither a sibling subdomain nor page script
+// can plant or read it. The value is `<visitor-id>.<hmac>` and the edge
+// re-derives the HMAC over a domain-separated message with
+// PLATRIXA_VISITOR_HMAC_SECRET. Only a tag that matches is trusted, so a
+// browser cannot mint, guess or extend an identity: anything it invents fails
+// verification and a fresh anonymous id is issued instead. The identity then
+// feeds the signed per-request assertion below; it is NEVER taken from a
+// request header. The same id persists across requests until Max-Age expires.
+const VISITOR_COOKIE_NAME = "__Host-platrixa_visitor";
+const VISITOR_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180; // 180 days
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{16,64}$/;
 
-function readVisitorCookie(cookieHeader) {
+// Domain separation: a cookie tag can never be replayed as a request
+// assertion (different message, same secret).
+function visitorCookieMessage(visitorId) {
+  return `visitor-cookie-v1|${visitorId}`;
+}
+
+function constantTimeEqualHex(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function readVisitorCookie(cookieHeader, secret) {
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
     if (part.slice(0, eq).trim() !== VISITOR_COOKIE_NAME) continue;
     const value = part.slice(eq + 1).trim();
-    return VISITOR_ID_RE.test(value) ? value : null;
+    const dot = value.lastIndexOf(".");
+    if (dot <= 0) return null;
+    const visitorId = value.slice(0, dot);
+    const tag = value.slice(dot + 1);
+    if (!VISITOR_ID_RE.test(visitorId) || !/^[0-9a-f]{64}$/.test(tag)) return null;
+    const expected = await hmacSha256Hex(secret, visitorCookieMessage(visitorId));
+    return constantTimeEqualHex(expected, tag) ? visitorId : null;
   }
   return null;
+}
+
+function visitorCookie(visitorId, tag) {
+  return (
+    `${VISITOR_COOKIE_NAME}=${visitorId}.${tag}; Path=/; HttpOnly; ` +
+    `Secure; SameSite=Lax; Max-Age=${VISITOR_COOKIE_MAX_AGE_SECONDS}`
+  );
+}
+
+// Attach the edge-issued identity to a response. Only a response that MINTED
+// an identity carries Set-Cookie; a valid presented cookie is never re-issued.
+function withVisitorCookie(response, setCookie) {
+  if (!setCookie) return response;
+  const headers = new Headers(response.headers);
+  headers.append("set-cookie", setCookie);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 
@@ -121,20 +168,51 @@ export async function onRequest(context) {
   const url = new URL(context.request.url);
   const target = backend + url.pathname + url.search;
 
+  const visitorSecret = (context.env && context.env.PLATRIXA_VISITOR_HMAC_SECRET) || "";
+  if (!visitorSecret) {
+    // Fail closed: an unsigned request must never reach the backend as a
+    // website request.
+    return new Response(
+      JSON.stringify({
+        error: "visitor_signing_not_configured",
+        detail: "PLATRIXA_VISITOR_HMAC_SECRET is not set on this Pages project.",
+      }),
+      { status: 503, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  // --- Visitor identity: edge-issued signed cookie ONLY ---
+  // A presented cookie is trusted only after its HMAC verifies; otherwise the
+  // edge mints a new id and re-issues the cookie on this response.
+  const cookieVisitorId = await readVisitorCookie(
+    context.request.headers.get("cookie"),
+    visitorSecret
+  );
+  const visitorId = cookieVisitorId || crypto.randomUUID();
+  const setCookie = cookieVisitorId
+    ? null
+    : visitorCookie(
+        visitorId,
+        await hmacSha256Hex(visitorSecret, visitorCookieMessage(visitorId))
+      );
+  const respond = (response) => withVisitorCookie(response, setCookie);
+
   // --- CSRF Origin validation for state-changing requests ---
   // Validate Origin header against the exact configured public origin.
   // GET and HEAD are strictly read-only; all other methods require a trusted origin.
   if (requiresCSRFProtection(context.request.method)) {
     if (!validateCSRFOrigin(context.request, context.env)) {
-      return new Response(
-        JSON.stringify({
-          error: "csrf_invalid_origin",
-          detail: `Request Origin ${context.request.headers.get("origin") || "missing"} is not trusted.`,
-        }),
-        {
-          status: 403,
-          headers: { "content-type": "application/json" },
-        }
+      return respond(
+        new Response(
+          JSON.stringify({
+            error: "csrf_invalid_origin",
+            detail: `Request Origin ${context.request.headers.get("origin") || "missing"} is not trusted.`,
+          }),
+          {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          }
+        )
       );
     }
   }
@@ -149,26 +227,9 @@ export async function onRequest(context) {
     headers.set("x-platrixa-api-key", serverApiKey);
   }
 
-  // --- Visitor identity + signed assertion (edge-owned) ---
-  // The id comes ONLY from the HttpOnly cookie the edge issues. Any
-  // browser-supplied visitor/assertion header is ignored and overwritten.
-  const visitorId =
-    readVisitorCookie(context.request.headers.get("cookie")) ||
-    crypto.randomUUID();
-
-  const visitorSecret = (context.env && context.env.PLATRIXA_VISITOR_HMAC_SECRET) || "";
-  if (!visitorSecret) {
-    // Fail closed: an unsigned request must never reach the backend as a
-    // website request.
-    return new Response(
-      JSON.stringify({
-        error: "visitor_signing_not_configured",
-        detail: "PLATRIXA_VISITOR_HMAC_SECRET is not set on this Pages project.",
-      }),
-      { status: 503, headers: { "content-type": "application/json" } }
-    );;
-  }
-
+  // --- Signed assertion (edge-owned) ---
+  // Signed over the edge-held visitor identity plus the exact request shape.
+  // Any browser-supplied visitor/assertion header is ignored and overwritten.
   const isReadOnly =
     context.request.method === "GET" || context.request.method === "HEAD";
   const bodyBytes = isReadOnly
@@ -239,20 +300,24 @@ export async function onRequest(context) {
       "content-type",
       upstream.headers.get("content-type") || "application/json"
     );
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: respHeaders,
-    });
+    return respond(
+      new Response(upstream.body, {
+        status: upstream.status,
+        headers: respHeaders,
+      })
+    );
   } catch (err) {
-    return new Response(
-      JSON.stringify({
-        error: "proxy_failed",
-        detail: err && err.message,
-      }),
-      {
-        status: 502,
-        headers: { "content-type": "application/json" },
-      }
+    return respond(
+      new Response(
+        JSON.stringify({
+          error: "proxy_failed",
+          detail: err && err.message,
+        }),
+        {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        }
+      )
     );
   }
 }

@@ -81,6 +81,8 @@ export interface ProxyOutcome {
   requestId: string | null;
   /** Upstream response headers (contract headers are re-emitted). */
   responseHeaders?: Headers;
+  /** Set-Cookie to emit when this response minted a new visitor identity. */
+  setCookie?: string;
 }
 
 /** The same envelope shape the backend and the frontend already use. */
@@ -89,6 +91,7 @@ function errorEnvelope(
   code: string,
   message: string,
   requestId: string | null,
+  setCookie?: string,
 ): ProxyOutcome {
   return {
     status,
@@ -98,24 +101,65 @@ function errorEnvelope(
     }),
     contentType: "application/json",
     requestId,
+    ...(setCookie ? { setCookie } : {}),
   };
 }
 
 
-const VISITOR_COOKIE_NAME = "platrixa_visitor_id";
+// --- Visitor identity cookie (edge-issued, persistent, tamper-evident) ---
+// Mirrors the Cloudflare Pages proxies: `__Host-` cookie (host-locked through
+// no Domain attribute, Path=/, Secure, HttpOnly), value `<visitor-id>.<hmac>`
+// where the HMAC is domain-separated from the request assertion. An unverified
+// cookie is never trusted — a fresh id is minted and the cookie re-issued.
+const VISITOR_COOKIE_NAME = "__Host-platrixa_visitor";
+const VISITOR_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180; // 180 days
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{16,64}$/;
 
-/** Read the edge-issued visitor id from the HttpOnly cookie, or null. */
-function readVisitorCookie(cookieHeader: string | null): string | null {
+function visitorCookieMessage(visitorId: string): string {
+  return `visitor-cookie-v1|${visitorId}`;
+}
+
+function visitorCookieTag(visitorId: string, secret: string): string {
+  return crypto
+    .createHmac("sha256", secret)
+    .update(visitorCookieMessage(visitorId))
+    .digest("hex");
+}
+
+function constantTimeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+/** Read a VERIFIED edge-issued visitor id from the cookie, or null. */
+function readVisitorCookie(cookieHeader: string | null, secret: string): string | null {
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
     if (part.slice(0, eq).trim() !== VISITOR_COOKIE_NAME) continue;
     const value = part.slice(eq + 1).trim();
-    return VISITOR_ID_RE.test(value) ? value : null;
+    const dot = value.lastIndexOf(".");
+    if (dot <= 0) return null;
+    const visitorId = value.slice(0, dot);
+    const tag = value.slice(dot + 1);
+    if (!VISITOR_ID_RE.test(visitorId) || !/^[0-9a-f]{64}$/.test(tag)) return null;
+    return constantTimeEqualHex(visitorCookieTag(visitorId, secret), tag)
+      ? visitorId
+      : null;
   }
   return null;
+}
+
+function visitorCookie(visitorId: string, secret: string): string {
+  return (
+    `${VISITOR_COOKIE_NAME}=${visitorId}.${visitorCookieTag(visitorId, secret)}; ` +
+    `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${VISITOR_COOKIE_MAX_AGE_SECONDS}`
+  );
 }
 
 export function sanitizeRequestId(value: string | null): string | null {
@@ -179,12 +223,6 @@ export async function forwardToPlatrixa(
     headers.set("x-platrixa-api-key", serverApiKey);
   }
 
-  // --- Visitor identity (edge-owned) ---
-  // Derived exclusively from the HttpOnly visitor cookie. Any browser-supplied
-  // `x-platrixa-visitor-id` header is ignored; the forwarded value is set below.
-  const visitorId =
-    readVisitorCookie(request.headers.get("cookie")) || crypto.randomUUID();
-
   // --- CSRF Origin validation for browser state-changing requests ---
   // Validate Origin against the exact configured public origin. GET and HEAD
   // are strictly read-only; every other method requires a trusted origin.
@@ -229,6 +267,14 @@ export async function forwardToPlatrixa(
       requestId,
     );
   }
+
+  // --- Visitor identity (edge-owned, persistent) ---
+  // Derived exclusively from the verified HttpOnly visitor cookie. Any
+  // browser-supplied `x-platrixa-visitor-id` header is ignored; the forwarded
+  // value is set below. A cookie that does not verify is replaced, not trusted.
+  const cookieVisitorId = readVisitorCookie(request.headers.get("cookie"), visitorSecret);
+  const visitorId = cookieVisitorId ?? crypto.randomUUID();
+  const setCookie = cookieVisitorId ? undefined : visitorCookie(visitorId, visitorSecret);
 
   const isReadOnly = request.method === "GET" || request.method === "HEAD";
   const bodyBytes = isReadOnly
@@ -307,8 +353,15 @@ export async function forwardToPlatrixa(
           "BACKEND_TIMEOUT",
           "The Platrixa backend did not answer in time; retry shortly.",
           requestId,
+          setCookie,
         )
-      : errorEnvelope(502, "BACKEND_UNREACHABLE", "The Platrixa backend could not be reached.", requestId);
+      : errorEnvelope(
+          502,
+          "BACKEND_UNREACHABLE",
+          "The Platrixa backend could not be reached.",
+          requestId,
+          setCookie,
+        );
   }
 
   const contentType = upstream.headers.get("content-type") ?? "";
@@ -326,6 +379,7 @@ export async function forwardToPlatrixa(
         ? "The Platrixa backend is rate-limited or starting up; retry shortly."
         : `The Platrixa backend returned a response that is not a JSON envelope (HTTP ${upstream.status}).`,
       requestId,
+      setCookie,
     );
   }
 
@@ -335,6 +389,7 @@ export async function forwardToPlatrixa(
     contentType,
     requestId,
     responseHeaders: upstream.headers,
+    ...(setCookie ? { setCookie } : {}),
   };
 }
 
@@ -363,6 +418,9 @@ export function proxyResponse(outcome: ProxyOutcome): Response {
         outHeaders[name] = value;
       }
     }
+  }
+  if (outcome.setCookie) {
+    outHeaders["set-cookie"] = outcome.setCookie;
   }
   return new Response(outcome.body, {
     status: outcome.status,

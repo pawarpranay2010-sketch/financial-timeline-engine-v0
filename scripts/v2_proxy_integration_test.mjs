@@ -13,6 +13,7 @@
 //       node scripts/v2_proxy_integration_test.mjs
 
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,7 +73,15 @@ async function test(name, fn) {
   }
 }
 
-const cookie = (visitor) => ({ cookie: `platrixa_visitor_id=${visitor}` });
+// The proxy trusts only an edge-issued cookie: `<id>.<hmac of
+// visitor-cookie-v1|id>` signed with the shared visitor secret.
+const cookie = (visitor) => {
+  const tag = crypto
+    .createHmac("sha256", VISITOR_SECRET)
+    .update(`visitor-cookie-v1|${visitor}`)
+    .digest("hex");
+  return { cookie: `__Host-platrixa_visitor=${visitor}.${tag}` };
+};
 
 // Job/result routes live under /v1 only; the /api namespace is exercised
 // separately below as a pass-through pipeline check.

@@ -12,6 +12,16 @@ const BACKEND = "https://backend.platrixa.test";
 const SERVER_KEY = "server-side-website-key";
 const COOKIE_VISITOR = "0123456789abcdef0123456789abcdef";
 const VISITOR_SECRET = "edge-shared-visitor-secret";
+const VISITOR_COOKIE_NAME = "__Host-platrixa_visitor";
+
+/** The edge-issued cookie: `<visitor-id>.<hmac of visitor-cookie-v1|id>`. */
+function signedCookie(visitor, secret = VISITOR_SECRET) {
+  const tag = crypto
+    .createHmac("sha256", secret)
+    .update(`visitor-cookie-v1|${visitor}`)
+    .digest("hex");
+  return `${VISITOR_COOKIE_NAME}=${visitor}.${tag}`;
+}
 
 process.env.PLATRIXA_API_BASE_URL = BACKEND;
 process.env.PLATRIXA_API_KEY = SERVER_KEY;
@@ -119,7 +129,7 @@ await test("browser key + visitor header spoofing ignored", async () => {
     headers: {
       "x-platrixa-api-key": "browser-forged-key",
       "x-platrixa-visitor-id": "spoofed-visitor-id-value",
-      cookie: `platrixa_visitor_id=${COOKIE_VISITOR}`,
+      cookie: signedCookie(COOKIE_VISITOR),
     },
   });
   assert.equal(lastUpstream.headers.get("x-platrixa-api-key"), SERVER_KEY);
@@ -172,6 +182,46 @@ await test("missing signing secret fails closed", async () => {
   } finally {
     process.env.PLATRIXA_VISITOR_HMAC_SECRET = saved;
   }
+});
+
+await test("first visit issues the persistent __Host- visitor cookie", async () => {
+  const { response } = await call({ method: "GET" });
+  const setCookie = response.headers.get("set-cookie");
+  assert.ok(setCookie, "response must carry Set-Cookie");
+  const [pair, ...attrs] = setCookie.split(";").map((s) => s.trim());
+  assert.match(pair, /^__Host-platrixa_visitor=[A-Za-z0-9-]{16,64}\.[0-9a-f]{64}$/);
+  assert.ok(attrs.includes("Path=/"));
+  assert.ok(attrs.includes("HttpOnly"));
+  assert.ok(attrs.includes("Secure"));
+  assert.ok(attrs.includes("SameSite=Lax"));
+  assert.ok(attrs.some((a) => /^Max-Age=\d{6,}$/.test(a)));
+  assert.ok(!attrs.some((a) => a.toLowerCase().startsWith("domain")));
+});
+
+await test("verified cookie keeps identity and is not re-issued", async () => {
+  const first = await call({ method: "GET" });
+  const issued = first.response.headers.get("set-cookie").split(";")[0];
+  const issuedId = issued.split("=")[1].split(".")[0];
+  lastUpstream = null;
+  const second = await call({ method: "GET", headers: { cookie: issued } });
+  assert.equal(lastUpstream.headers.get("x-platrixa-visitor-id"), issuedId);
+  assert.equal(second.response.headers.get("set-cookie"), null);
+});
+
+await test("tampered cookie rejected and replaced", async () => {
+  lastUpstream = null;
+  const forged = `${VISITOR_COOKIE_NAME}=${COOKIE_VISITOR}.${"0".repeat(64)}`;
+  const { response } = await call({ method: "GET", headers: { cookie: forged } });
+  assert.notEqual(lastUpstream.headers.get("x-platrixa-visitor-id"), COOKIE_VISITOR);
+  const setCookie = response.headers.get("set-cookie");
+  assert.ok(setCookie);
+  assert.ok(!setCookie.includes(COOKIE_VISITOR));
+});
+
+await test("legacy unsigned cookie name ignored", async () => {
+  lastUpstream = null;
+  await call({ method: "GET", headers: { cookie: `platrixa_visitor_id=${COOKIE_VISITOR}` } });
+  assert.notEqual(lastUpstream.headers.get("x-platrixa-visitor-id"), COOKIE_VISITOR);
 });
 
 const failed = results.filter((r) => !r.ok);

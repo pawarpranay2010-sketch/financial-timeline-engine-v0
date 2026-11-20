@@ -63,6 +63,43 @@ A website request (`x-platrixa-surface: website`) can **never** fall back to
 tenant-only access. Developer API and worker requests never carry the surface
 marker, so they keep their existing tenant-scoped authorization.
 
+## Visitor identity cookie
+
+The edge owns the visitor identity. It is delivered in a single cookie and is
+the ONLY source of `x-platrixa-visitor-id`; a browser-supplied header is
+always overwritten.
+
+| Property | Value |
+|---|---|
+| Name | `__Host-platrixa_visitor` |
+| Value | `<visitor-id>.<hmac-sha256>` |
+| Attributes | `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=15552000` (180 days) |
+| Domain attribute | **none** — the `__Host-` prefix forbids it, so a sibling subdomain cannot plant or overwrite the cookie |
+
+- `<visitor-id>` is a UUID minted by the edge (`crypto.randomUUID()`), which
+  is the UUID stored in `platrixa_async_jobs.visitor_id`.
+- `<hmac-sha256>` is `HMAC(PLATRIXA_VISITOR_HMAC_SECRET, "visitor-cookie-v1|<visitor-id>")`,
+  lowercase hex. The message is domain-separated from the per-request
+  assertion (`V1|platrixa|…`), so neither value can be replayed as the other.
+- The edge verifies the tag in constant time. Only a matching tag selects the
+  identity; an absent, malformed, forged, wrong-secret or legacy
+  (`platrixa_visitor_id`) cookie is ignored, a fresh anonymous id is minted and
+  the cookie is re-issued **on that same response**.
+- A valid cookie is never re-issued: `Set-Cookie` appears only when the edge
+  minted a new identity.
+- `Set-Cookie` from the backend is never relayed as the visitor identity.
+
+Operational consequences:
+
+- Rotating `PLATRIXA_VISITOR_HMAC_SECRET` invalidates every held cookie. Each
+  returning visitor is then issued a new anonymous id: their earlier jobs stay
+  in the tenant but are no longer reachable by that browser. Treat a rotation
+  as a deliberate identity reset (coordinate it with the announcement).
+- Clearing the cookie (or expiring it after 180 days) has the same effect for
+  that single browser.
+- The identity is anonymous: it carries no email, account id or tenant id. The
+  tenant is bound server-side by the injected website API key.
+
 ## Management gateway: issuer allowlist and replay protection
 
 Management gateway assertions are operator credentials and are verified
