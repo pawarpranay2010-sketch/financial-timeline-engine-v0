@@ -45,7 +45,15 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def cookie(visitor: str) -> dict[str, str]:
-    return {"Cookie": f"platrixa_visitor_id={visitor}"}
+    """The edge-issued visitor cookie: ``<id>.<hmac of visitor-cookie-v1|id>``.
+
+    The proxy trusts only a tag it can verify with the shared visitor secret;
+    an unsigned/legacy cookie would be replaced with a fresh identity.
+    """
+    tag = hmac.new(
+        SECRET.encode(), f"visitor-cookie-v1|{visitor}".encode(), hashlib.sha256
+    ).hexdigest()
+    return {"Cookie": f"__Host-platrixa_visitor={visitor}.{tag}"}
 
 
 def db_engine():
