@@ -7,6 +7,7 @@
     "build": "next build",
     "build:pages": "node scripts/build-pages.mjs",
     "start": "next start",
+    "owner:start": "next start -H 127.0.0.1 -p 3100",
     "lint": "eslint"
   },
   "dependencies": {

@@ -30,6 +30,8 @@
 import crypto from "crypto";
 import type { NextRequest } from "next/server";
 
+import { isAllowedWebsiteRoute } from "./website-route-policy.js";
+
 export const PROXY_BASE_ENV = "PLATRIXA_API_BASE_URL";
 export const PROXY_KEY_ENV = "PLATRIXA_API_KEY";
 
@@ -46,10 +48,12 @@ const FORWARD_HEADERS = new Set([
   "accept-language",
   "x-requested-with",
   "x-request-id",
-  // Phase 5I (audit C2): the caller's credential and request identity
-  // reach the backend UNCHANGED. The proxy NEVER invents, substitutes,
-  // or overwrites a caller-supplied credential.
-  "x-platrixa-api-key",
+  // SECURITY: a browser-supplied `x-platrixa-api-key` is NEVER forwarded.
+  // This proxy authenticates the browser as the shared website tenant by
+  // injecting the server-side key below; accepting a caller key here would
+  // let a browser choose its own credential. `authorization`,
+  // `x-platrixa-management-token` and every `x-*` authority header are
+  // equally absent from this set.
   // Management token stripped from public proxy forwarding
   // Public browser routes must NOT forward management tokens to Railway.
   // Management credentials are only accepted at the operator ingress route.
@@ -179,6 +183,20 @@ export async function forwardToPlatrixa(
 
   if (!FORWARDED_PREFIXES.some((p) => incomingPath.startsWith(p) || incomingPath === p.slice(0, -1))) {
     return errorEnvelope(404, "PATH_NOT_FORWARDED", `Only ${FORWARDED_PREFIXES.join(" and ")} namespaces are proxied.`, requestId);
+  }
+
+  // DEFAULT DENY for the /v1 website surface: `/api/*` keeps its existing
+  // namespace policy; `/v1/*` must additionally match the explicit public
+  // website allowlist (method + exact canonical path). Tenant-scoped
+  // management routes are therefore unreachable from the browser even
+  // though this proxy injects the shared website credential.
+  if (incomingPath.startsWith("/v1") && !isAllowedWebsiteRoute(request.method, incomingPath)) {
+    return errorEnvelope(
+      404,
+      "PATH_NOT_FORWARDED",
+      "This endpoint is not available through the public website API.",
+      requestId,
+    );
   }
 
   const target = `${base}${incomingPath}${searchParams ? `?${searchParams}` : ""}`;

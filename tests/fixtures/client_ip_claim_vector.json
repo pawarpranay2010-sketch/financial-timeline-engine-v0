@@ -1,0 +1,16 @@
+{
+  "_comment": "Golden vector for the edge->backend signed client-IP claim. TEST VALUES ONLY. Read by tests/test_client_ip_claim.py and scripts/client_ip_claim_test.mjs so the Python verifier and the Cloudflare Pages signer cannot drift.",
+  "canonical_prefix": "V1|platrixa-client-ip",
+  "secret": "test-visitor-hmac-secret-0123456789abcdef",
+  "assertion_signature": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "vectors": [
+    {
+      "client_ip": "203.0.113.7",
+      "signature": "2dc4f36c723483b30f627255a783286fb9bfc6ee5c8934aca2fab1e10f092024"
+    },
+    {
+      "client_ip": "2001:db8::1",
+      "signature": "b87dda77b9af53ffd4827e7ab6482af53b6d8826a641f32d1c2f8a3ab79e0cdf"
+    }
+  ]
+}

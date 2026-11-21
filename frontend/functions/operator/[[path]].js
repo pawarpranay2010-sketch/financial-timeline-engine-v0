@@ -62,6 +62,18 @@ const MANAGEMENT_ROUTES = [
   { method: "GET", pattern: /^\/v1\/developer\/usage$/ },
   { method: "GET", pattern: /^\/v1\/developer\/requests$/ },
   { method: "GET", pattern: /^\/v1\/developer\/requests\/[^/]+$/ },
+  // Self-service developer onboarding: owner dashboard contract. Same
+  // assertion-only authorization as every other management route.
+  { method: "GET", pattern: /^\/v1\/owner\/onboarding\/overview$/ },
+  { method: "GET", pattern: /^\/v1\/owner\/onboarding\/applications$/ },
+  { method: "GET", pattern: /^\/v1\/owner\/onboarding\/applications\/[^/]+$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/applications\/[^/]+\/(advance|provision|suspend|restore|reject)$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/tenants\/[^/]+\/quota$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/tenants\/[^/]+\/keys\/[^/]+\/revoke$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/tenants\/[^/]+\/keys\/rotate$/ },
+  { method: "GET", pattern: /^\/v1\/owner\/onboarding\/notifications$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/notifications\/dispatch$/ },
+  { method: "POST", pattern: /^\/v1\/owner\/onboarding\/maintenance\/expire$/ },
   // Legacy operator entry point, forwarded unchanged.
   { method: "POST", pattern: /^\/v1\/operator\/manage$/ },
 ];

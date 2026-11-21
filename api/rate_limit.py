@@ -24,16 +24,31 @@ WHAT THIS IS NOT
 
 IDENTITY OF A CLIENT
 --------------------
-The bucket key is derived from the transport peer address
-(``request.client.host``) — the socket-level source, which a client cannot
-forge with a header, API key, or query parameter. Header-supplied forwarding
-values are deliberately NOT used as the bucket key, because they are
-attacker-controlled and would make the limiter trivially bypassable.
+The bucket key is a single client IP, selected in this order:
 
-A forwarded-proxy deployment should run the proxy in front of this service so
-the peer address is the real client. When a trusted proxy is configured via
-``PLATRIXA_TRUSTED_PROXY_COUNT``, the leftmost address from
-``X-Forwarded-For`` is used instead.
+1. The SIGNED EDGE CLAIM (``backend.auth.client_ip_claim``). The Cloudflare
+   Pages proxy knows the real address and asserts it with an HMAC bound to the
+   visitor assertion of the SAME request. It is the only source that survives
+   the current topology, where the proxy forwards an allowlist of headers and
+   Railway rewrites ``X-Forwarded-For``/``X-Real-IP`` with the edge address.
+   A direct caller cannot forge it (no secret) and cannot replay one captured
+   from another request (the assertion it is bound to is single-use).
+2. ``PLATRIXA_CLIENT_IP_HEADER`` (explicitly configured; only names in a
+   fixed allowlist are honoured, e.g. ``cf-connecting-ip``). Cloudflare sets
+   that header at its edge; Railway forwards it untouched.
+3. ``PLATRIXA_TRUSTED_PROXY_COUNT`` > 0: the ``N``-th address from the RIGHT
+   of ``X-Forwarded-For``. Each trusted hop APPENDS the address it saw, so the
+   rightmost entries are the only ones written by infrastructure; anything
+   further left is caller-supplied noise and is never used. A chain shorter
+   than ``N``, or a malformed address, falls back to the transport peer.
+4. The transport peer (``request.client.host``), which no header can forge.
+
+Caveat: a DIRECTLY exposed backend would let a caller set
+``cf-connecting-ip``, so only configure ``PLATRIXA_CLIENT_IP_HEADER`` when the
+service is actually behind that proxy. ``X-Forwarded-For`` is never used when
+no trusted proxy is configured (the previous code took the LEFTMOST entry,
+which a caller could set freely). Neither header is ever trusted from a
+request that carries no signed claim for it.
 
 SCOPE AND DEFAULTS
 ------------------
@@ -98,14 +113,107 @@ def _env_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+# Only these header names may be configured as the trusted client-IP source.
+# An arbitrary name would let an operator accidentally trust a browser header.
+TRUSTED_IP_HEADERS = frozenset(
+    {"cf-connecting-ip", "x-real-ip", "true-client-ip", "fly-client-ip"}
+)
+
+
+def _valid_port(value: str) -> bool:
+    """True for a decimal port in 1..65535, with no sign, space or padding."""
+    if not value.isdigit() or len(value) > 5:
+        return False
+    return 0 < int(value) <= 65535
+
+
+def _parse_ip(value: Optional[str]) -> Optional[str]:
+    """Canonical IP string, or None when the value is not a single address.
+
+    Accepts bare IPv4/IPv6, ``1.2.3.4:5678`` and ``[2001:db8::1]:443``;
+    rejects lists, hostnames, ports on IPv6 without brackets, and anything
+    a header could use to smuggle a second identity.
+    """
+    import ipaddress
+
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw or len(raw) > 64:
+        return None
+    if raw.startswith("["):
+        end = raw.find("]")
+        if end < 0:
+            return None
+        rest = raw[end + 1 :]
+        if rest:
+            # A port is allowed only where the grammar permits one, and only
+            # when it is a port: "[::1]:99999" is not an address.
+            if not rest.startswith(":") or not _valid_port(rest[1:]):
+                return None
+        raw = raw[1:end]
+    elif raw.count(":") == 1:  # IPv4 with a port
+        host, _, port = raw.partition(":")
+        if not _valid_port(port):
+            return None
+        raw = host
+    try:
+        parsed = ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped:
+        return str(parsed.ipv4_mapped)
+    return str(parsed)
+
+
+def _trusted_ip_header() -> str:
+    name = (os.getenv("PLATRIXA_CLIENT_IP_HEADER", "") or "").strip().lower()
+    return name if name in TRUSTED_IP_HEADERS else ""
+
+
+def _signed_edge_ip(request) -> Optional[str]:
+    """The edge-asserted client address, or None when it is not provable.
+
+    Verification is entirely in ``backend.auth.client_ip_claim``: the claim is
+    trusted only when its HMAC (bound to this request's visitor assertion)
+    matches. A malformed, unsigned, forged or replayed claim is simply absent.
+    """
+    from backend.auth import client_ip_claim
+
+    raw = client_ip_claim.verified_client_ip(
+        surface=request.headers.get(client_ip_claim.SURFACE_HEADER),
+        assertion=request.headers.get(client_ip_claim.ASSERTION_HEADER),
+        client_ip=request.headers.get(client_ip_claim.CLAIM_HEADER),
+        signature=request.headers.get(client_ip_claim.CLAIM_SIGNATURE_HEADER),
+    )
+    if not raw:
+        return None
+    return _parse_ip(raw)
+
+
 def _client_key(request) -> str:
-    """Bucket key: transport peer address, or a trusted forwarded address."""
+    """Bucket key: one client IP from the trusted chain, or the peer."""
+    signed = _signed_edge_ip(request)
+    if signed:
+        return signed
+
+    configured = _trusted_ip_header()
+    if configured:
+        parsed = _parse_ip(request.headers.get(configured))
+        if parsed:
+            return parsed
+
     trusted = _env_int("PLATRIXA_TRUSTED_PROXY_COUNT", 0)
     if trusted > 0:
         forwarded = request.headers.get("x-forwarded-for", "") or ""
         parts = [p.strip() for p in forwarded.split(",") if p.strip()]
         if len(parts) >= trusted:
-            return parts[trusted - 1]
+            # RIGHTMOST-trusted: trusted hops append the address they saw, so
+            # this entry is infrastructure-written, not caller-supplied.
+            parsed = _parse_ip(parts[-trusted])
+            if parsed:
+                return parsed
+
     client = getattr(request, "client", None)
     host = getattr(client, "host", None) if client else None
     return host or "unknown"

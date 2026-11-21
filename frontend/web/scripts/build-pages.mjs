@@ -28,6 +28,16 @@ const functionsDir = path.resolve(root, "..", "functions"); // frontend/function
 const proxyRoutes = [
   path.join(root, "app", "api", "[...path]"),
   path.join(root, "app", "v1", "[...path]"),
+  // Owner console: the WHOLE subtree is excluded, not just its API handler.
+  //  * app/owner/api/[...path]/route.ts is a Node route handler (owner
+  //    credential + management signing secret must never reach the browser),
+  //    and cannot be statically exported.
+  //  * app/owner/onboarding/page.tsx would otherwise be exported as public
+  //    HTML on the Pages host, publishing an operator surface that has no
+  //    working backend there. A management UI must not be publicly served.
+  // The owner console therefore runs only as an operator-local server
+  // (`npm run owner:start`, loopback only) — see docs/DEVELOPER_ONBOARDING.md.
+  path.join(root, "app", "owner"),
 ];
 const stashDir = path.join(root, ".static-export-stash");
 

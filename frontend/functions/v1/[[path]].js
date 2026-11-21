@@ -64,6 +64,87 @@ function readVisitorCookie(cookieHeader) {
 }
 
 
+// ---------------------------------------------------------------------
+// PUBLIC WEBSITE ROUTE POLICY — explicit allowlist, default deny.
+//
+// This proxy authenticates the browser as the SHARED website tenant (it
+// injects PLATRIXA_API_KEY). Forwarding the whole /v1 namespace therefore
+// made tenant-scoped management routes reachable with that shared
+// credential. Only the routes the website actually uses are forwarded,
+// matched by METHOD and EXACT canonical path.
+//
+// Canonical table: frontend/web/lib/website-route-policy.js (the Next
+// dev/preview proxy imports it). Pages Functions cannot import outside the
+// functions directory, so this copy is kept byte-equivalent in meaning and
+// tests/test_onboarding_remediation.py asserts both tables are identical.
+// ---------------------------------------------------------------------
+const WEBSITE_ROUTE_SPECS = [
+  // Liveness / read-only contract
+  { methods: ["GET", "HEAD"], pattern: "^/v1/health$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/ready$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/capabilities$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/usage$" },
+
+  // Deterministic processing contract used by the site/demo
+  { methods: ["POST"], pattern: "^/v1/process$" },
+  { methods: ["POST"], pattern: "^/v1/process/document$" },
+  { methods: ["POST"], pattern: "^/v1/documents$" },
+  { methods: ["POST"], pattern: "^/v1/inference-jobs$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/jobs/[A-Za-z0-9._:-]{1,128}$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/results/[A-Za-z0-9._:-]{1,128}$" },
+  { methods: ["POST"], pattern: "^/v1/webhook-endpoints$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/webhook-endpoints$" },
+
+  // Self-service developer onboarding — PUBLIC endpoints only.
+  { methods: ["POST"], pattern: "^/v1/developer/access-requests$" },
+  { methods: ["POST"], pattern: "^/v1/developer/verify-email$" },
+  { methods: ["POST"], pattern: "^/v1/developer/resend-verification$" },
+  { methods: ["GET", "HEAD"], pattern: "^/v1/developer/access-status$" },
+  // Token-gated one-time key retrieval (the link in the onboarding email).
+  { methods: ["POST"], pattern: "^/v1/developer/keys/reveal$" },
+
+  // DELIBERATELY ABSENT — never forwarded from the public website:
+  //   POST /v1/developer/keys/rotate   (shared-tenant credential rotation)
+  //   GET  /v1/developer/jobs          (tenant-scoped job history)
+  //   /v1/developer/api-keys/*, /v1/developer/usage, /v1/developer/requests
+  //   /v1/owner/*, /v1/operator/*, /v1/internal/*
+];
+
+const WEBSITE_ROUTES = WEBSITE_ROUTE_SPECS.map((spec) => ({
+  methods: spec.methods,
+  pattern: new RegExp(spec.pattern),
+}));
+
+const MAX_WEBSITE_PATH_LENGTH = 256;
+
+/** Canonical pathname, or null when the request is not already canonical. */
+function normalizeWebsitePath(rawPathname) {
+  if (typeof rawPathname !== "string" || rawPathname.length === 0) return null;
+  if (rawPathname.length > MAX_WEBSITE_PATH_LENGTH) return null;
+  if (rawPathname[0] !== "/") return null;
+  // Percent-encoding can smuggle separators/dots past prefix checks.
+  if (rawPathname.includes("%")) return null;
+  if (rawPathname.includes("\\")) return null;
+  if (rawPathname.includes("//")) return null;
+  // No dot segments (also rejects "/." and "/..").
+  if (/(^|\/)\.{1,2}(\/|$)/.test(rawPathname)) return null;
+  // No trailing slash: "/v1/process/" must not match "/v1/process".
+  if (rawPathname.length > 1 && rawPathname.endsWith("/")) return null;
+  // Absolute-ASCII only: no spaces, control characters, semicolons, unicode.
+  if (!/^[A-Za-z0-9\-._~\/]+$/.test(rawPathname)) return null;
+  return rawPathname;
+}
+
+/** Default-deny: true only for an allowlisted method + exact canonical path. */
+function isAllowedWebsiteRoute(method, pathname) {
+  const normalized = normalizeWebsitePath(pathname);
+  if (normalized === null) return false;
+  const upper = String(method || "").toUpperCase();
+  return WEBSITE_ROUTES.some(
+    (route) => route.methods.includes(upper) && route.pattern.test(normalized)
+  );
+}
+
 const FORWARD_HEADERS = [
   "content-type",
   "accept",
@@ -165,6 +246,42 @@ async function hmacSha256Hex(secret, message) {
   return hexFromBytes(sig);
 }
 
+// ---------------------------------------------------------------------
+// SIGNED CLIENT-IP CLAIM (edge -> backend)
+//
+// Cloudflare sets cf-connecting-ip at its edge and a browser cannot choose
+// it. This function is the ONLY hop that still sees the real visitor
+// address (the backend's socket peer is the Cloudflare edge, and Railway
+// rewrites x-forwarded-for / x-real-ip), so it asserts the address here.
+//
+// The claim is bound to THIS request by HMAC-ing over the visitor assertion
+// signature, which the backend verifies and whose nonce it consumes exactly
+// once. The backend trusts the claim only with a valid signature
+// (backend/auth/client_ip_claim.py); a missing, malformed, forged or replayed
+// claim falls back to the transport peer, which no header can forge.
+//
+// A browser-supplied x-platrixa-client-ip / -signature is never read: the
+// forward loop below copies only FORWARD_HEADERS, and this function sets the
+// two claim headers itself.
+// ---------------------------------------------------------------------
+const CLIENT_IP_CLAIM_HEADER = "x-platrixa-client-ip";
+const CLIENT_IP_SIGNATURE_HEADER = "x-platrixa-client-ip-signature";
+const CLIENT_IP_CANONICAL_PREFIX = "V1|platrixa-client-ip";
+
+const IPV4_RE =
+  /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$/;
+// Hex groups separated by colons; accepts "::" compression, rejects zone ids,
+// ports, brackets and anything else a header could smuggle in.
+const IPV6_RE = /^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}$/;
+
+/** The Cloudflare-written visitor address, or null when it is not an address. */
+function trustedClientIp(request) {
+  const raw = (request.headers.get("cf-connecting-ip") || "").trim();
+  if (!raw || raw.length > 64) return null;
+  if (!IPV4_RE.test(raw) && !IPV6_RE.test(raw)) return null;
+  return raw;
+}
+
 export async function onRequest(context) {
   const requestId = requestIdFrom(context.request);
   const backend = String(
@@ -181,11 +298,14 @@ export async function onRequest(context) {
   }
 
   const url = new URL(context.request.url);
-  if (!url.pathname.startsWith("/v1/") && url.pathname !== "/v1") {
+  // DEFAULT DENY. The path must be canonical AND explicitly allowlisted for
+  // this method; everything else never reaches the backend and never sees the
+  // shared website credential.
+  if (!isAllowedWebsiteRoute(context.request.method, url.pathname)) {
     return envelopeResponse(
       404,
       "PATH_NOT_FORWARDED",
-      "Only the /v1/* namespace is proxied by this function.",
+      "This endpoint is not available through the public website API.",
       requestId
     );
   }
@@ -262,13 +382,16 @@ export async function onRequest(context) {
     requestTimestamp,
     requestNonce,
   ].join("|");
-  const assertion = canonical + "|" + (await hmacSha256Hex(visitorSecret, canonical));
+  const assertionSignature = await hmacSha256Hex(visitorSecret, canonical);
+  const assertion = canonical + "|" + assertionSignature;
 
   // --- Build forwarded headers ---
-  // Start with server-injected API key
-  if (serverApiKey) {
-    headers.set("x-platrixa-api-key", serverApiKey);
-  }
+  // The ONLY credential that reaches the backend is the server-side website
+  // key set above. Browser-supplied credentials are never copied: the header
+  // loop below only forwards an explicit allowlist, and `authorization`,
+  // `cookie`, `x-platrixa-management-token` and every `x-platrixa-*` authority
+  // header are absent from it. There is no path by which the browser can
+  // choose or override the credential.
   // Edge-owned identity — overwrites any browser-supplied value.
   // The visitor cookie belongs on the RESPONSE to the browser (below), never
   // on the upstream request: a request header would hand the identity to the
@@ -283,6 +406,19 @@ export async function onRequest(context) {
   headers.set("x-platrixa-request-timestamp", requestTimestamp);
   headers.set("x-platrixa-visitor-nonce", requestNonce);
   headers.set("x-platrixa-surface", "website");
+
+  // Signed client-IP claim, bound to this request's visitor assertion.
+  const clientIp = trustedClientIp(context.request);
+  if (clientIp) {
+    headers.set(
+      CLIENT_IP_SIGNATURE_HEADER,
+      await hmacSha256Hex(
+        visitorSecret,
+        `${CLIENT_IP_CANONICAL_PREFIX}|${clientIp}|${assertionSignature}`
+      )
+    );
+    headers.set(CLIENT_IP_CLAIM_HEADER, clientIp);
+  }
   // Forward the Origin the edge already validated so the backend's own
   // defence-in-depth CSRF check sees the same value (it re-validates).
   const forwardedOrigin = context.request.headers.get("origin");

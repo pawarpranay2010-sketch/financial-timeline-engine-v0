@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { RequestAccessSection } from "@/components/developer-access-request";
 
 /**
  * Developer section switcher — four sections on one route (client-side
@@ -20,7 +21,7 @@ import { cn } from "@/lib/utils";
  *     foundation. Every endpoint and status shown exists in the API.
  */
 
-const SECTIONS = ["Overview", "API keys", "Requests", "Documentation"] as const;
+const SECTIONS = ["Request access", "Overview", "API keys", "Requests", "Documentation"] as const;
 type Section = (typeof SECTIONS)[number];
 
 const REQUEST_EXAMPLE = `curl -X POST "$PLATRIXA_HOST/v1/process" \\
@@ -157,19 +158,20 @@ function ApiKeysSection() {
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="text-sm font-semibold">API key self-service</h2>
-            <ComingSoon>NOT YET ENABLED</ComingSoon>
+            <ComingSoon>SELF-SERVICE ONBOARDING</ComingSoon>
           </div>
           <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">
-            Keys are issued by the operator through the management API
-            (<code className="font-mono text-xs">POST /v1/developer/api-keys</code>) and delivered
-            once, during the private beta. Quota is enforced per key, not per tenant: each key owns
-            its own monthly bucket, so a second key for the same tenant adds a bucket rather than
-            raising the first. Platrixa does not fake this: this page cannot create, rotate, or
-            revoke keys because end-user self-service is not enabled yet.
+            Request access in the <strong>Request access</strong> tab: verify your work email, and
+            eligible applications are provisioned automatically with a dedicated tenant, one API
+            key and an initial monthly quota. The key is delivered once through a short-lived
+            link — it is never shown again, and only its SHA-256 hash is stored.
           </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Contact the operator for a tenant key. The raw key is shown exactly once; only its
-            SHA-256 hash is stored.
+            Quota is enforced per key: each key owns its own monthly bucket, so a second key for
+            the same tenant adds a bucket rather than raising the first. Rotation revokes the old
+            key in the same transaction and issues its replacement through the same one-time link.
+            The operator can still issue keys through the management plane ({" "}
+            <code className="font-mono text-xs">POST /v1/developer/api-keys</code>).
           </p>
         </CardContent>
       </Card>
@@ -447,6 +449,7 @@ export function DeveloperSection() {
         ))}
       </div>
 
+      {section === "Request access" && <RequestAccessSection />}
       {section === "Overview" && <OverviewSection />}
       {section === "API keys" && <ApiKeysSection />}
       {section === "Requests" && <RequestsSection />}

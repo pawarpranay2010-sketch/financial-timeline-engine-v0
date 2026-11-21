@@ -149,7 +149,23 @@ def create_app() -> FastAPI:
         from backend.auth import async_jobs as _async_jobs
         from backend.auth import visitor_request as _vr
 
+        from backend.auth import surface_policy as _sp
+
         if _vr.is_website_surface(request.headers.get(_vr.HEADER_SURFACE)):
+            # Backend enforcement of the public-website route policy: default
+            # deny. The edge proxy mirrors this; enforcing here too means a
+            # misconfigured proxy cannot expose tenant-scoped routes.
+            if not _sp.website_route_allowed(request.method, request.url.path):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "api_version": "v1",
+                        "error": {
+                            "code": "NOT_FOUND",
+                            "message": "not found",
+                        },
+                    },
+                )
             body = await request.body()
             body_hash = hashlib.sha256(body).hexdigest()
             reason, visitor_id = _vr.verify_visitor_request(
@@ -326,6 +342,23 @@ def create_app() -> FastAPI:
     from api.routes import observability
 
     app.include_router(observability.router)
+    # Self-service developer onboarding: public application + verification
+    # (website surface, visitor/CSRF enforced by the middleware above), plus
+    # the tenant-authenticated one-time key delivery and job history.
+    from api.routes import developer_onboarding
+
+    app.include_router(developer_onboarding.router)
+    developer_onboarding.register_error_handlers(app)
+    # Private owner dashboard API: the EXISTING management-assertion plane.
+    # Mounted only when the management routes are reachable; the dependency
+    # itself fails closed when the deployment is not configured.
+    from api.routes import owner_onboarding
+
+    app.include_router(owner_onboarding.router)
+    # Operational dispatch endpoint (token-gated, not on the public website).
+    from api.routes import onboarding_ops
+
+    app.include_router(onboarding_ops.router)
     # Phase 15: deterministic malformed-request normalization for /v1 only
     # (400 instead of the framework-default 422 for parsing/validation
     # failures). Browser-facing /api/v1 keeps its documented behavior.

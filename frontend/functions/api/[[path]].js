@@ -100,6 +100,42 @@ async function hmacSha256Hex(secret, message) {
   return hexFromBytes(sig);
 }
 
+// ---------------------------------------------------------------------
+// SIGNED CLIENT-IP CLAIM (edge -> backend)
+//
+// Cloudflare sets cf-connecting-ip at its edge and a browser cannot choose
+// it. This function is the ONLY hop that still sees the real visitor
+// address (the backend's socket peer is the Cloudflare edge, and Railway
+// rewrites x-forwarded-for / x-real-ip), so it asserts the address here.
+//
+// The claim is bound to THIS request by HMAC-ing over the visitor assertion
+// signature, which the backend verifies and whose nonce it consumes exactly
+// once. The backend trusts the claim only with a valid signature
+// (backend/auth/client_ip_claim.py); a missing, malformed, forged or replayed
+// claim falls back to the transport peer, which no header can forge.
+//
+// A browser-supplied x-platrixa-client-ip / -signature is never read: the
+// forward loop below copies only FORWARD_HEADERS, and this function sets the
+// two claim headers itself.
+// ---------------------------------------------------------------------
+const CLIENT_IP_CLAIM_HEADER = "x-platrixa-client-ip";
+const CLIENT_IP_SIGNATURE_HEADER = "x-platrixa-client-ip-signature";
+const CLIENT_IP_CANONICAL_PREFIX = "V1|platrixa-client-ip";
+
+const IPV4_RE =
+  /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$/;
+// Hex groups separated by colons; accepts "::" compression, rejects zone ids,
+// ports, brackets and anything else a header could smuggle in.
+const IPV6_RE = /^[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}$/;
+
+/** The Cloudflare-written visitor address, or null when it is not an address. */
+function trustedClientIp(request) {
+  const raw = (request.headers.get("cf-connecting-ip") || "").trim();
+  if (!raw || raw.length > 64) return null;
+  if (!IPV4_RE.test(raw) && !IPV6_RE.test(raw)) return null;
+  return raw;
+}
+
 export async function onRequest(context) {
   const backend = String(
     (context.env && context.env.API_BACKEND_URL) || ""
@@ -196,7 +232,8 @@ export async function onRequest(context) {
     requestTimestamp,
     requestNonce,
   ].join("|");
-  const assertion = canonical + "|" + (await hmacSha256Hex(visitorSecret, canonical));
+  const assertionSignature = await hmacSha256Hex(visitorSecret, canonical);
+  const assertion = canonical + "|" + assertionSignature;
 
   // --- Build forwarded headers ---
   // Start with server-injected API key
@@ -217,6 +254,19 @@ export async function onRequest(context) {
   headers.set("x-platrixa-request-timestamp", requestTimestamp);
   headers.set("x-platrixa-visitor-nonce", requestNonce);
   headers.set("x-platrixa-surface", "website");
+
+  // Signed client-IP claim, bound to this request's visitor assertion.
+  const clientIp = trustedClientIp(context.request);
+  if (clientIp) {
+    headers.set(
+      CLIENT_IP_SIGNATURE_HEADER,
+      await hmacSha256Hex(
+        visitorSecret,
+        `${CLIENT_IP_CANONICAL_PREFIX}|${clientIp}|${assertionSignature}`
+      )
+    );
+    headers.set(CLIENT_IP_CLAIM_HEADER, clientIp);
+  }
   // Forward the Origin the edge already validated so the backend's own
   // defence-in-depth CSRF check sees the same value (it re-validates).
   const forwardedOrigin = context.request.headers.get("origin");
